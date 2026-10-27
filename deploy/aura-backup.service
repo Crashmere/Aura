@@ -1,0 +1,17 @@
+[Unit]
+Description=Aura database and immutable original snapshot
+
+[Service]
+Type=oneshot
+User=aura
+Group=aura
+ExecStart=/usr/bin/flock --shared /run/lock/ali-release-retention.lock /opt/aura/bin/aura daily --data /opt/aura/data --out /opt/aura/backups
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+# A single writable bind preserves hard links between originals and snapshots.
+ReadWritePaths=/opt/aura
+Nice=10
+TimeoutStartSec=30min

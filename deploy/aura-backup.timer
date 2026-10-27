@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Aura backup at 04:35 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 04:35:00 Asia/Shanghai
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

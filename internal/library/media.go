@@ -1,0 +1,376 @@
+package library
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"image"
+	_ "image/jpeg"
+	"io"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type limitedBuffer struct {
+	bytes.Buffer
+	max int
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.Len() < b.max {
+		_, _ = b.Buffer.Write(p[:min(len(p), b.max-b.Len())])
+	}
+	return n, nil
+}
+func command(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = append(os.Environ(), "VIPS_CONCURRENCY=2", "VIPS_DISC_THRESHOLD=64m")
+	out := &limitedBuffer{max: 8 << 20}
+	stderr := &limitedBuffer{max: 4096}
+	cmd.Stdout = out
+	cmd.Stderr = stderr
+	e := cmd.Run()
+	if e != nil {
+		return nil, fmt.Errorf("%s: %w: %s", bin, e, strings.TrimSpace(stderr.String()))
+	}
+	return out.Bytes(), nil
+}
+func tag(m map[string]any, names ...string) string {
+	for _, name := range names {
+		if v, ok := m[name]; ok {
+			return fmt.Sprint(v)
+		}
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if strings.HasSuffix(k, ":"+name) {
+				return fmt.Sprint(m[k])
+			}
+		}
+	}
+	return ""
+}
+func number(m map[string]any, names ...string) int {
+	v, _ := strconv.ParseFloat(tag(m, names...), 64)
+	return int(v)
+}
+func captureDate(m map[string]any, h Hints) string {
+	loc := time.Local
+	nativeDate := ""
+	if strings.HasPrefix(h.SourceKey, "photokit:") {
+		nativeDate = h.CapturedAt
+	}
+	for _, s := range []string{tag(m, "SubSecDateTimeOriginal"), tag(m, "DateTimeOriginal"), tag(m, "Keys:CreationDate"), nativeDate, tag(m, "QuickTime:CreateDate"), tag(m, "CreateDate"), h.CapturedAt, h.ModifiedAt} {
+		if s == "" || strings.HasPrefix(s, "0000") {
+			continue
+		}
+		if len(s) >= 10 && s[4] == ':' {
+			s = s[:4] + "-" + s[5:7] + "-" + s[8:]
+		}
+		for _, format := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999-0700", "2006-01-02 15:04:05.999999999", "2006-01-02"} {
+			if t, e := time.ParseInLocation(format, s, loc); e == nil && t.Year() >= 1900 {
+				return t.Format(time.RFC3339Nano)
+			}
+		}
+	}
+	return now()
+}
+func (l *Library) Worker(ctx context.Context) {
+	if _, e := l.DB.Exec("UPDATE files SET status='queued' WHERE status='processing'"); e != nil {
+		slog.Error("recover processing jobs", "error", e)
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		f, e := scanFile(l.DB.QueryRow("SELECT " + fileColumns + " FROM files WHERE status='queued' ORDER BY created_at LIMIT 1"))
+		if e == sql.ErrNoRows {
+			select {
+			case <-ctx.Done():
+				return
+			case <-l.Wake:
+			case <-ticker.C:
+			}
+			continue
+		}
+		if e != nil {
+			slog.Error("job lookup", "error", e)
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			continue
+		}
+		if _, e = l.DB.Exec("UPDATE files SET status='processing' WHERE hash=?", f.Hash); e != nil {
+			slog.Error("job claim", "error", e)
+			continue
+		}
+		if e = l.process(ctx, f); e != nil {
+			if ctx.Err() != nil {
+				_, _ = l.DB.Exec("UPDATE files SET status='queued' WHERE hash=?", f.Hash)
+				return
+			}
+			slog.Error("media processing", "hash", f.Hash, "error", e)
+			_, _ = l.DB.Exec("UPDATE files SET status='error',error=? WHERE hash=?", e.Error(), f.Hash)
+		}
+	}
+}
+func (l *Library) process(parent context.Context, f File) error {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
+	defer cancel()
+	work, e := os.MkdirTemp(filepath.Join(l.Root, "work"), f.Hash[:8]+"-")
+	if e != nil {
+		return e
+	}
+	defer os.RemoveAll(work)
+	// The extension helps RAW/sidecar decoders; the object itself remains content addressed.
+	input := filepath.Join(work, "source"+strings.ToLower(filepath.Ext(f.Name)))
+	if e = os.Link(l.Object(f.Hash), input); e != nil {
+		return e
+	}
+	meta := map[string]any{}
+	raw, extractErr := command(ctx, "exiftool", "-j", "-G1", "-n", "-struct", "-api", "LargeFileSupport=1", "-api", "QuickTimeUTC=1", input)
+	if extractErr == nil {
+		var list []map[string]any
+		if e = json.Unmarshal(raw, &list); e == nil && len(list) > 0 {
+			meta = list[0]
+		} else {
+			extractErr = fmt.Errorf("metadata decode: %v", e)
+		}
+	}
+	for k := range meta {
+		if k == "SourceFile" || strings.HasPrefix(k, "System:") {
+			delete(meta, k)
+		}
+	}
+	f.Mime = tag(meta, "MIMEType")
+	if f.Mime == "" {
+		f.Mime = "application/octet-stream"
+	}
+	f.Width = number(meta, "ExifImageWidth", "ImageWidth", "SourceImageWidth")
+	f.Height = number(meta, "ExifImageHeight", "ImageHeight", "SourceImageHeight")
+	f.CapturedAt = captureDate(meta, f.Hints)
+	f.ContentID = tag(meta, "ContentIdentifier", "MediaGroupUUID", "AssetIdentifier")
+	f.Metadata = json.RawMessage(marshal(meta))
+	f.Score = int64(f.Width)*int64(f.Height)*1000 + int64(min(len(meta), 999))*100
+	if tag(meta, "GPSLatitude") != "" || f.Hints.Latitude != nil {
+		f.Score += 20000
+	}
+	if tag(meta, "DateTimeOriginal") != "" {
+		f.Score += 10000
+	}
+	if strings.Contains(strings.ToLower(f.Hints.ResourceType), "original") || f.Hints.ResourceType == "photo" {
+		f.Score += 50000
+	}
+	var mediaErr error
+	if strings.HasPrefix(f.Mime, "image/") {
+		previewInput := input
+		_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
+		if mediaErr != nil {
+			for _, name := range []string{"JpgFromRaw", "PreviewImage", "OtherImage"} {
+				embedded, err := command(ctx, "exiftool", "-b", "-"+name, input)
+				if err != nil || len(embedded) < 100 {
+					continue
+				}
+				previewInput = filepath.Join(work, "embedded.jpg")
+				if os.WriteFile(previewInput, embedded, 0600) != nil {
+					continue
+				}
+				_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
+				if mediaErr == nil {
+					break
+				}
+			}
+		}
+		if mediaErr == nil {
+			_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "thumb.jpg")+"[Q=85,strip]", "640", "--size", "down")
+		}
+		if mediaErr == nil {
+			for _, s := range []string{"preview", "thumb"} {
+				if e = os.Rename(filepath.Join(work, s+".jpg"), l.Derived(f.Hash, "-"+s+".jpg")); e != nil {
+					return e
+				}
+			}
+			f.DHash = perceptual(l.Derived(f.Hash, "-thumb.jpg"))
+			// Hash full decoded pixels and their interpretation. No resized or lossy hash triggers automatic grouping.
+			if _, e = command(ctx, "vips", "autorot", input, filepath.Join(work, "upright.v")); e == nil {
+				header, he := command(ctx, "vipsheader", filepath.Join(work, "upright.v"))
+				_, re := command(ctx, "vips", "rawsave", filepath.Join(work, "upright.v"), filepath.Join(work, "pixels.raw"))
+				if he == nil && re == nil {
+					pixels, pe := os.Open(filepath.Join(work, "pixels.raw"))
+					if pe == nil {
+						sum := sha256.New()
+						description := strings.SplitN(string(header), ": ", 2)
+						if len(description) == 2 {
+							io.WriteString(sum, description[1])
+						}
+						// Color profiles affect the meaning of otherwise equal sample values.
+						icc := map[string]any{}
+						for k, v := range meta {
+							if strings.HasPrefix(k, "ICC-") || strings.HasPrefix(k, "ICC_Profile:") {
+								icc[k] = v
+							}
+						}
+						io.WriteString(sum, marshal(icc))
+						_, pe = io.Copy(sum, pixels)
+						pixels.Close()
+						if pe == nil {
+							f.PixelHash = hex.EncodeToString(sum.Sum(nil))
+						}
+					}
+				}
+			}
+		}
+	} else if strings.HasPrefix(f.Mime, "video/") {
+		_, mediaErr = command(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-i", input, "-frames:v", "1", "-vf", "scale=640:640:force_original_aspect_ratio=decrease", "-threads", "2", "-y", filepath.Join(work, "thumb.jpg"))
+		if mediaErr == nil {
+			if e = os.Rename(filepath.Join(work, "thumb.jpg"), l.Derived(f.Hash, "-thumb.jpg")); e != nil {
+				return e
+			}
+		}
+		_, videoErr := command(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-i", input, "-map", "0:v:0", "-map", "0:a?", "-vf", "scale=1920:1920:force_original_aspect_ratio=decrease:force_divisible_by=2", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-threads", "2", "-y", filepath.Join(work, "play.mp4"))
+		if videoErr == nil {
+			if e = os.Rename(filepath.Join(work, "play.mp4"), l.Derived(f.Hash, "-play.mp4")); e != nil {
+				return e
+			}
+		} else if mediaErr == nil {
+			mediaErr = videoErr
+		}
+	}
+	f.Status = "ready"
+	f.Error = ""
+	if mediaErr != nil {
+		f.Status = "error"
+		f.Error = mediaErr.Error()
+	}
+	if extractErr != nil {
+		f.Status = "error"
+		f.Error = extractErr.Error()
+	}
+	return l.publish(f)
+}
+func (l *Library) publish(f File) error {
+	tx, e := l.DB.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	_, e = tx.Exec(`UPDATE files SET mime=?,width=?,height=?,captured_at=?,content_id=?,pixel_hash=?,dhash=?,metadata=?,score=?,status=?,error=? WHERE hash=?`, f.Mime, f.Width, f.Height, f.CapturedAt, f.ContentID, f.PixelHash, f.DHash, string(f.Metadata), f.Score, f.Status, f.Error, f.Hash)
+	if e != nil {
+		return e
+	}
+	keys := []string{}
+	if f.ContentID != "" {
+		keys = append(keys, "apple:"+f.ContentID)
+	}
+	if f.PixelHash != "" {
+		keys = append(keys, "pixels:"+f.PixelHash)
+	}
+	observations, e := tx.Query("SELECT hints FROM observations WHERE hash=?", f.Hash)
+	if e != nil {
+		return e
+	}
+	favorite := f.Hints.Favorite
+	for observations.Next() {
+		var s string
+		_ = observations.Scan(&s)
+		var h Hints
+		_ = json.Unmarshal([]byte(s), &h)
+		if h.SourceKey != "" {
+			keys = append(keys, "source:"+h.SourceKey)
+		}
+		favorite = favorite || h.Favorite
+	}
+	observations.Close()
+	asset := f.AssetID
+	for _, key := range keys {
+		var other string
+		_ = tx.QueryRow("SELECT asset_id FROM asset_keys WHERE key=?", key).Scan(&other)
+		if other != "" {
+			if asset == "" {
+				asset = other
+			} else if other != asset {
+				if e = mergeTx(tx, asset, other, key); e != nil {
+					return e
+				}
+			}
+		}
+	}
+	if asset == "" {
+		asset = ID()
+		if _, e = tx.Exec("INSERT INTO assets(id,captured_at,favorite,created_at) VALUES(?,?,?,?)", asset, f.CapturedAt, favorite, now()); e != nil {
+			return e
+		}
+	}
+	if _, e = tx.Exec("UPDATE files SET asset_id=? WHERE hash=?", asset, f.Hash); e != nil {
+		return e
+	}
+	for _, key := range keys {
+		if _, e = tx.Exec("INSERT INTO asset_keys VALUES(?,?) ON CONFLICT(key) DO UPDATE SET asset_id=excluded.asset_id", key, asset); e != nil {
+			return e
+		}
+	}
+	if favorite {
+		if _, e = tx.Exec("UPDATE assets SET favorite=1 WHERE id=?", asset); e != nil {
+			return e
+		}
+	}
+	if e = refreshTx(tx, asset); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+func perceptual(path string) string {
+	f, e := os.Open(path)
+	if e != nil {
+		return ""
+	}
+	defer f.Close()
+	im, _, e := image.Decode(f)
+	if e != nil {
+		return ""
+	}
+	b := im.Bounds()
+	if b.Dx() < 9 || b.Dy() < 8 {
+		return ""
+	}
+	var hash uint64
+	var low, high uint32 = 65535, 0
+	grey := func(x, y int) uint32 {
+		r, g, bl, _ := im.At(b.Min.X+x*(b.Dx()-1)/8, b.Min.Y+y*(b.Dy()-1)/7).RGBA()
+		return (r*299 + g*587 + bl*114) / 1000
+	}
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			a, c := grey(x, y), grey(x+1, y)
+			low = min(low, a)
+			high = max(high, a)
+			hash <<= 1
+			if a > c {
+				hash |= 1
+			}
+		}
+	}
+	if high-low < 3000 {
+		return ""
+	}
+	return fmt.Sprintf("%016x", hash)
+}

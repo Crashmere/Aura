@@ -1,0 +1,26 @@
+[Unit]
+Description=Aura personal photo library
+After=network.target
+
+[Service]
+Type=simple
+User=aura
+Group=aura
+WorkingDirectory=/opt/aura
+ExecStart=/opt/aura/bin/aura serve --data /opt/aura/data --listen 127.0.0.1:18087
+Environment=TZ=Asia/Shanghai
+Environment=MALLOC_ARENA_MAX=2
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/aura/data
+Nice=5
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,197 @@
+{
+  "id": "aura",
+  "name": "Aura",
+  "description": "个人照片与实况照片库。",
+  "icon": "/aura/apple-touch-icon.png",
+  "url": "/aura/",
+  "repo": "https://github.com/Crashmere/Aura",
+  "root": "/opt/aura",
+  "port": 18087,
+  "user": "aura",
+  "units": [
+    "aura.service",
+    "aura-backup.service",
+    "aura-backup.timer"
+  ],
+  "database": "/opt/aura/data/aura.sqlite",
+  "backupKind": "media",
+  "resources": [
+    {
+      "id": "data",
+      "name": "业务数据",
+      "path": "/opt/aura/data",
+      "purpose": "元数据、分片状态、资源分组与导入来源。",
+      "kind": "data",
+      "browse": true,
+      "cleanup": false
+    },
+    {
+      "id": "originals",
+      "name": "照片原件",
+      "path": "/opt/aura/data/assets",
+      "purpose": "SHA-256 寻址的不可变原始照片、实况视频、RAW 与编辑资源；纳入原生备份。",
+      "kind": "media",
+      "browse": true,
+      "cleanup": false
+    },
+    {
+      "id": "derived",
+      "name": "预览缓存",
+      "path": "/opt/aura/data/derived",
+      "purpose": "可再生缩略图、浏览预览和兼容播放视频；不纳入备份。",
+      "kind": "cache",
+      "browse": false,
+      "cleanup": false
+    },
+    {
+      "id": "incoming",
+      "name": "上传暂存",
+      "path": "/opt/aura/data/incoming",
+      "purpose": "尚未提交的分片；恢复后由客户端重新上传。",
+      "kind": "cache",
+      "browse": false,
+      "cleanup": false
+    },
+    {
+      "id": "work",
+      "name": "处理暂存",
+      "path": "/opt/aura/data/work",
+      "purpose": "媒体提取工作目录，任务完成后删除。",
+      "kind": "cache",
+      "browse": false,
+      "cleanup": false
+    },
+    {
+      "id": "backups",
+      "name": "数据备份",
+      "path": "/opt/aura/backups",
+      "purpose": "数据库一致性快照和原件硬链接；每日保留 14 份，发布前快照遵循共享 5 份与保护版本规则。",
+      "kind": "backups",
+      "browse": true,
+      "cleanup": true
+    },
+    {
+      "id": "releases",
+      "name": "部署版本",
+      "path": "/opt/aura/releases",
+      "purpose": "最近 3 次成功发布与受保护版本，失败批次保留恢复记录。",
+      "kind": "releases",
+      "browse": true,
+      "cleanup": true
+    },
+    {
+      "id": "config",
+      "name": "运行配置",
+      "path": "/opt/aura/config",
+      "purpose": "systemd、Nginx、资源声明与发布来源。",
+      "kind": "config",
+      "browse": false,
+      "cleanup": false
+    },
+    {
+      "id": "bin",
+      "name": "服务程序",
+      "path": "/opt/aura/bin",
+      "purpose": "服务程序与固定发布脚本。",
+      "kind": "binaries",
+      "browse": false,
+      "cleanup": false
+    },
+    {
+      "id": "docs",
+      "name": "维护文档",
+      "path": "/opt/aura/docs",
+      "purpose": "架构、API、Apple 客户端、部署与恢复说明。",
+      "kind": "documents",
+      "browse": true,
+      "cleanup": false
+    }
+  ],
+  "apis": [
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "description": "数据库连接健康"
+    },
+    {
+      "method": "GET",
+      "path": "/api/info",
+      "description": "照片库数量、原件体积与处理状态"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assets",
+      "description": "按类型、拍摄日期、关键词查询照片；游标分页"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assets/{id}",
+      "description": "照片详情、全部原件与合并元数据"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/assets/{id}",
+      "description": "收藏、最近删除、恢复与主版本选择"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assets/{id}/merge",
+      "description": "手工归并照片，保留所有原件"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assets/{id}/split",
+      "description": "将一个原始版本分离为独立项目"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assets/{id}/download",
+      "description": "下载全部原件与来源清单 ZIP"
+    },
+    {
+      "method": "GET",
+      "path": "/api/similar",
+      "description": "感知哈希相似候选，仅供核对"
+    },
+    {
+      "method": "GET",
+      "path": "/api/jobs",
+      "description": "待处理与失败媒体任务"
+    },
+    {
+      "method": "POST",
+      "path": "/api/files/{hash}/retry",
+      "description": "重新生成元数据和预览"
+    },
+    {
+      "method": "POST",
+      "path": "/api/uploads",
+      "description": "按 SHA-256 准备或恢复上传；重复检查"
+    },
+    {
+      "method": "GET",
+      "path": "/api/uploads/{id}",
+      "description": "已接收偏移与提交状态"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/uploads/{id}",
+      "description": "写入并同步最大 8 MiB 的分片"
+    },
+    {
+      "method": "POST",
+      "path": "/api/uploads/{id}/complete",
+      "description": "完整哈希校验与原件提交"
+    },
+    {
+      "method": "GET",
+      "path": "/media/{hash}/{kind}",
+      "description": "鉴权读取原件、缩略图、预览或实况视频；支持 Range"
+    },
+    {
+      "method": "HEAD",
+      "path": "/media/{hash}/{kind}",
+      "description": "读取媒体响应头"
+    }
+  ]
+}

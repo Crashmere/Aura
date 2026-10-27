@@ -1,0 +1,13 @@
+.DS_Store
+.local/
+bin/
+web/node_modules/
+web/dist/
+web/public/downloads/
+web/tsconfig.tsbuildinfo
+data/
+backups/
+*.log
+apple/build/
+apple/.build/
+.env
