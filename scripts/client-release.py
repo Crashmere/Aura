@@ -186,7 +186,12 @@ Mac 应用使用本地签名，未经过 Apple 公证；如系统阻止首次运
 
 
 def verify_remote(directory, tag, commit):
-    release = gh_json(["api", f"repos/{REPOSITORY}/releases/tags/{tag}"])
+    # Draft tags do not have a REST tag endpoint until publication; inspect the release ID.
+    releases = gh_json(["api", f"repos/{REPOSITORY}/releases?per_page=100"])
+    match = next((r for r in releases if r["tag_name"] == tag), None)
+    if match is None:
+        raise ValueError("The remote release is missing: " + tag)
+    release = gh_json(["api", f"repos/{REPOSITORY}/releases/{match['id']}"])
     if release["target_commitish"] != commit:
         raise ValueError("Remote release source mismatch")
     remote = {asset["name"]: asset for asset in release["assets"]}

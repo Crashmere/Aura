@@ -1119,11 +1119,12 @@ function UploadDialog({
               </p>
               <a
                 className="button primary"
-                href={`${base}downloads/Aura-for-Mac.zip`}
+                href="https://github.com/Crashmere/Aura/releases/latest/download/Aura-macOS.dmg"
               >
                 <ArrowDownToLine size={17} />
                 下载 Mac 客户端
               </a>
+              <a className="button" style={{marginLeft:10}} href="https://github.com/Crashmere/Aura/releases/latest/download/Aura-iOS.ipa"><Smartphone size={17}/>下载 iOS 安装包</a>
               <ol>
                 <li>打开客户端，输入此服务器地址并完成门户授权。</li>
                 <li>允许访问照片，选择日期范围，开始持续上传。</li>
@@ -1131,8 +1132,7 @@ function UploadDialog({
               <div className="platform-note">
                 <Smartphone size={18} />
                 <p>
-                  iPhone 原生客户端源码已随项目提供，安装需要通过 Xcode
-                  使用你自己的 Apple 签名。网页无法后台扫描系统照片库。
+                  iOS 安装包使用 AltStore 或 Sideloadly 自签安装。网页无法后台扫描系统照片库。
                 </p>
               </div>
               <a

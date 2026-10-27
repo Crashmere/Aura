@@ -4,7 +4,7 @@ The companion accesses the user's system Photos library through PhotoKit and sen
 
 ## Mac
 
-Download the Apple silicon build from Aura → 上传 → Apple 照片库, or build it with `bash apple/build-mac.sh`. The output is `apple/build/Aura.app`; `web/public/downloads/Aura-for-Mac.zip` is packaged into the server build. macOS 14 or newer is required.
+Download `Aura-macOS.dmg` from [GitHub Releases](https://github.com/Crashmere/Aura/releases/latest) or Aura → 上传 → Apple 照片库. Open the DMG and drag Aura into Applications. The package supports Apple silicon and Intel; macOS 14 or newer is required. Local builds use `bash apple/build-mac.sh`; the output is `apple/build/Aura.app`, with a compatibility ZIP embedded in local server builds.
 
 1. Open Aura and enter the server's HTTPS origin. The URL is supplied at runtime and never compiled into the public source.
 2. Click 连接, complete Portal authorization, and return to the client. A new application WebKit container needs its own device authorization, just like a new browser.
@@ -17,11 +17,13 @@ The build is locally signed with an ad-hoc identity, not Developer ID notarized.
 
 ## iPhone and iPad
 
-`apple/Aura.xcodeproj` targets iOS 17+. Open it in full Xcode, select your own signing team, connect the device, and run the Aura target. If the bundle ID needs changing for your team, change `CFBundleIdentifier` in Info.plist and the target identifier together. The background task identifiers are internal application identifiers and must stay consistent between the Swift source and Info.plist.
+Download `Aura-iOS.ipa` from [GitHub Releases](https://github.com/Crashmere/Aura/releases/latest). This is an iOS 17+ device build intended for signing with your own Apple ID through [AltStore](https://altstore.io/) or [Sideloadly](https://sideloadly.io/). Import the IPA in the tool, follow its device pairing and signing prompts, and open the installed Aura app. A normal Safari download alone cannot install an unsigned IPA. Free Apple ID signatures generally expire after seven days; refresh according to the signing tool. Developer Mode or trust approval may be required by the device. No Apple ID, certificate, or device identifier is stored in the public release.
+
+To build directly in Xcode, open `apple/Aura.xcodeproj`, select your own signing team, connect the device, and run the Aura target. If the bundle ID needs changing for your team, change `CFBundleIdentifier` in Info.plist and the target identifier together. Background task identifiers must remain consistent between Swift and Info.plist.
 
 The source includes background URLSession chunk transfers, PhotoKit change observation, and a BGProcessingTask request. iOS decides when background work runs based on device/network/battery conditions; no app can promise an unconditional continuous background schedule. Keep the app foregrounded for a first large import. A force-quit prevents normal background continuation until the user reopens the app.
 
-The initial delivery includes a compiled Mac app and iOS source/project. The maintenance computer has Command Line Tools but not full Xcode or an iOS signing identity; an iOS device build and real-device background behavior have not been verified. No signed IPA, TestFlight build, or App Store publication is implied.
+GitHub Releases provide the universal Mac DMG and an unsigned, compiled iOS device IPA. The hosted build uses full Xcode; the maintenance Mac needs only Command Line Tools for its server/Mac workflow. Real-device installation, Photos authorization, and actual iOS background behavior still require user-device acceptance. TestFlight and App Store distribution are not configured.
 
 ## Resource and receipt semantics
 

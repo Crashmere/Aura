@@ -20,11 +20,13 @@ Open `http://127.0.0.1:18087/aura/`. Local loopback access has no separate login
 
 For frontend development, run `npm --prefix web run dev` while the local Go service is running. The Vite server proxies API/media requests.
 
-## Apple photos
+## Apple photos and installers
 
-The Mac client is available from Aura's upload dialog after a release build. It exports PhotoKit resources directly, including stills, paired videos, RAW alternatives, and adjustment resources. [Apple client instructions](docs/APPLE.md) explain authorization, capture-date selection, and iOS installation.
+Download the current [Mac DMG and iOS IPA from GitHub Releases](https://github.com/Crashmere/Aura/releases/latest), or use Aura's upload dialog. The Mac DMG supports Apple silicon and Intel on macOS 14+. The iOS device IPA targets iOS 17+ and is intended for user signing with AltStore or Sideloadly. Both export PhotoKit resources directly, including stills, paired videos, RAW alternatives, and adjustment resources. [Apple client instructions](docs/APPLE.md) explain installation, authorization, and capture-date selection.
 
-iOS Safari cannot continuously scan the system photo library or guarantee delivery of both Live Photo components. The iOS native target requires an Apple signing identity and Xcode installation; it is not an App Store or TestFlight distribution. The Mac binary targets Apple silicon and is signed locally, without Developer ID notarization.
+iOS Safari cannot continuously scan the system photo library or guarantee delivery of both Live Photo components. Import the IPA into AltStore or Sideloadly to sign it with your own Apple ID; it is not an App Store or TestFlight distribution. The Mac app is signed locally, without Developer ID notarization.
+
+Client-source and packaging changes pushed to `main` automatically build both installers and publish the next version. [Client release operations](docs/CLIENT-RELEASE.md) describe version selection, validation, and retries. Server builds and deployments continue to run from the maintenance computer.
 
 ## Documentation
 
@@ -34,4 +36,4 @@ iOS Safari cannot continuously scan the system photo library or guarantee delive
 - [Operations, release, backup and migration](docs/OPERATIONS.md)
 - [Apple companion](docs/APPLE.md)
 
-GitHub stores source and configuration. Original photos, databases, credentials, local builds, and backups are excluded.
+GitHub stores source, configuration, and published client installers. Original photos, databases, credentials, working build directories, and backups are excluded.

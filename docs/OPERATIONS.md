@@ -1,6 +1,6 @@
 # Operations
 
-Aura runs at `/aura/` behind shared ServerPortal device authentication and listens on `127.0.0.1:18087`. The runtime user is `aura`; restricted deployments use `aura-deploy`. GitHub repository: `Crashmere/Aura` (public). Do not publish the server address, credentials, originals, databases, or backups.
+Aura runs at `/aura/` behind shared ServerPortal device authentication and listens on `127.0.0.1:18087`. The runtime user is `aura`; restricted deployments use `aura-deploy`. GitHub repository: `Crashmere/Aura` (public), including public Apple-client installers. Do not publish the server address, credentials, originals, databases, or backups.
 
 ## Runtime and layout
 
@@ -46,6 +46,8 @@ make deploy
 The shared release tool exports the pushed commit, installs locked web dependencies, compiles the Mac client on the maintenance Mac, embeds the frontend/client archive, and builds a static Linux amd64 executable. Provenance and SHA-256 are retained under `.local/releases/<commit>/`. The fixed server script accepts only the program and validated Portal declaration, uses the old program to snapshot data, checks the candidate against that snapshot as `aura`, replaces the binary atomically, and checks direct plus proxied health. Program failure restores the previous program. Schema/data recovery is separate.
 
 Use `make portal` for declaration-only changes. `make rollback COMMIT=<full-compatible-commit>` reuses a locally retained program through the same guarded flow. The initial catalog schema is version 1; verify compatibility before any future schema-affecting rollback.
+
+Apple-client installation publication follows [Client Releases](CLIENT-RELEASE.md). Relevant client-source pushes build the Mac DMG and iOS IPA in GitHub Actions and publish the next version automatically. This workflow has no server access; `make deploy` continues to be a maintenance-computer operation.
 
 `deploy/portal.json` is the source for resource browsing, original/derived distinctions, API inventory, port, units, and backup contract. Registration creates `/opt/serverportal/registry.d/aura.json` and verifies the loaded declaration hash. Project/shared documentation changes require a subsequent `sync-docs.sh shared Aura` from the pushed agent-config checkout.
 
