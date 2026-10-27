@@ -46,9 +46,11 @@ def prepare(commit):
     base = json.loads((ROOT / "apple/version.json").read_text())["version"]
     releases = gh_json(["api", f"repos/{REPOSITORY}/releases?per_page=100"])
     selected = None
+    published = False
     for release in releases:
         if release.get("target_commitish") == commit and re.fullmatch(r"v\d+\.\d+\.\d+", release["tag_name"]):
             selected = release["tag_name"][1:]
+            published = not release["draft"]
             break
     if selected is None:
         versions = [version_tuple(r["tag_name"][1:]) for r in releases if re.fullmatch(r"v\d+\.\d+\.\d+", r["tag_name"])]
@@ -57,7 +59,7 @@ def prepare(commit):
             major, minor, patch = max(versions)
             desired = major, minor, patch + 1
         selected = ".".join(map(str, desired))
-    result = {"version": selected, "tag": "v" + selected}
+    result = {"version": selected, "tag": "v" + selected, "published": str(published).lower()}
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             for key, value in result.items():
@@ -194,6 +196,9 @@ def verify_remote(directory, tag, commit):
     release = gh_json(["api", f"repos/{REPOSITORY}/releases/{match['id']}"])
     if release["target_commitish"] != commit:
         raise ValueError("Remote release source mismatch")
+    manifest = json.loads((directory / "build-manifest.json").read_text())
+    if manifest["sourceCommit"] != commit or "v" + manifest["version"] != tag:
+        raise ValueError("Release manifest source/version mismatch")
     remote = {asset["name"]: asset for asset in release["assets"]}
     if set(remote) != set(ASSETS):
         raise ValueError("Remote release assets do not match the installer set")
@@ -205,9 +210,18 @@ def verify_remote(directory, tag, commit):
     print("Remote installer asset sizes and SHA-256 match: " + tag)
 
 
+def confirm(version, commit):
+    with tempfile.TemporaryDirectory(prefix="aura-published-check-") as temporary:
+        directory = Path(temporary)
+        run(["gh", "release", "download", "v" + version, "--repo", REPOSITORY,
+             "--dir", str(directory), *[argument for name in ASSETS for argument in ["--pattern", name]]])
+        verify_remote(directory, "v" + version, commit)
+    print("Existing published release is intact; no rebuild or replacement is needed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "verify", "publish", "verify-remote"])
+    parser.add_argument("action", choices=["prepare", "verify", "publish", "verify-remote", "confirm"])
     parser.add_argument("--directory", type=Path, default=ROOT / ".local/client-release")
     parser.add_argument("--version")
     parser.add_argument("--build", default="1")
@@ -219,6 +233,8 @@ def main():
         verify(args.directory, args.version, args.build)
     elif args.action == "publish":
         publish(args.directory, args.version, args.commit)
+    elif args.action == "confirm":
+        confirm(args.version, args.commit)
     else:
         verify_remote(args.directory, "v" + args.version, args.commit)
 

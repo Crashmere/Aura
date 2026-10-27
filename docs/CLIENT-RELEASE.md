@@ -27,7 +27,7 @@ gh run list --repo Crashmere/Aura --workflow client-release.yml
 gh run watch <run-id> --repo Crashmere/Aura --exit-status
 ```
 
-The source checkout is the triggering commit. The workflow first creates a draft release targeted at that exact commit, uploads packages, checks remote sizes/digests, and publishes only after validation. A failed build creates no public installer release. Failed publication can be rerun; a draft can have its incomplete assets replaced, while a published release is verified and retained. Build artifacts and diagnostics are retained for seven days in Actions; published installers remain in Releases.
+The source checkout is the triggering commit. The workflow first creates a draft release targeted at that exact commit, uploads packages, checks remote sizes/digests, and publishes only after validation. A failed build creates no public installer release. Failed publication can be rerun; a draft can have its incomplete assets replaced. A retry of an already published commit downloads and verifies the existing assets, skipping rebuilds so native build numbers and DMG timestamps cannot change a published package. Build artifacts and diagnostics are retained for seven days in Actions; published installers remain in Releases.
 
 ## Validation
 

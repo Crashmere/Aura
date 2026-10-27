@@ -34,6 +34,7 @@ jobs:
         id: version
         run: python3 scripts/client-release.py prepare --commit "$GITHUB_SHA"
       - name: Build and verify Mac and iOS installers
+        if: steps.version.outputs.published != 'true'
         env:
           AURA_VERSION: ${{ steps.version.outputs.version }}
         run: bash apple/package-clients.sh "$AURA_VERSION" "$GITHUB_RUN_NUMBER"
@@ -47,6 +48,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Publish the verified installers
+        if: steps.version.outputs.published != 'true'
         env:
           AURA_VERSION: ${{ steps.version.outputs.version }}
         run: python3 scripts/client-release.py publish --version "$AURA_VERSION" --commit "$GITHUB_SHA"
+      - name: Verify an existing release on a retry
+        if: steps.version.outputs.published == 'true'
+        env:
+          AURA_VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/client-release.py confirm --version "$AURA_VERSION" --commit "$GITHUB_SHA"
