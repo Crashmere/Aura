@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,4 +275,27 @@ func (l *Library) Check(ctx context.Context) error {
 		return fmt.Errorf("database check: %s", result)
 	}
 	return nil
+}
+
+// CheckData must not initialize schema or switch journaling on a recovery point.
+func CheckData(ctx context.Context, root string) error {
+	path, err := filepath.Abs(filepath.Join(root, "aura.sqlite"))
+	if err != nil {
+		return err
+	}
+	u := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var version int
+	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version != 1 {
+		return fmt.Errorf("unsupported schema version: %d", version)
+	}
+	l := Library{DB: db}
+	return l.Check(ctx)
 }

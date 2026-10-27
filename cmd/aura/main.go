@@ -51,6 +51,9 @@ func run() error {
 		}
 		return library.VerifySnapshot(ctx, *source, *full)
 	}
+	if cmd == "check" {
+		return library.CheckData(ctx, *data)
+	}
 	if cmd != "init" {
 		if _, e := os.Stat(filepath.Join(*data, "aura.sqlite")); e != nil {
 			return fmt.Errorf("existing database required; initialize explicitly with aura init: %w", e)
