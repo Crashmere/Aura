@@ -32,7 +32,7 @@ Browser files / PhotoKit original resources
 
 The upload API identifies a byte stream by SHA-256. Chunk writes require the expected offset and flush before acknowledgment. Stale offsets return the actual offset. Completion recomputes the entire hash, verifies the expected byte count, renames into original storage, and commits the file plus queue state transactionally. A retry recognizes an object moved before a process interruption. Files with invalid checksums are never published.
 
-The current worker processes one original at a time. Its jobs survive restarts; interrupted processing returns to the queue. CPU-intensive work runs through libvips/FFmpeg subprocesses with explicit timeouts, while API and download requests remain independent. Worker parallelism and object storage can be introduced around this boundary when concrete throughput measurements justify them. No original-resolution cap is imposed; the per-file upload limit is 32 GiB, while each request is at most 8 MiB.
+The current worker processes one original at a time. Image decoding is materialized once in a temporary libvips image and reused for both previews and full-pixel hashing, avoiding repeated RAW decoding. Its jobs survive restarts; interrupted processing returns to the queue. CPU-intensive work runs through libvips/FFmpeg subprocesses with explicit timeouts, while API and download requests remain independent. Worker parallelism and object storage can be introduced around this boundary when concrete throughput measurements justify them. No original-resolution cap is imposed; the per-file upload limit is 32 GiB, while each request is at most 8 MiB.
 
 ## Duplicate and version rules
 

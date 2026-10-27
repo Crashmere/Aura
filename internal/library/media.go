@@ -183,6 +183,12 @@ func (l *Library) process(parent context.Context, f File) error {
 	var mediaErr error
 	if strings.HasPrefix(f.Mime, "image/") {
 		previewInput := input
+		// Decode once: RAW decoders are expensive, and both previews and pixel identity need the same samples.
+		upright := filepath.Join(work, "upright.v")
+		_, decodeErr := command(ctx, "vips", "autorot", input, upright)
+		if decodeErr == nil {
+			previewInput = upright
+		}
 		_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
 		if mediaErr != nil {
 			for _, name := range []string{"JpgFromRaw", "PreviewImage", "OtherImage"} {
@@ -211,7 +217,7 @@ func (l *Library) process(parent context.Context, f File) error {
 			}
 			f.DHash = perceptual(l.Derived(f.Hash, "-thumb.jpg"))
 			// Hash full decoded pixels and their interpretation. No resized or lossy hash triggers automatic grouping.
-			if _, e = command(ctx, "vips", "autorot", input, filepath.Join(work, "upright.v")); e == nil {
+			if decodeErr == nil {
 				header, he := command(ctx, "vipsheader", filepath.Join(work, "upright.v"))
 				_, re := command(ctx, "vips", "rawsave", filepath.Join(work, "upright.v"), filepath.Join(work, "pixels.raw"))
 				if he == nil && re == nil {

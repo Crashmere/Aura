@@ -219,7 +219,8 @@ function App() {
     [viewer, setViewer] = useState<Asset | null>(null),
     [selected, setSelected] = useState<Set<string>>(new Set()),
     [toast, setToast] = useState(""),
-    [help, setHelp] = useState(false);
+    [help, setHelp] = useState(false),
+    [mobileMenu, setMobileMenu] = useState(false);
   const [similar, setSimilar] = useState<
       { left: string; right: string; distance: number }[]
     >([]),
@@ -337,6 +338,7 @@ function App() {
         setViewer(null);
         setUploadOpen(false);
         setHelp(false);
+        setMobileMenu(false);
         setSelected(new Set());
       }
     };
@@ -504,6 +506,7 @@ function App() {
             </div>
             <Button
               className="primary upload-trigger"
+              title="上传照片"
               onClick={() => {
                 setUploadTab("files");
                 setUploadOpen(true);
@@ -792,7 +795,6 @@ function App() {
             ["all", Grid2X2],
             ["favorites", Heart],
             ["live", ScanLine],
-            ["similar", Layers3],
           ] as const
         ).map(([id, Icon]) => (
           <button
@@ -805,6 +807,13 @@ function App() {
           </button>
         ))}
         <button
+          className={mobileMenu ? "active" : ""}
+          onClick={() => setMobileMenu(!mobileMenu)}
+        >
+          <Layers3 size={21} />
+          <span>整理</span>
+        </button>
+        <button
           onClick={() => {
             setUploadTab("sources");
             setUploadOpen(true);
@@ -814,6 +823,39 @@ function App() {
           <span>导入</span>
         </button>
       </nav>
+      {mobileMenu && (
+        <div
+          className="mobile-menu-backdrop"
+          onClick={() => setMobileMenu(false)}
+        >
+          <div className="mobile-menu" onClick={(e) => e.stopPropagation()}>
+            {(
+              [
+                ["videos", Video],
+                ["grouped", Layers3],
+                ["similar", Copy],
+                ["trash", Trash2],
+              ] as const
+            ).map(([id, Icon]) => (
+              <button
+                key={id}
+                onClick={() => {
+                  setView(id);
+                  setMobileMenu(false);
+                }}
+              >
+                <Icon size={19} />
+                <span>{titles[id]}</span>
+                <ChevronRight size={15} />
+              </button>
+            ))}
+            <a href="/portal/">
+              <ArrowLeft size={19} />
+              <span>返回门户</span>
+            </a>
+          </div>
+        </div>
+      )}
       {uploadOpen && (
         <UploadDialog
           tab={uploadTab}

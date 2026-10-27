@@ -1437,6 +1437,38 @@ input {
 .spin {
   animation: spin 1.2s linear infinite;
 }
+.mobile-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #23301b25;
+  z-index: 29;
+}
+.mobile-menu {
+  position: absolute;
+  bottom: calc(79px + env(safe-area-inset-bottom));
+  left: 18px;
+  right: 18px;
+  padding: 9px;
+  background: #fafcf6;
+  border: 1px solid #e3e9d9;
+  border-radius: 15px;
+  box-shadow: 0 10px 35px #20331118;
+}
+.mobile-menu button,
+.mobile-menu a {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  padding: 15px 14px;
+  color: #758b60;
+  font-size: 12px;
+}
+.mobile-menu button span,
+.mobile-menu a span {
+  flex: 1;
+  text-align: left;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
