@@ -1,0 +1,52 @@
+name: Apple client release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apple/**'
+      - 'scripts/client-release.py'
+      - '.github/workflows/client-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aura-client-release
+  cancel-in-progress: false
+
+jobs:
+  installers:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GODEBUG: http2client=0
+    steps:
+      - name: Check out the exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Select the next client version
+        id: version
+        run: python3 scripts/client-release.py prepare --commit "$GITHUB_SHA"
+      - name: Build and verify Mac and iOS installers
+        env:
+          AURA_VERSION: ${{ steps.version.outputs.version }}
+        run: bash apple/package-clients.sh "$AURA_VERSION" "$GITHUB_RUN_NUMBER"
+      - name: Retain build diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: client-build-${{ github.run_id }}
+          path: .local/client-release/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Publish the verified installers
+        env:
+          AURA_VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/client-release.py publish --version "$AURA_VERSION" --commit "$GITHUB_SHA"

@@ -1,5 +1,5 @@
 GO := $(shell command -v go 2>/dev/null || echo $(HOME)/.goenv/shims/go)
-.PHONY: build linux mac release deploy portal rollback releases
+.PHONY: build linux mac release deploy portal rollback releases client-release
 mac:
 	bash apple/build-mac.sh
 build: mac
@@ -18,3 +18,5 @@ rollback:
 	bash deploy/release.sh rollback $(COMMIT)
 releases:
 	bash deploy/release.sh list
+client-release:
+	gh workflow run client-release.yml --repo Crashmere/Aura --ref main
