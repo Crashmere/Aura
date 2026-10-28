@@ -55,6 +55,8 @@ All merge paths transfer the union of the two items' album memberships before re
 
 The web navigation uses albums instead of favorites. The photo viewer opens the album chooser from its add button, and the library supports batch addition. The chooser can create an album and add the selected items in one transaction. An album's photo picker excludes existing members and retains selections across searches and pages. The legacy favorite field and upload hints remain for client/data compatibility, without favorite controls or badges in the web interface.
 
+The library's `隐藏已入相片集` switch excludes items belonging to any album through the server-side `excludeAlbums=true` filter. It defaults to off, remembers the choice in browser storage when available, and applies only to the main library view. Album browsing and its photo picker remain unchanged. Toggling resets pagination and selection; membership changes refresh the filtered results without changing originals.
+
 ## Date selection and continuous import
 
 The server extracts capture dates from original EXIF/QuickTime metadata; native PhotoKit capture dates and file modification times provide fallbacks. A missing timezone uses the configured runtime timezone. Date ranges are inclusive calendar dates. Browser batches transmit the selected range; the server checks the original capture date before publishing, discarding only out-of-range temporary uploads. Photos with missing capture metadata fall back to the provided file date.

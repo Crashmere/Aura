@@ -39,7 +39,7 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | --- | --- |
 | `GET /healthz` | Database connectivity; `{status:"ok",service:"Aura"}` |
 | `GET /api/info` | Library counts, original byte count, processing/error counts |
-| `GET /api/assets` | `{items,next}` with `view`, `album`, `excludeAlbum`, `q`, `from`, `to`, `cursor`, and `limit` (default 120, maximum 240) |
+| `GET /api/assets` | `{items,next}` with `view`, `album`, `excludeAlbum`, `excludeAlbums`, `q`, `from`, `to`, `cursor`, and `limit` (default 120, maximum 240) |
 | `GET /api/assets/{id}` | Logical asset, all file records, and combined metadata |
 | `PATCH /api/assets/{id}` | Optional `favorite`, `trash`, or `primary` fields |
 | `POST /api/assets/{id}/merge` | `{other:"asset-id"}`; merge without discarding originals |
@@ -51,7 +51,7 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 
 `view` accepts `all`, `favorites`, `live`, `videos`, `grouped`, or `trash`. Text search covers original filenames and retained metadata. Cursor pagination sorts by capture date and asset ID descending. A cursor is opaque to clients; pass back the returned string unchanged.
 
-`album` restricts results to members of that album and returns 404 if it no longer exists. `excludeAlbum` omits existing members for the photo picker. Both compose with the existing search, date, and visibility filters. The web interface no longer exposes favorites; the legacy API field, filter, and native import hints remain compatible.
+`album` restricts results to members of that album and returns 404 if it no longer exists. `excludeAlbum` omits existing members for the photo picker. `excludeAlbums=true` omits items belonging to any album. These filters run before cursor pagination and compose with search, date, and visibility filters. The web interface no longer exposes favorites; the legacy API field, filter, and native import hints remain compatible.
 
 ## Albums
 

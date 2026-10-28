@@ -171,6 +171,9 @@ func (l *Library) list(w http.ResponseWriter, r *http.Request) {
 		where += " AND NOT EXISTS (SELECT 1 FROM album_assets aa WHERE aa.album_id=? AND aa.asset_id=a.id)"
 		args = append(args, album)
 	}
+	if q.Get("excludeAlbums") == "true" {
+		where += " AND NOT EXISTS (SELECT 1 FROM album_assets aa WHERE aa.asset_id=a.id)"
+	}
 	if search := strings.TrimSpace(q.Get("q")); search != "" {
 		where += ` AND EXISTS (SELECT 1 FROM files s WHERE s.asset_id=a.id AND (s.name LIKE ? ESCAPE '\' OR s.metadata LIKE ? ESCAPE '\'))`
 		search = strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(search)

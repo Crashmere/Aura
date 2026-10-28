@@ -163,6 +163,14 @@ function App() {
     [to, setTo] = useState(""),
     [filters, setFilters] = useState(false),
     [density, setDensity] = useState(4);
+  const [hideAlbumAssets, setHideAlbumAssets] = useState(() => {
+    try {
+      return localStorage.getItem("aura-hide-album-assets") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const excludeAlbums = view === "all" && hideAlbumAssets;
   const [uploadOpen, setUploadOpen] = useState(false),
     [uploadTab, setUploadTab] = useState("files"),
     [viewer, setViewer] = useState<Asset | null>(null),
@@ -179,6 +187,13 @@ function App() {
   const queryKey = useRef(0);
   const more = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    try {
+      localStorage.setItem("aura-hide-album-assets", String(hideAlbumAssets));
+    } catch {
+      // Browsing still works when storage is unavailable.
+    }
+  }, [hideAlbumAssets]);
+  useEffect(() => {
     const id = setTimeout(() => setQuery(search), 250);
     return () => clearTimeout(id);
   }, [search]);
@@ -193,6 +208,7 @@ function App() {
       from,
       to,
       ...(view === "albums" && albumId ? { album: albumId } : {}),
+      ...(excludeAlbums ? { excludeAlbums: "true" } : {}),
       ...(cursor ? { cursor } : {}),
     }).toString();
   async function load(append = false) {
@@ -263,7 +279,7 @@ function App() {
     setSelected(new Set());
     if (view === "similar") void loadSimilar();
     else void load();
-  }, [view, albumId, query, from, to]);
+  }, [view, albumId, query, from, to, excludeAlbums]);
   refreshRef.current = () => {
     if (view === "similar") void loadSimilar();
     else void load();
@@ -553,6 +569,19 @@ function App() {
               </h1>
             </div>
             <div className="heading-actions">
+              {view === "all" && (
+                <button
+                  className="album-filter-toggle"
+                  type="button"
+                  role="switch"
+                  aria-checked={hideAlbumAssets}
+                  title="隐藏已加入任意相片集的照片"
+                  onClick={() => setHideAlbumAssets(!hideAlbumAssets)}
+                >
+                  <span>隐藏已入相片集</span>
+                  <span className="switch-track" aria-hidden="true" />
+                </button>
+              )}
               {view === "albums" &&
                 (albumGallery ? (
                   <Button
@@ -799,7 +828,7 @@ function App() {
           ) : !items.length && !error ? (
             <Empty
               icon={
-                view === "all" && !query && !from && !to ? (
+                view === "all" && !query && !from && !to && !excludeAlbums ? (
                   <ImageIcon />
                 ) : view === "albums" ? (
                   <Images />
@@ -810,16 +839,18 @@ function App() {
               title={
                 query || from || to
                   ? "没有符合条件的照片"
-                  : view === "all"
-                    ? "照片库还是空的"
-                    : view === "albums"
-                      ? "相片集还是空的"
-                      : view === "trash"
-                        ? "最近删除为空"
-                        : `还没有${titles[view]}`
+                  : excludeAlbums
+                    ? "没有未加入相片集的照片"
+                    : view === "all"
+                      ? "照片库还是空的"
+                      : view === "albums"
+                        ? "相片集还是空的"
+                        : view === "trash"
+                          ? "最近删除为空"
+                          : `还没有${titles[view]}`
               }
             >
-              {view === "all" && !query && !from && !to ? (
+              {view === "all" && !query && !from && !to && !excludeAlbums ? (
                 <>
                   <Button
                     className="primary"
@@ -843,6 +874,11 @@ function App() {
                   </button>
                 </>
               ) : null}
+              {excludeAlbums && (
+                <Button onClick={() => setHideAlbumAssets(false)}>
+                  显示全部照片
+                </Button>
+              )}
               {view === "albums" && album && !query && !from && !to && (
                 <Button
                   className="primary"
