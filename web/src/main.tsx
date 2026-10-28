@@ -59,6 +59,7 @@ import {
 } from "./api";
 import * as uploads from "./upload";
 import { Photo } from "./photo";
+import { LivePhotoIcon } from "./live-photo-icon";
 import { AlbumDialog, AlbumDialogState, AlbumGrid } from "./albums";
 import "./style.css";
 
@@ -389,7 +390,7 @@ function App() {
           {(
             [
               ["all", Grid2X2, "total"],
-              ["live", ScanLine, "live"],
+              ["live", LivePhotoIcon, "live"],
               ["videos", Video, "videos"],
             ] as const
           ).map(([id, Icon, count]) => (
@@ -907,7 +908,7 @@ function App() {
           [
             ["all", Grid2X2],
             ["albums", Images],
-            ["live", ScanLine],
+            ["live", LivePhotoIcon],
           ] as const
         ).map(([id, Icon]) => (
           <button
@@ -1608,7 +1609,7 @@ function Viewer({
               className={`live-control ${playing ? "playing" : ""}`}
               onClick={() => (playing ? setPlaying(false) : start())}
             >
-              <ScanLine size={18} />
+              <LivePhotoIcon size={18} />
               {playing ? "停止播放" : "播放实况"}
             </button>
           )}

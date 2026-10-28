@@ -79,6 +79,16 @@ input[type="range"] {
 svg {
   flex-shrink: 0;
 }
+.live-photo-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  background-color: currentColor;
+  -webkit-mask-image: url("./assets/apple-live-photo.png");
+  mask-image: url("./assets/apple-live-photo.png");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
 h1,
 h2,
 h3,

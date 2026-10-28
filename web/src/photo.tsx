@@ -3,10 +3,10 @@ import {
   Check,
   Image as ImageIcon,
   Layers3,
-  ScanLine,
   Video,
 } from "lucide-react";
 import { Asset, media } from "./api";
+import { LivePhotoIcon } from "./live-photo-icon";
 
 export function Photo({
   asset,
@@ -43,7 +43,7 @@ export function Photo({
         <div className="photo-shade" />
         {asset.kind === "live" && (
           <span className="photo-kind">
-            <ScanLine size={13} />
+            <LivePhotoIcon size={13} />
             实况
           </span>
         )}
