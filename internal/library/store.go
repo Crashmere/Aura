@@ -100,6 +100,15 @@ CREATE INDEX IF NOT EXISTS keys_asset ON asset_keys(asset_id);
 CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, hints TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'uploading', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, hash TEXT NOT NULL, hints TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS decisions (id TEXT PRIMARY KEY, action TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS albums (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS album_assets (
+ album_id TEXT NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+ asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+ PRIMARY KEY(album_id,asset_id)
+);
+CREATE INDEX IF NOT EXISTS album_assets_asset ON album_assets(asset_id);
 PRAGMA user_version=1;
 `
 
@@ -210,6 +219,9 @@ func mergeTx(tx *sql.Tx, keep, drop, reason string) error {
 		return e
 	}
 	if _, e = tx.Exec("UPDATE assets SET favorite=MAX(favorite,COALESCE((SELECT favorite FROM assets WHERE id=?),0)) WHERE id=?", drop, keep); e != nil {
+		return e
+	}
+	if _, e = tx.Exec("INSERT OR IGNORE INTO album_assets(album_id,asset_id) SELECT album_id,? FROM album_assets WHERE asset_id=?", keep, drop); e != nil {
 		return e
 	}
 	if _, e = tx.Exec("DELETE FROM assets WHERE id=?", drop); e != nil {

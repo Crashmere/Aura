@@ -1,6 +1,6 @@
 # Operations
 
-Aura runs at `/aura/` behind shared ServerPortal device authentication and listens on `127.0.0.1:18087`. The runtime user is `aura`; restricted deployments use `aura-deploy`. GitHub repository: `Crashmere/Aura` (public), including public Apple-client installers. Do not publish the server address, credentials, originals, databases, or backups.
+Aura runs on `ali` at `/aura/` behind shared ServerPortal device authentication and listens on `127.0.0.1:18087`. The runtime user is `aura`; restricted deployments use `aura-deploy`. GitHub repository: `Crashmere/Aura` (public), including public Apple-client installers. Do not publish the server address, credentials, originals, databases, or backups.
 
 ## Runtime and layout
 
@@ -9,7 +9,7 @@ Aura runs at `/aura/` behind shared ServerPortal device authentication and liste
 | `/opt/aura/bin/aura` | Embedded-web Go program, including the generated Mac-client ZIP |
 | `/opt/aura/bin/deploy-{ssh,release}.sh` | Root-maintained restricted release entry points |
 | `/opt/aura/config/` | systemd units, Nginx location, Portal declaration and source receipt |
-| `/opt/aura/data/aura.sqlite` | Catalog, upload state, source observations, durable media jobs |
+| `/opt/aura/data/aura.sqlite` | Catalog, albums/memberships, upload state, source observations, durable media jobs |
 | `/opt/aura/data/assets/` | Immutable SHA-256 originals |
 | `/opt/aura/data/derived/` | Rebuildable JPEG/MP4 previews; excluded from backups |
 | `/opt/aura/data/incoming/` | Uncommitted resumable uploads; excluded from backups |
@@ -45,7 +45,9 @@ make deploy
 
 The shared release tool exports the pushed commit, installs locked web dependencies, compiles the Mac client on the maintenance Mac, embeds the frontend/client archive, and builds a static Linux amd64 executable. Provenance and SHA-256 are retained under `.local/releases/<commit>/`. The fixed server script accepts only the program and validated Portal declaration, uses the old program to snapshot data, checks the candidate against that snapshot as `aura`, replaces the binary atomically, and checks direct plus proxied health. Program failure restores the previous program. Schema/data recovery is separate.
 
-Use `make portal` for declaration-only changes. `make rollback COMMIT=<full-compatible-commit>` reuses a locally retained program through the same guarded flow. The initial catalog schema is version 1; verify compatibility before any future schema-affecting rollback.
+Use `make portal` for declaration-only changes. `make rollback COMMIT=<full-compatible-commit>` reuses a locally retained program through the same guarded flow. The core catalog schema remains version 1. Startup adds `albums` and `album_assets` plus the membership index without rewriting existing catalog rows or originals. Obtain migration authorization before first deploying this extension to `ali`; the guarded release takes a pre-upgrade snapshot, and `check` remains read-only.
+
+Albums are included in the whole-database snapshot, with no new directory or backup format. Album-unaware programs can open/check and back up this additive schema, but their merge/split paths do not maintain album memberships. Prefer an album-aware rollback build; when reverting to an older program, pause library edits and imports until the album-aware program is restored.
 
 Apple-client installation publication follows [Client Releases](CLIENT-RELEASE.md). Relevant client-source pushes build the Mac DMG and iOS IPA in GitHub Actions and publish the next version automatically. This workflow has no server access; `make deploy` continues to be a maintenance-computer operation.
 

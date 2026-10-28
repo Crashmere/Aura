@@ -45,6 +45,16 @@ The primary image is selected deterministically by resolution, metadata complete
 
 All byte-distinct versions remain downloadable. A user can select another primary, split a resource, or restore an item from recently deleted. Recently deleted is a reversible visibility state and has no automatic purge. A manual split removes the group's automatic keys; a later import can discover exact relationships again. Source observations and merge/split decisions are retained for diagnosis.
 
+## Albums
+
+Albums organize logical assets through `albums` and `album_assets` in the existing catalog. One item may belong to multiple albums; adding it again is idempotent. Creating an album with selected assets and changing membership each use a transaction, so an invalid or recently deleted asset rejects the complete addition. Names are trimmed and limited to 100 Unicode characters; each write accepts at most 1000 assets.
+
+Album browsing reuses capture-date pagination, filename/metadata search, and date filters. The cover is the newest visible item. Recently deleted items retain membership but disappear from album counts, covers, and ordinary browsing; restoration makes them visible again. Removing membership or deleting an album leaves the assets and original files unchanged.
+
+All merge paths transfer the union of the two items' album memberships before removing the redundant logical asset. A split inherits the source item's memberships for the new item while retaining the source's memberships. These rules also apply to automatic exact-match and Live Photo grouping.
+
+The web navigation uses albums instead of favorites. The photo viewer opens the album chooser from its add button, and the library supports batch addition. The chooser can create an album and add the selected items in one transaction. An album's photo picker excludes existing members and retains selections across searches and pages. The legacy favorite field and upload hints remain for client/data compatibility, without favorite controls or badges in the web interface.
+
 ## Date selection and continuous import
 
 The server extracts capture dates from original EXIF/QuickTime metadata; native PhotoKit capture dates and file modification times provide fallbacks. A missing timezone uses the configured runtime timezone. Date ranges are inclusive calendar dates. Browser batches transmit the selected range; the server checks the original capture date before publishing, discarding only out-of-range temporary uploads. Photos with missing capture metadata fall back to the provided file date.

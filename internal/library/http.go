@@ -57,6 +57,13 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	})
 	r.Get("/api/info", l.info)
 	r.Get("/api/assets", l.list)
+	r.Get("/api/albums", l.listAlbums)
+	r.Post("/api/albums", l.createAlbum)
+	r.Get("/api/albums/{id}", l.albumDetail)
+	r.Patch("/api/albums/{id}", l.renameAlbum)
+	r.Delete("/api/albums/{id}", l.deleteAlbum)
+	r.Post("/api/albums/{id}/assets", l.changeAlbumAssets)
+	r.Delete("/api/albums/{id}/assets", l.changeAlbumAssets)
 	r.Get("/api/assets/{id}", l.detail)
 	r.Patch("/api/assets/{id}", l.updateAsset)
 	r.Post("/api/assets/{id}/merge", l.merge)
@@ -151,6 +158,18 @@ func (l *Library) list(w http.ResponseWriter, r *http.Request) {
 		where = "WHERE a.trashed_at!=''"
 	case "grouped":
 		where += " AND (SELECT count(*) FROM files v WHERE v.asset_id=a.id AND v.mime LIKE 'image/%')>1"
+	}
+	if album := q.Get("album"); album != "" {
+		if _, e := l.Album(album); e != nil {
+			fail(w, 404, "相片集不存在")
+			return
+		}
+		where += " AND EXISTS (SELECT 1 FROM album_assets aa WHERE aa.album_id=? AND aa.asset_id=a.id)"
+		args = append(args, album)
+	}
+	if album := q.Get("excludeAlbum"); album != "" {
+		where += " AND NOT EXISTS (SELECT 1 FROM album_assets aa WHERE aa.album_id=? AND aa.asset_id=a.id)"
+		args = append(args, album)
 	}
 	if search := strings.TrimSpace(q.Get("q")); search != "" {
 		where += ` AND EXISTS (SELECT 1 FROM files s WHERE s.asset_id=a.id AND (s.name LIKE ? ESCAPE '\' OR s.metadata LIKE ? ESCAPE '\'))`
@@ -353,6 +372,9 @@ func (l *Library) split(w http.ResponseWriter, r *http.Request) {
 	_, e = tx.Exec("INSERT INTO assets(id,captured_at,created_at) VALUES(?,?,?)", newID, f.CapturedAt, now())
 	if e == nil {
 		_, e = tx.Exec("UPDATE files SET asset_id=? WHERE hash=?", newID, f.Hash)
+	}
+	if e == nil {
+		_, e = tx.Exec("INSERT INTO album_assets(album_id,asset_id) SELECT album_id,? FROM album_assets WHERE asset_id=?", newID, id)
 	}
 	// Explicit splitting removes automatic keys for the old group; a later import can rediscover exact duplicates.
 	if e == nil {

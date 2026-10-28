@@ -20,7 +20,7 @@
       "id": "data",
       "name": "业务数据",
       "path": "/opt/aura/data",
-      "purpose": "元数据、分片状态、资源分组与导入来源。",
+      "purpose": "元数据、相片集及照片关联、分片状态、资源分组与导入来源。",
       "kind": "data",
       "browse": true,
       "cleanup": false
@@ -121,7 +121,42 @@
     {
       "method": "GET",
       "path": "/api/assets",
-      "description": "按类型、拍摄日期、关键词查询照片；游标分页"
+      "description": "按相片集、类型、拍摄日期、关键词查询照片；游标分页"
+    },
+    {
+      "method": "GET",
+      "path": "/api/albums",
+      "description": "相片集列表、可见项目数与最新封面"
+    },
+    {
+      "method": "POST",
+      "path": "/api/albums",
+      "description": "新建相片集并原子添加所选照片"
+    },
+    {
+      "method": "GET",
+      "path": "/api/albums/{id}",
+      "description": "相片集名称、数量、封面与时间"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/albums/{id}",
+      "description": "重命名相片集"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/albums/{id}",
+      "description": "删除相片集及关联，保留照片和原件"
+    },
+    {
+      "method": "POST",
+      "path": "/api/albums/{id}/assets",
+      "description": "批量添加照片到相片集；重复添加不产生副本"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/albums/{id}/assets",
+      "description": "批量移除相片集关联，照片仍在照片库中"
     },
     {
       "method": "GET",

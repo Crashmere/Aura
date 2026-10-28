@@ -21,7 +21,10 @@ import {
   Copy,
   FolderOpen,
   Grid2X2,
-  Heart,
+  Images,
+  ImagePlus,
+  Pencil,
+  Minus,
   Image as ImageIcon,
   Info as InfoIcon,
   Layers3,
@@ -45,6 +48,7 @@ import {
 import {
   api,
   Asset,
+  Album,
   Detail,
   Original,
   Info,
@@ -54,6 +58,8 @@ import {
   displayDate,
 } from "./api";
 import * as uploads from "./upload";
+import { Photo } from "./photo";
+import { AlbumDialog, AlbumDialogState, AlbumGrid } from "./albums";
 import "./style.css";
 
 document.addEventListener(
@@ -74,7 +80,7 @@ document.addEventListener(
 );
 const titles: Record<string, string> = {
   all: "照片库",
-  favorites: "个人收藏",
+  albums: "相片集",
   live: "实况照片",
   videos: "视频",
   grouped: "已归并",
@@ -135,72 +141,6 @@ function IconButton({
     </button>
   );
 }
-function Photo({
-  asset,
-  onClick,
-  selected = false,
-  select,
-}: {
-  asset: Asset;
-  onClick: () => void;
-  selected?: boolean;
-  select?: () => void;
-}) {
-  const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [asset.primary, asset.status]);
-  return (
-    <div className={`photo ${selected ? "selected" : ""}`}>
-      <button className="photo-open" onClick={onClick} aria-label={asset.name}>
-        {!broken ? (
-          <img
-            src={media(asset.primary)}
-            alt={asset.name}
-            loading="lazy"
-            decoding="async"
-            onError={() => setBroken(true)}
-          />
-        ) : (
-          <div className="photo-missing">
-            <ImageIcon />
-            <span>
-              {asset.status === "error" ? "预览待处理" : "正在生成预览"}
-            </span>
-          </div>
-        )}
-        <div className="photo-shade" />
-        {asset.kind === "live" && (
-          <span className="photo-kind">
-            <ScanLine size={13} />
-            实况
-          </span>
-        )}
-        {asset.kind === "video" && (
-          <span className="photo-kind">
-            <Video size={14} />
-          </span>
-        )}
-        {asset.favorite && (
-          <Heart className="photo-heart" size={17} fill="currentColor" />
-        )}
-        {asset.variants > 1 && asset.kind !== "live" && (
-          <span className="photo-versions">
-            <Layers3 size={13} />
-            {asset.variants}
-          </span>
-        )}
-      </button>
-      {select && (
-        <button
-          className={`select-photo ${selected ? "checked" : ""}`}
-          aria-label={selected ? "取消选择" : "选择照片"}
-          onClick={select}
-        >
-          {selected && <Check size={15} />}
-        </button>
-      )}
-    </div>
-  );
-}
 function App() {
   const [view, setView] = useState("all"),
     [info, setInfo] = useState<Info>(),
@@ -208,6 +148,14 @@ function App() {
     [next, setNext] = useState(""),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
+  const [albums, setAlbums] = useState<Album[]>([]),
+    [albumId, setAlbumId] = useState(""),
+    [albumDialog, setAlbumDialog] = useState<AlbumDialogState | null>(null),
+    [removing, setRemoving] = useState(false);
+  const album = albums.find((a) => a.id === albumId);
+  const albumGallery = view === "albums" && !albumId;
+  const pageTitle =
+    view === "albums" && albumId ? album?.name || "相片集" : titles[view];
   const [search, setSearch] = useState(""),
     [query, setQuery] = useState(""),
     [from, setFrom] = useState(""),
@@ -243,6 +191,7 @@ function App() {
       q: query,
       from,
       to,
+      ...(view === "albums" && albumId ? { album: albumId } : {}),
       ...(cursor ? { cursor } : {}),
     }).toString();
   async function load(append = false) {
@@ -250,11 +199,14 @@ function App() {
     setLoading(true);
     setError("");
     try {
-      const [data, stats] = await Promise.all([
-        api<{ items: Asset[]; next: string }>(
-          "assets?" + params(append ? next : ""),
-        ),
+      const [data, stats, collections] = await Promise.all([
+        albumGallery
+          ? Promise.resolve({ items: [] as Asset[], next: "" })
+          : api<{ items: Asset[]; next: string }>(
+              "assets?" + params(append ? next : ""),
+            ),
         api<Info>("info"),
+        api<Album[]>("albums"),
       ]);
       if (key !== queryKey.current) return;
       setItems((old) =>
@@ -267,6 +219,7 @@ function App() {
       );
       setNext(data.next);
       setInfo(stats);
+      setAlbums(collections);
     } catch (e) {
       if (key === queryKey.current)
         setError(String(e instanceof Error ? e.message : e));
@@ -303,10 +256,13 @@ function App() {
     }
   }
   useEffect(() => {
+    ++queryKey.current;
+    setItems([]);
+    setNext("");
     setSelected(new Set());
     if (view === "similar") void loadSimilar();
     else void load();
-  }, [view, query, from, to]);
+  }, [view, albumId, query, from, to]);
   refreshRef.current = () => {
     if (view === "similar") void loadSimilar();
     else void load();
@@ -335,6 +291,10 @@ function App() {
   useEffect(() => {
     const fn = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (albumDialog) {
+          // The dialog owns Escape; keep the photo viewer behind it open.
+          return;
+        }
         setViewer(null);
         setUploadOpen(false);
         setHelp(false);
@@ -344,7 +304,7 @@ function App() {
     };
     window.addEventListener("keydown", fn);
     return () => window.removeEventListener("keydown", fn);
-  }, []);
+  }, [albumDialog]);
   const groups = useMemo(() => {
     const result: { date: string; items: Asset[] }[] = [];
     for (const asset of items) {
@@ -373,6 +333,39 @@ function App() {
       return n;
     });
   }
+  function navigate(id: string) {
+    setAlbumId("");
+    setView(id);
+  }
+  function addSelected() {
+    if (selected.size > 1000) {
+      notify("每次最多添加 1000 项，请减少选择");
+      return;
+    }
+    setAlbumDialog({ kind: "add", assets: [...selected] });
+  }
+  async function removeSelected() {
+    if (removing || !albumId) return;
+    if (selected.size > 1000) {
+      notify("每次最多移除 1000 项，请减少选择");
+      return;
+    }
+    setRemoving(true);
+    try {
+      await api(
+        `albums/${albumId}/assets`,
+        { assets: [...selected] },
+        "DELETE",
+      );
+      setSelected(new Set());
+      refreshRef.current();
+      notify("已从相片集移除，照片仍在照片库中");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRemoving(false);
+    }
+  }
   const completed = uploading.items.filter((i) =>
     ["done", "duplicate", "skipped"].includes(i.state),
   ).length;
@@ -396,7 +389,6 @@ function App() {
           {(
             [
               ["all", Grid2X2, "total"],
-              ["favorites", Heart, "favorites"],
               ["live", ScanLine, "live"],
               ["videos", Video, "videos"],
             ] as const
@@ -404,13 +396,21 @@ function App() {
             <button
               key={id}
               className={view === id ? "active" : ""}
-              onClick={() => setView(id)}
+              onClick={() => navigate(id)}
             >
               <Icon size={19} />
               <span>{titles[id]}</span>
               {!!info?.[count] && <small>{info[count]}</small>}
             </button>
           ))}
+          <button
+            className={view === "albums" ? "active" : ""}
+            onClick={() => navigate("albums")}
+          >
+            <Images size={19} />
+            <span>相片集</span>
+            {albums.length > 0 && <small>{albums.length}</small>}
+          </button>
           <div className="nav-label">整理</div>
           {(
             [
@@ -422,7 +422,7 @@ function App() {
             <button
               key={id}
               className={view === id ? "active" : ""}
-              onClick={() => setView(id)}
+              onClick={() => navigate(id)}
             >
               <Icon size={18} />
               <span>{titles[id]}</span>
@@ -487,14 +487,14 @@ function App() {
             <Brand />
           </div>
           <span className="desktop-breadcrumb">
-            个人照片库 <span>/</span> {titles[view]}
+            个人照片库 <span>/</span> {pageTitle}
           </span>
           <div className="top-actions">
             <div className="search">
               <Search size={17} />
               <input
-                aria-label="搜索照片"
-                placeholder="搜索文件名、相机…"
+                aria-label={albumGallery ? "搜索相片集" : "搜索照片"}
+                placeholder={albumGallery ? "搜索相片集…" : "搜索文件名、相机…"}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -518,13 +518,19 @@ function App() {
           </div>
         </header>
         <div className="page">
+          {view === "albums" && albumId && (
+            <button className="album-back" onClick={() => setAlbumId("")}>
+              <ArrowLeft size={16} />
+              全部相片集
+            </button>
+          )}
           <div className="page-heading">
             <div>
               <div className="eyebrow">
                 {view === "all"
                   ? "LIBRARY"
-                  : view === "favorites"
-                    ? "FAVORITES"
+                  : view === "albums"
+                    ? "ALBUMS"
                     : view === "live"
                       ? "LIVE PHOTOS"
                       : view === "videos"
@@ -532,7 +538,12 @@ function App() {
                         : "COLLECTION"}
               </div>
               <h1>
-                {titles[view]}
+                {pageTitle}
+                {view === "albums" && (
+                  <span className="heading-count">
+                    {albumId ? album?.count || 0 : albums.length}
+                  </span>
+                )}
                 {view === "all" && info ? (
                   <span className="heading-count">
                     {info.total.toLocaleString()}
@@ -541,27 +552,69 @@ function App() {
               </h1>
             </div>
             <div className="heading-actions">
-              <IconButton
-                title="日期筛选"
-                className={filters || from || to ? "is-active" : ""}
-                onClick={() => setFilters(!filters)}
-              >
-                <CalendarDays size={19} />
-              </IconButton>
-              <div className="density-control">
-                <Grid2X2 size={15} />
-                <input
-                  type="range"
-                  aria-label="缩略图大小"
-                  min="3"
-                  max="7"
-                  value={density}
-                  onChange={(e) => setDensity(+e.target.value)}
-                />
-              </div>
+              {view === "albums" &&
+                (albumGallery ? (
+                  <Button
+                    className="primary"
+                    onClick={() => setAlbumDialog({ kind: "create" })}
+                  >
+                    <Plus size={17} />
+                    新建相片集
+                  </Button>
+                ) : (
+                  album && (
+                    <>
+                      <Button
+                        className="primary"
+                        onClick={() => setAlbumDialog({ kind: "pick", album })}
+                      >
+                        <ImagePlus size={17} />
+                        添加照片
+                      </Button>
+                      <IconButton
+                        title="重命名相片集"
+                        onClick={() =>
+                          setAlbumDialog({ kind: "rename", album })
+                        }
+                      >
+                        <Pencil size={17} />
+                      </IconButton>
+                      <IconButton
+                        title="删除相片集"
+                        onClick={() =>
+                          setAlbumDialog({ kind: "delete", album })
+                        }
+                      >
+                        <Trash2 size={17} />
+                      </IconButton>
+                    </>
+                  )
+                ))}
+              {!albumGallery && (
+                <>
+                  <IconButton
+                    title="日期筛选"
+                    className={filters || from || to ? "is-active" : ""}
+                    onClick={() => setFilters(!filters)}
+                  >
+                    <CalendarDays size={19} />
+                  </IconButton>
+                  <div className="density-control">
+                    <Grid2X2 size={15} />
+                    <input
+                      type="range"
+                      aria-label="缩略图大小"
+                      min="3"
+                      max="7"
+                      value={density}
+                      onChange={(e) => setDensity(+e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </div>
-          {filters && (
+          {filters && !albumGallery && (
             <div className="date-filters">
               <label>
                 拍摄日期
@@ -609,13 +662,22 @@ function App() {
                 <X size={16} />
               </button>
               <strong>已选 {selected.size} 项</strong>
-              <Button
-                className="subtle"
-                onClick={() => void action({ favorite: true })}
-              >
-                <Heart size={16} />
-                收藏
-              </Button>
+              {view !== "trash" && (
+                <Button className="subtle" onClick={addSelected}>
+                  <ImagePlus size={16} />
+                  添加到相片集
+                </Button>
+              )}
+              {view === "albums" && albumId && (
+                <Button
+                  className="subtle"
+                  disabled={removing}
+                  onClick={() => void removeSelected()}
+                >
+                  <Minus size={16} />
+                  {removing ? "正在移除" : "从相片集移除"}
+                </Button>
+              )}
               <Button
                 className="subtle"
                 onClick={() => void action({ trash: view !== "trash" })}
@@ -641,7 +703,49 @@ function App() {
               <Button onClick={() => refreshRef.current()}>重试</Button>
             </div>
           )}
-          {loading && !items.length && view !== "similar" ? (
+          {albumGallery ? (
+            loading ? (
+              <div className="loading-inline">
+                <LoaderCircle className="spin" size={20} />
+                正在加载相片集
+              </div>
+            ) : albums.length ? (
+              albums.some((a) =>
+                a.name
+                  .toLocaleLowerCase()
+                  .includes(query.trim().toLocaleLowerCase()),
+              ) ? (
+                <AlbumGrid
+                  albums={albums.filter((a) =>
+                    a.name
+                      .toLocaleLowerCase()
+                      .includes(query.trim().toLocaleLowerCase()),
+                  )}
+                  open={(a) => {
+                    setSearch("");
+                    setQuery("");
+                    setFrom("");
+                    setTo("");
+                    setAlbumId(a.id);
+                  }}
+                />
+              ) : (
+                <Empty icon={<Search />} title="没有符合条件的相片集" />
+              )
+            ) : (
+              !error && (
+                <Empty icon={<Images />} title="还没有相片集">
+                  <Button
+                    className="primary"
+                    onClick={() => setAlbumDialog({ kind: "create" })}
+                  >
+                    <Plus size={17} />
+                    新建相片集
+                  </Button>
+                </Empty>
+              )
+            )
+          ) : loading && !items.length && view !== "similar" ? (
             <div className="skeleton-grid">
               {Array.from({ length: 12 }, (_, i) => (
                 <div key={i} />
@@ -696,8 +800,8 @@ function App() {
               icon={
                 view === "all" && !query && !from && !to ? (
                   <ImageIcon />
-                ) : view === "favorites" ? (
-                  <Heart />
+                ) : view === "albums" ? (
+                  <Images />
                 ) : (
                   <Search />
                 )
@@ -707,8 +811,8 @@ function App() {
                   ? "没有符合条件的照片"
                   : view === "all"
                     ? "照片库还是空的"
-                    : view === "favorites"
-                      ? "收藏喜欢的瞬间"
+                    : view === "albums"
+                      ? "相片集还是空的"
                       : view === "trash"
                         ? "最近删除为空"
                         : `还没有${titles[view]}`
@@ -738,6 +842,15 @@ function App() {
                   </button>
                 </>
               ) : null}
+              {view === "albums" && album && !query && !from && !to && (
+                <Button
+                  className="primary"
+                  onClick={() => setAlbumDialog({ kind: "pick", album })}
+                >
+                  <ImagePlus size={17} />
+                  添加照片
+                </Button>
+              )}
             </Empty>
           ) : (
             <div
@@ -793,14 +906,14 @@ function App() {
         {(
           [
             ["all", Grid2X2],
-            ["favorites", Heart],
+            ["albums", Images],
             ["live", ScanLine],
           ] as const
         ).map(([id, Icon]) => (
           <button
             key={id}
             className={view === id ? "active" : ""}
-            onClick={() => setView(id)}
+            onClick={() => navigate(id)}
           >
             <Icon size={21} />
             <span>{titles[id]}</span>
@@ -840,7 +953,7 @@ function App() {
               <button
                 key={id}
                 onClick={() => {
-                  setView(id);
+                  navigate(id);
                   setMobileMenu(false);
                 }}
               >
@@ -877,6 +990,40 @@ function App() {
           }}
           changed={() => refreshRef.current()}
           notify={notify}
+          addToAlbum={() =>
+            setAlbumDialog({ kind: "add", assets: [viewer.id] })
+          }
+          modalOpen={!!albumDialog}
+        />
+      )}
+      {albumDialog && (
+        <AlbumDialog
+          state={albumDialog}
+          close={() => setAlbumDialog(null)}
+          saved={(saved) => {
+            const kind = albumDialog.kind;
+            setAlbumDialog(null);
+            setSelected(new Set());
+            if (kind === "delete") setAlbumId("");
+            if (kind === "create" && saved) {
+              setAlbums((old) => [saved, ...old]);
+              setSearch("");
+              setQuery("");
+              setFrom("");
+              setTo("");
+              setView("albums");
+              setAlbumId(saved.id);
+            } else refreshRef.current();
+            notify(
+              kind === "delete"
+                ? "已删除相片集，照片仍在照片库中"
+                : kind === "rename"
+                  ? "已重命名相片集"
+                  : kind === "create"
+                    ? "已创建相片集"
+                    : `已添加到“${saved?.name}”`,
+            );
+          }}
         />
       )}
       {help && (
@@ -1124,7 +1271,14 @@ function UploadDialog({
                 <ArrowDownToLine size={17} />
                 下载 Mac 客户端
               </a>
-              <a className="button" style={{marginLeft:10}} href="https://github.com/Crashmere/Aura/releases/latest/download/Aura-iOS.ipa"><Smartphone size={17}/>下载 iOS 安装包</a>
+              <a
+                className="button"
+                style={{ marginLeft: 10 }}
+                href="https://github.com/Crashmere/Aura/releases/latest/download/Aura-iOS.ipa"
+              >
+                <Smartphone size={17} />
+                下载 iOS 安装包
+              </a>
               <ol>
                 <li>打开客户端，输入此服务器地址并完成门户授权。</li>
                 <li>允许访问照片，选择日期范围，开始持续上传。</li>
@@ -1132,7 +1286,8 @@ function UploadDialog({
               <div className="platform-note">
                 <Smartphone size={18} />
                 <p>
-                  iOS 安装包使用 AltStore 或 Sideloadly 自签安装。网页无法后台扫描系统照片库。
+                  iOS 安装包使用 AltStore 或 Sideloadly
+                  自签安装。网页无法后台扫描系统照片库。
                 </p>
               </div>
               <a
@@ -1274,6 +1429,8 @@ function Viewer({
   next,
   changed,
   notify,
+  addToAlbum,
+  modalOpen,
 }: {
   asset: Asset;
   close: () => void;
@@ -1281,6 +1438,8 @@ function Viewer({
   next: () => void;
   changed: () => void;
   notify: (s: string) => void;
+  addToAlbum: () => void;
+  modalOpen: boolean;
 }) {
   const [detail, setDetail] = useState<Detail>(),
     [showInfo, setShowInfo] = useState(false),
@@ -1303,6 +1462,8 @@ function Viewer({
   }, [asset.id]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (modalOpen || e.isComposing || e.ctrlKey || e.metaKey || e.altKey)
+        return;
       if ((e.target as HTMLElement).matches("input,textarea")) return;
       if (e.key === "ArrowLeft") previous();
       if (e.key === "ArrowRight") next();
@@ -1310,7 +1471,7 @@ function Viewer({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [previous, next]);
+  }, [previous, next, modalOpen]);
   const a = detail?.asset || asset,
     primary = detail?.files.find((f) => f.hash === a.primary);
   const meta = detail?.metadata || {};
@@ -1353,12 +1514,8 @@ function Viewer({
             <small>{a.name}</small>
           </div>
           <div className="viewer-actions">
-            <IconButton
-              title="收藏"
-              className={a.favorite ? "favorite" : ""}
-              onClick={() => void update({ favorite: !a.favorite })}
-            >
-              <Heart size={20} fill={a.favorite ? "currentColor" : "none"} />
+            <IconButton title="添加到相片集" onClick={addToAlbum}>
+              <ImagePlus size={20} />
             </IconButton>
             <a
               className="icon-button"

@@ -39,7 +39,7 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | --- | --- |
 | `GET /healthz` | Database connectivity; `{status:"ok",service:"Aura"}` |
 | `GET /api/info` | Library counts, original byte count, processing/error counts |
-| `GET /api/assets` | `{items,next}` with `view`, `q`, `from`, `to`, `cursor`, and `limit` (default 120, maximum 240) |
+| `GET /api/assets` | `{items,next}` with `view`, `album`, `excludeAlbum`, `q`, `from`, `to`, `cursor`, and `limit` (default 120, maximum 240) |
 | `GET /api/assets/{id}` | Logical asset, all file records, and combined metadata |
 | `PATCH /api/assets/{id}` | Optional `favorite`, `trash`, or `primary` fields |
 | `POST /api/assets/{id}/merge` | `{other:"asset-id"}`; merge without discarding originals |
@@ -50,6 +50,22 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `POST /api/files/{hash}/retry` | Queue metadata and derivative regeneration |
 
 `view` accepts `all`, `favorites`, `live`, `videos`, `grouped`, or `trash`. Text search covers original filenames and retained metadata. Cursor pagination sorts by capture date and asset ID descending. A cursor is opaque to clients; pass back the returned string unchanged.
+
+`album` restricts results to members of that album and returns 404 if it no longer exists. `excludeAlbum` omits existing members for the photo picker. Both compose with the existing search, date, and visibility filters. The web interface no longer exposes favorites; the legacy API field, filter, and native import hints remain compatible.
+
+## Albums
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /api/albums` | Array of albums ordered by creation time and ID descending |
+| `POST /api/albums` | `{name,assets?:[assetId]}`; create and optionally add items atomically; returns 201 |
+| `GET /api/albums/{id}` | Album name, visible item count, cover asset, and timestamps |
+| `PATCH /api/albums/{id}` | `{name}`; rename |
+| `DELETE /api/albums/{id}` | Delete the album and its memberships; returns `{deleted:true}`; preserves library items and originals |
+| `POST /api/albums/{id}/assets` | `{assets:[assetId]}`; idempotent, atomic addition |
+| `DELETE /api/albums/{id}/assets` | `{assets:[assetId]}`; idempotent removal of memberships only |
+
+Album responses contain `id`, `name`, `count`, `createdAt`, `updatedAt`, and optional `cover` using the asset response shape. Counts and covers exclude recently deleted items; the newest visible item supplies the cover. Names contain 1–100 Unicode characters after trimming. Membership changes accept 1–1000 IDs; creation permits an empty list. Missing or recently deleted assets reject the entire addition with 400. Missing albums return 404. Removal does not require the item to remain visible. Merge transfers memberships to the retained item; split copies memberships to the new item.
 
 ## Media
 

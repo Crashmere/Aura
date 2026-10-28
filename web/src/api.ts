@@ -34,6 +34,14 @@ export type Detail = {
   files: Original[];
   metadata: Record<string, unknown>;
 };
+export type Album = {
+  id: string;
+  name: string;
+  count: number;
+  cover?: Asset;
+  createdAt: string;
+  updatedAt: string;
+};
 export type Info = {
   total: number;
   favorites: number;
