@@ -15,6 +15,14 @@ if [[ $EUID -ne 0 || $# -ne 2 || ! $1 =~ ^[0-9a-f]{40}$ || ! $2 =~ ^[0-9a-f]{64}
 commit=$1
 expected=$2
 app=/opt/aura
+nas=false
+upgrade=/opt/server-context/scripts/upgrade-state.py
+if [[ -r /etc/server-maintenance-host && $(< /etc/server-maintenance-host) == nas ]]; then
+  nas=true
+  test -f "$upgrade"
+  exec 8>/run/lock/server-maintenance.lock
+  flock -s -n 8 || { printf 'A full backup or maintenance operation is running.\n' >&2; exit 75; }
+fi
 exec 9>/run/lock/aura-deploy.lock
 flock -n 9 || { echo 'Another release is running.' >&2; exit 75; }
 test -f "$app/data/aura.sqlite"
@@ -59,14 +67,26 @@ printf 'commit=%s\nsha256=%s\n' "$commit" "$expected" > "$release/metadata"
 backup="$app/backups/before-deploy-$(basename "$release")"
 stopped=true
 systemctl stop aura
-runuser -u aura -- timeout 600 "$app/bin/aura" backup --data "$app/data" --out "$backup"
-# Uploaded executable always runs as the application identity.
-runuser -u aura -- timeout 60 "$release/aura" check --data "$backup"
+if [[ $nas == true ]]; then
+  candidate_data=$(python3 "$upgrade" begin --app aura --release "$(basename "$release")")
+  backup="/var/lib/server-upgrades/aura/$(basename "$release")"
+  runuser -u aura -- timeout 60 "$release/aura" check --data "$candidate_data"
+else
+  runuser -u aura -- timeout 600 "$app/bin/aura" backup --data "$app/data" --out "$backup"
+  runuser -u aura -- timeout 60 "$release/aura" check --data "$backup"
+fi
 install -m 0755 "$release/aura" "$app/bin/aura.next"
 replaced=true
 mv -f "$app/bin/aura.next" "$app/bin/aura"
 systemctl start aura
 wait_healthy
+if [[ $nas == true ]]; then
+  systemctl stop aura
+  python3 "$upgrade" verify --app aura --release "$(basename "$release")"
+  systemctl start aura
+  wait_healthy
+fi
 printf '%s\n' "$commit" > "$app/current-commit"
 chmod 0644 "$app/current-commit"
+if [[ $nas == true ]]; then python3 "$upgrade" accept --app aura --release "$(basename "$release")"; fi
 printf 'Deployed %s.\n' "$commit"

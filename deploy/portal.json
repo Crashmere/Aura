@@ -38,7 +38,7 @@
       "id": "derived",
       "name": "预览缓存",
       "path": "/opt/aura/data/derived",
-      "purpose": "可再生缩略图、浏览预览和兼容播放视频；不纳入备份。",
+      "purpose": "可再生缩略图、浏览预览和兼容播放视频；nas 手工全量备份和升级冷副本完整收录，原生工具仍不收录。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -47,7 +47,7 @@
       "id": "incoming",
       "name": "上传暂存",
       "path": "/opt/aura/data/incoming",
-      "purpose": "尚未提交的分片；恢复后由客户端重新上传。",
+      "purpose": "已确认写入但尚未提交的持久化分片；nas 手工全量备份和升级冷副本完整收录。恢复旧状态后由 agent 检查客户端回执与服务端数据是否对齐。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -65,16 +65,16 @@
       "id": "backups",
       "name": "数据备份",
       "path": "/opt/aura/backups",
-      "purpose": "数据库一致性快照和原件硬链接；每日保留 14 份，发布前快照遵循共享 5 份与保护版本规则。",
+      "purpose": "nas 的日常备份由门户或 agent 手动写入外置盘，完整收录数据库、原件、派生资源和持久上传状态，采用压缩归档；历史原生材料不自动清理。升级临时全量副本由 /var/lib/server-upgrades 管理，运行和数据验证成功后立即删除，失败或未确认时保留。",
       "kind": "backups",
       "browse": true,
-      "cleanup": true
+      "cleanup": false
     },
     {
       "id": "releases",
       "name": "部署版本",
       "path": "/opt/aura/releases",
-      "purpose": "最近 3 次成功发布与受保护版本，失败批次保留恢复记录。",
+      "purpose": "程序版本和发布结果用于回退与排查；nas 不做定时轮转，失败批次保留恢复记录，清理前由 agent 确认具体范围。",
       "kind": "releases",
       "browse": true,
       "cleanup": true

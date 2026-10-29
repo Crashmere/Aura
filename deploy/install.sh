@@ -11,7 +11,11 @@ public_key=$(realpath "$2")
 scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 [[ ! -e $app && ! -e /etc/systemd/system/aura.service && ! -e /etc/nginx/app-locations/aura.conf ]] || { echo 'Installation already exists' >&2; exit 1; }
 if id aura >/dev/null 2>&1 || id aura-deploy >/dev/null 2>&1; then echo 'Account already exists' >&2; exit 1; fi
-[[ -f /run/lock/ali-release-retention.lock && -x /opt/serverportal/bin/portal ]]
+[[ -x /opt/serverportal/bin/portal ]]
+[[ ${ENABLE_APP_BACKUP_TIMER:-false} != true || -f /run/lock/ali-release-retention.lock ]]
+if [[ ${ENABLE_APP_BACKUP_TIMER:-false} == true && -r /etc/server-maintenance-host && $(< /etc/server-maintenance-host) == nas ]]; then
+  echo 'Scheduled internal application backups are disabled on NAS.' >&2; exit 1
+fi
 for tool in vips vipsheader exiftool ffmpeg; do command -v "$tool" >/dev/null; done
 ssh-keygen -l -f "$public_key" >/dev/null
 if ss -H -ltn 'sport = :18087' | grep -q .; then echo 'Port 18087 is in use' >&2; exit 1; fi
@@ -24,9 +28,11 @@ runuser -u aura -- "$app/bin/aura" init --data "$app/data"
 bash "$scripts/setup-deploy.sh" "$public_key"
 systemctl link "$app/config/aura.service" "$app/config/aura-backup.service" "$app/config/aura-backup.timer"
 systemctl daemon-reload
-systemctl enable --now aura.service aura-backup.timer
+systemctl enable --now aura.service
+if [[ ${ENABLE_APP_BACKUP_TIMER:-false} == true ]]; then systemctl enable --now aura-backup.timer;
+else systemctl disable --now aura-backup.timer; fi
 curl --fail --silent --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:18087/healthz
-systemctl start aura-backup.service
+if [[ ${ENABLE_APP_BACKUP_TIMER:-false} == true ]]; then systemctl start aura-backup.service; fi
 ln -s "$app/config/nginx-location.conf" /etc/nginx/app-locations/aura.conf
 if ! nginx -t; then rm /etc/nginx/app-locations/aura.conf; echo 'Nginx validation failed; new link removed' >&2; exit 1; fi
 systemctl reload nginx

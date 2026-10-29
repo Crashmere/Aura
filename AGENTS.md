@@ -1,6 +1,6 @@
 # Aura Maintenance Entry Point
 
-Aura is a personal photo library at `/aura/`, protected by ServerPortal device authentication. Read `docs/README.md`, then the architecture and operations documents relevant to the task. Use the server-operations skill and explicitly read remote `/opt/AGENTS.md` before deployment.
+Aura is a personal photo library at `/aura/`, protected by ServerPortal device authentication. Its application target is `nas`; `vps` provides public HTTPS port 8443 and temporary `ali` forwarding reaches the same instance. Read `docs/README.md`, then relevant architecture/operations docs. Use server-operations, read each target's remote `/opt/AGENTS.md`, and consult current-state for activation before deployment.
 
 - Preserve uploaded bytes. Originals are immutable, SHA-256 addressed objects. Metadata, previews, and playback derivatives are separate.
 - Exact byte or canonical pixel matches may be grouped automatically. Perceptual similarity only proposes review; it must never delete or merge originals automatically.
