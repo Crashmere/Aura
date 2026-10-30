@@ -2161,37 +2161,6 @@ input {
     font-size: 12px;
   }
 }
-.protection-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 16px;
-  margin: -10px 0 25px;
-  border: 1px solid #e7e7dc;
-  border-radius: 10px;
-  background: #f3f4ee;
-  color: #8b785e;
-}
-.protection-summary > span {
-  flex: 1;
-  min-width: 0;
-}
-.protection-summary strong {
-  display: block;
-  font-size: 12px;
-  font-weight: 500;
-}
-.protection-summary small {
-  display: block;
-  margin-top: 5px;
-  font-size: 11px;
-  color: #929385;
-  overflow-wrap: anywhere;
-}
-.protection-summary.is-verified {
-  color: var(--accent);
-  border-color: #dde5d3;
-}
 .deletion-backdrop {
   z-index: 110;
 }
@@ -2640,17 +2609,6 @@ input {
   }
 }
 @media (max-width: 720px) {
-  .protection-summary {
-    margin: -8px 0 22px;
-    padding: 11px 12px;
-    gap: 9px;
-  }
-  .protection-summary strong {
-    font-size: 11px;
-  }
-  .protection-summary small {
-    font-size: 10px;
-  }
   .timeline-jump {
     margin-bottom: 23px;
     font-size: 11px;

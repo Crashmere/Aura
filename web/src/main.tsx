@@ -68,7 +68,6 @@ import { Photo } from "./photo";
 import { LivePhotoIcon } from "./live-photo-icon";
 import { AlbumDialog, AlbumDialogState, AlbumGrid } from "./albums";
 import { readLocation, writeLocation, monthRange } from "./library-location";
-import { ProtectionSummary } from "./protection";
 import { TaskCenter } from "./task-center";
 import { useImageGestures } from "./image-gestures";
 import { DeletionProgress, PermanentDeleteDialog, useDeletionOperations } from "./permanent-delete";
@@ -820,7 +819,6 @@ function App() {
               )}
             </div>
           </div>
-          <ProtectionSummary />
           <DeletionProgress state={deletions} otherPending={!!info?.pendingDeletions} />
           {!albumGallery && !specialView && (!!months.length || !!from || !!to) && (
             <div className="timeline-jump">

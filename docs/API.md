@@ -104,9 +104,9 @@ Album responses contain `id`, `name`, `count`, `createdAt`, `updatedAt`, and opt
 
 Native import source keys use `photokit-album:<client-library-id>:<collection-id>`. Source mappings are retained in the existing decision log. The import adds at most 1000 visible items per request, preserves an Aura-side rename, and never propagates removals from Apple Photos. A mapped album deleted in Aura returns 409 with `code: "imported_album_deleted"` instead of being silently recreated. Clients preserve that user decision and surface it separately from network failures. Native clients must require `capabilities.albumImport` before enabling this operation.
 
-## Protection summary
+## Backup and recovery
 
-NAS backup and recovery are agent-operated through server-operations tooling. Portal has no backup/recovery API or page, and Aura exposes no API for starting a backup. The web protection summary does not establish external backup coverage; verify recovery packages through the agent-operated workflow in [Operations](OPERATIONS.md).
+NAS backup and recovery are agent-operated through server-operations tooling. Portal has no backup/recovery API or page, and Aura exposes no API for starting a backup. Verify recovery packages through the agent-operated workflow in [Operations](OPERATIONS.md).
 
 ## Media
 

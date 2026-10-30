@@ -81,7 +81,7 @@ Library views, album selection, search, and date filters are represented in brow
 
 The task center reads durable file processing records and incomplete upload sessions, with cursor pagination and status filters. File status distinguishes accepted originals from pending, failed, and ready browsing resources. Retry queues metadata and derivative processing without changing original bytes; incomplete uploads require the client to reselect or recover the source bytes. Error messages remain available independently of the in-memory browser upload queue. A transient image-loading failure has a retry path instead of being presented indefinitely as server processing.
 
-Aura reads the existing protected, same-origin Portal recovery summary and links to Portal's data-protection page. It does not create another backup service or grant Aura access to the collector socket. A recorded backup, an available external volume, and a verified isolated restore are separate states; unavailable or unreadable metadata remains unknown rather than becoming a successful protection claim.
+Whole-application NAS backup and recovery are agent-operated through server-operations. Aura's web application has no backup status card, backup archive controls, or dependency on Portal recovery APIs; Portal remains responsible for device authentication.
 
 ## Date selection and continuous import
 

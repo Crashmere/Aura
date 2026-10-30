@@ -55,9 +55,11 @@ Deletion requests, cleanup results, and minimal reimport guards use the existing
 
 Apple-client installation publication follows [Client Releases](CLIENT-RELEASE.md). Relevant client-source pushes build the Mac DMG and iOS IPA in GitHub Actions and publish the next version automatically. This workflow has no server access; `make deploy` continues to be a maintenance-computer operation.
 
-`deploy/portal.json` is the source for resource browsing, original/derived distinctions, APIs, port, units, and backup contract. Registration creates `/opt/serverportal/registry.d/aura.json` and verifies the loaded declaration hash. Synchronize managed documentation with `SYNC_HOST=nas .../sync-docs.sh shared Aura` from the pushed agent-config checkout.
+`deploy/portal.json` is the source for resource browsing, original/derived distinctions, APIs, port, and units. Registration creates `/opt/serverportal/registry.d/aura.json` and verifies the loaded declaration hash. Synchronize managed documentation with `SYNC_HOST=nas .../sync-docs.sh shared Aura` from the pushed agent-config checkout.
 
 ## Backups and recovery
+
+Use the agent-owned [backup and recovery runbook](https://github.com/Crashmere/agent-config/blob/main/skills/server-operations/references/backup-recovery.md), also at `/opt/server-context/references/backup-recovery.md` on NAS. Aura and Portal provide no web server-backup or production-restoration operation.
 
 NAS uses manual complete compressed backups to an explicitly identified external volume through agent-only server-operations tooling. Pause business/background services, cold-copy the entire application state onto external staging, resume previously running services, then compress and verify the immutable staging before publishing. Data includes the complete database, originals, derivatives, acknowledged chunks in `incoming`, and persistent work/job state. No routine stage/archive is written to the NAS internal disk, and no insertion-triggered job, automatic rotation, or old-backup deletion runs.
 
@@ -80,12 +82,10 @@ Alibaba Cloud Backup belongs to `ali`, not NAS or VPS. Historical cloud/native b
 
 For migration, pause clients and the ALI application, transfer complete cold state preserving bytes into a new NAS directory, install media runtimes, and start a matching program behind authenticated gateways. Verify complete catalog/archive rows, Live Photo resources, original/derived checksums, persistent upload state, and authenticated downloads. Both gateways must reach the same NAS data. After restoring older NAS state, run the Apple client's `重新核对服务器` at the configured Origin before resuming import; it preserves unresolved and recently deleted receipts and queues only confirmed missing visible originals. Changing Origin requires its own Portal login and has a separate receipt namespace; see [Apple](APPLE.md). Real-data replacement and recovery-point selection follow the established authorization workflow.
 
-The web protection summary does not establish external backup coverage. External-volume readiness, package verification, and isolated-restore acceptance are checked through the agent-operated recovery tooling. The first external NAS backup still requires an explicitly identified real mount/UUID and the approved full-backup pause/copy/resume workflow; no volume is selected or backup created by enabling permanent deletion.
-
 ## Diagnostics
 
 ```sh
-systemctl status aura aura-backup.timer
+systemctl status aura
 journalctl -u aura --since today
 curl --fail http://127.0.0.1:18087/healthz
 ```
@@ -99,5 +99,3 @@ Permanent deletion is a user-confirmed live-library operation restricted to sele
 An intentionally removed hash returns 410 `original_deleted`, not `original_missing`. Source-scoped guards cover future native variants only when no retained split member or upload still uses that source. Updated clients preserve these intentional exclusions and do not retry them as network failures. Removing live filenames is not secure erasure: existing backups, browser caches, or in-progress downloads may retain bytes, and `bytes` in the cleanup response is a planned catalog amount rather than measured filesystem space released.
 
 Use the shared `view-tunnel.sh` for read-only production browser checks. Run shared icon, authentication-boundary, and cookie-renewal checks when changing proxy rules. Test uploads, merges, and recovery only in isolated libraries; production acceptance does not add synthetic photos.
-
-NAS full backup and recovery are exclusively agent-operated. Use server-operations [Agent backup and recovery](https://github.com/Crashmere/agent-config/blob/main/skills/server-operations/references/backup-recovery.md), available at `/opt/server-context/references/backup-recovery.md`; Portal has no backup/recovery entry point. Native compatibility commands and their historical archives remain preserved.
