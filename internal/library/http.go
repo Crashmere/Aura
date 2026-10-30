@@ -3,7 +3,9 @@ package library
 import (
 	"archive/zip"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -54,6 +56,9 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	})
 	r.Get("/api/info", l.info)
 	r.Get("/api/assets", l.list)
+	r.Patch("/api/assets", l.batchUpdateAssets)
+	r.Post("/api/assets/purge", l.purgeAssets)
+	r.Get("/api/deletions/{id}", l.getDeletion)
 	r.Get("/api/timeline", l.timeline)
 	r.Get("/api/albums", l.listAlbums)
 	r.Post("/api/albums", l.createAlbum)
@@ -128,14 +133,16 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	})
 }
 func (l *Library) info(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"name": "Aura", "version": "0.2.0", "chunkSize": chunkSize,
-		"capabilities": map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "timeline": true}}
+	out := map[string]any{"name": "Aura", "version": "0.3.0", "chunkSize": chunkSize,
+		"capabilities": map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "timeline": true, "permanentDelete": true}}
 	counts := map[string]string{
 		"total": "SELECT count(*) FROM assets WHERE trashed_at=''", "favorites": "SELECT count(*) FROM assets WHERE favorite=1 AND trashed_at=''",
 		"live": "SELECT count(*) FROM assets WHERE kind='live' AND trashed_at=''", "videos": "SELECT count(*) FROM assets WHERE kind='video' AND trashed_at=''",
 		"trash": "SELECT count(*) FROM assets WHERE trashed_at!=''", "originals": "SELECT count(*) FROM files", "bytes": "SELECT COALESCE(sum(size),0) FROM files",
 		"queued": "SELECT count(*) FROM files WHERE status IN ('queued','processing')", "errors": "SELECT count(*) FROM files WHERE status='error'",
-		"grouped": "SELECT count(*) FROM assets a WHERE (SELECT count(*) FROM files f WHERE f.asset_id=a.id AND f.mime LIKE 'image/%')>1",
+		"grouped": "SELECT count(*) FROM assets a WHERE a.trashed_at='' AND (SELECT count(*) FROM files f WHERE f.asset_id=a.id AND f.mime LIKE 'image/%')>1",
+		"pendingDeletions": `SELECT count(DISTINCT p.value) FROM decisions d,json_each(d.detail,'$.ids') p WHERE d.action='purge-request'
+ AND NOT EXISTS(SELECT 1 FROM decisions c WHERE c.action='purge-complete' AND json_extract(c.detail,'$.requestId')=d.id)`,
 	}
 	for k, q := range counts {
 		var n int64
@@ -221,16 +228,24 @@ func (l *Library) updateAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if _, e := l.Asset(id); e != nil {
-		fail(w, 404, "照片不存在")
-		return
-	}
 	tx, e := l.DB.Begin()
 	if e != nil {
 		fail(w, 500, e)
 		return
 	}
 	defer tx.Rollback()
+	var exists bool
+	if e = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?)", id).Scan(&exists); e != nil {
+		fail(w, 500, e)
+		return
+	}
+	if !exists {
+		fail(w, 404, "照片不存在")
+		return
+	}
+	if !allowAssetMutation(w, tx, id) {
+		return
+	}
 	if p.Favorite != nil {
 		_, e = tx.Exec("UPDATE assets SET favorite=? WHERE id=?", *p.Favorite, id)
 	}
@@ -268,6 +283,68 @@ func (l *Library) updateAsset(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, a)
 }
+
+func (l *Library) batchUpdateAssets(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		IDs   []string `json:"ids"`
+		Trash *bool    `json:"trash"`
+	}
+	if !decode(w, r, &p) {
+		return
+	}
+	if len(p.IDs) == 0 || len(p.IDs) > 1000 || p.Trash == nil {
+		fail(w, 400, "每次请选择 1-1000 张照片并指定删除状态")
+		return
+	}
+	ids := []string{}
+	seen := map[string]bool{}
+	for _, id := range p.IDs {
+		if !validID.MatchString(id) {
+			fail(w, 400, "照片标识无效")
+			return
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	tx, e := l.DB.Begin()
+	if e != nil {
+		fail(w, 500, e)
+		return
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		var exists bool
+		if e = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?)", id).Scan(&exists); e != nil {
+			fail(w, 500, e)
+			return
+		}
+		if !exists {
+			fail(w, 404, "部分照片不存在，请刷新后重试")
+			return
+		}
+		if !allowAssetMutation(w, tx, id) {
+			return
+		}
+	}
+	trashed := ""
+	if *p.Trash {
+		trashed = now()
+	}
+	for _, id := range ids {
+		if _, e = tx.Exec("UPDATE assets SET trashed_at=? WHERE id=?", trashed, id); e != nil {
+			fail(w, 500, e)
+			return
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		fail(w, 500, e)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"updated": ids})
+}
+
 func (l *Library) merge(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var p struct {
@@ -302,6 +379,19 @@ func (l *Library) merge(w http.ResponseWriter, r *http.Request) {
 		e = tx.Commit()
 	}
 	if e != nil {
+		var pending *pendingDeletion
+		if errors.As(e, &pending) {
+			assetDeletionFailure(w, pending.request)
+			return
+		}
+		if errors.Is(e, errTrashStateConflict) {
+			writeJSON(w, 409, map[string]string{"error": e.Error(), "code": "trash_state_conflict"})
+			return
+		}
+		if errors.Is(e, sql.ErrNoRows) {
+			fail(w, 404, "照片不存在")
+			return
+		}
 		fail(w, 500, e)
 		return
 	}
@@ -315,29 +405,45 @@ func (l *Library) split(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p) {
 		return
 	}
-	files, e := l.Files(id)
-	if e != nil || len(files) < 2 {
-		fail(w, 400, "没有可分离的版本")
-		return
-	}
-	var f File
-	for _, v := range files {
-		if v.Hash == p.Hash {
-			f = v
-		}
-	}
-	if f.Hash == "" {
-		fail(w, 404, "版本不存在")
-		return
-	}
 	tx, e := l.DB.Begin()
 	if e != nil {
 		fail(w, 500, e)
 		return
 	}
 	defer tx.Rollback()
+	var trashed string
+	var favorite bool
+	if e = tx.QueryRow("SELECT trashed_at,favorite FROM assets WHERE id=?", id).Scan(&trashed, &favorite); e != nil {
+		if e == sql.ErrNoRows {
+			fail(w, 404, "照片不存在")
+		} else {
+			fail(w, 500, e)
+		}
+		return
+	}
+	if !allowAssetMutation(w, tx, id) {
+		return
+	}
+	var count int
+	if e = tx.QueryRow("SELECT count(*) FROM files WHERE asset_id=?", id).Scan(&count); e != nil {
+		fail(w, 500, e)
+		return
+	}
+	if count < 2 {
+		fail(w, 400, "没有可分离的版本")
+		return
+	}
+	f, e := scanFile(tx.QueryRow("SELECT "+fileColumns+" FROM files WHERE hash=? AND asset_id=?", p.Hash, id))
+	if e != nil {
+		if e == sql.ErrNoRows {
+			fail(w, 404, "版本不存在")
+		} else {
+			fail(w, 500, e)
+		}
+		return
+	}
 	newID := ID()
-	_, e = tx.Exec("INSERT INTO assets(id,captured_at,created_at) VALUES(?,?,?)", newID, f.CapturedAt, now())
+	_, e = tx.Exec("INSERT INTO assets(id,captured_at,favorite,trashed_at,created_at) VALUES(?,?,?,?,?)", newID, f.CapturedAt, favorite, trashed, now())
 	if e == nil {
 		_, e = tx.Exec("UPDATE files SET asset_id=? WHERE hash=?", newID, f.Hash)
 	}
@@ -394,7 +500,17 @@ func (l *Library) jobs(w http.ResponseWriter, r *http.Request) {
 }
 func (l *Library) retry(w http.ResponseWriter, r *http.Request) {
 	h := chi.URLParam(r, "hash")
-	res, e := l.DB.Exec("UPDATE files SET status='queued',error='' WHERE hash=? AND status IN ('ready','error')", h)
+	tx, e := l.DB.Begin()
+	if e != nil {
+		fail(w, 500, e)
+		return
+	}
+	defer tx.Rollback()
+	if e = originalDeletion(tx, h, ""); e != nil {
+		originalFailure(w, e)
+		return
+	}
+	res, e := tx.Exec("UPDATE files SET status='queued',error='' WHERE hash=? AND status IN ('ready','error')", h)
 	if e != nil {
 		fail(w, 500, e)
 		return
@@ -404,6 +520,10 @@ func (l *Library) retry(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "资源正在处理或不存在")
 		return
 	}
+	if e = tx.Commit(); e != nil {
+		fail(w, 500, e)
+		return
+	}
 	l.Notify()
 	writeJSON(w, 202, map[string]string{"status": "queued"})
 }
@@ -411,6 +531,10 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 	hash, kind := chi.URLParam(r, "hash"), chi.URLParam(r, "kind")
 	if !validHash.MatchString(hash) {
 		http.NotFound(w, r)
+		return
+	}
+	if e := originalDeletion(l.DB, hash, ""); e != nil {
+		originalFailure(w, e)
 		return
 	}
 	f, e := l.File(hash)
@@ -438,15 +562,37 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, e = os.Stat(path); e != nil {
+		if e = originalDeletion(l.DB, hash, ""); e != nil {
+			originalFailure(w, e)
+			return
+		}
 		if kind == "original" {
 			writeJSON(w, 503, map[string]string{"error": "原件暂不可读，请检查存储或重新选择源文件修复", "code": "original_missing"})
 			return
 		}
 		if kind != "original" && f.Status == "ready" {
-			_, _ = l.DB.Exec("UPDATE files SET status='queued' WHERE hash=? AND status='ready'", hash)
+			tx, err := l.DB.Begin()
+			if err == nil {
+				err = originalDeletion(tx, hash, "")
+				if err == nil {
+					_, err = tx.Exec("UPDATE files SET status='queued' WHERE hash=? AND status='ready'", hash)
+				}
+				if err == nil {
+					err = tx.Commit()
+				}
+				tx.Rollback()
+			}
+			if err != nil {
+				originalFailure(w, err)
+				return
+			}
 			l.Notify()
 		}
 		fail(w, 404, "预览尚未就绪，原件已保存")
+		return
+	}
+	if e = originalDeletion(l.DB, hash, ""); e != nil {
+		originalFailure(w, e)
 		return
 	}
 	w.Header().Set("Cache-Control", "private, max-age=86400")
@@ -454,7 +600,19 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 func (l *Library) download(w http.ResponseWriter, r *http.Request) {
-	a, e := l.Asset(chi.URLParam(r, "id"))
+	id := chi.URLParam(r, "id")
+	var deletedHash string
+	e := l.DB.QueryRow(`SELECT json_extract(d.detail,'$.hashes[0]') FROM decisions d,json_each(d.detail,'$.ids') a
+ WHERE d.action='purge-request' AND a.value=? LIMIT 1`, id).Scan(&deletedHash)
+	if e == nil {
+		originalFailure(w, &deletedOriginal{Scope: "hash", Hash: deletedHash})
+		return
+	}
+	if e != sql.ErrNoRows {
+		fail(w, 500, e)
+		return
+	}
+	a, e := l.Asset(id)
 	if e != nil {
 		fail(w, 404, "照片不存在")
 		return
@@ -465,6 +623,10 @@ func (l *Library) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, f := range files {
+		if e = originalDeletion(l.DB, f.Hash, ""); e != nil {
+			originalFailure(w, e)
+			return
+		}
 		if _, e = os.Stat(l.Object(f.Hash)); e != nil {
 			fail(w, 500, "原件暂不可读")
 			return
@@ -484,6 +646,9 @@ func (l *Library) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i, f := range files {
+		if e = originalDeletion(l.DB, f.Hash, ""); e != nil {
+			return
+		}
 		hdr := &zip.FileHeader{Name: fmt.Sprintf("originals/%02d-%s", i+1, f.Name), Method: zip.Store}
 		hdr.SetMode(0600)
 		dst, e := zw.CreateHeader(hdr)

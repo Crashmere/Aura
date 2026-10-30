@@ -6,6 +6,7 @@ export type Asset = {
   kind: string;
   favorite: boolean;
   trashedAt?: string;
+  deletionPending?: boolean;
   name: string;
   width: number;
   height: number;
@@ -53,6 +54,20 @@ export type Info = {
   queued: number;
   errors: number;
   grouped: number;
+  pendingDeletions?: number;
+  capabilities?: { permanentDelete?: boolean };
+};
+export type PurgeResponse = {
+  requestId: string;
+  state: "pending" | "complete";
+  accepted: string[];
+};
+export type DeletionOperation = {
+  id: string;
+  state: "pending" | "complete";
+  ids: string[];
+  bytes: number;
+  error?: string;
 };
 export type Page<T> = { items: T[]; next: string };
 export type JobStatus = "all" | "queued" | "processing" | "error" | "ready";
@@ -81,6 +96,20 @@ export type PendingUpload = {
 export type SimilarPair = { left: string; right: string; distance: number };
 export type Timeline = { months: { month: string; count: number }[] };
 export const base = "/aura/";
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly requestId?: string;
+  constructor(message: string, status: number, detail?: Record<string, unknown>) {
+    super(message);
+    this.status = status;
+    this.code = typeof detail?.code === "string" ? detail.code : undefined;
+    this.requestId = typeof detail?.requestId === "string" ? detail.requestId : undefined;
+  }
+}
+export function isOriginalDeleted(error: unknown) {
+  return error instanceof ApiError && error.status === 410 && error.code === "original_deleted";
+}
 export async function api<T>(
   path: string,
   body?: unknown,
@@ -93,11 +122,11 @@ export async function api<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (r.status === 401) {
-    throw new Error("设备授权已失效，请返回门户重新登录");
+    throw new ApiError("设备授权已失效，请返回门户重新登录", r.status);
   }
   if (!r.ok) {
     const v = await r.json().catch(() => null);
-    throw new Error(v?.error || `请求失败 (${r.status})`);
+    throw new ApiError(v?.error || `请求失败 (${r.status})`, r.status, v || undefined);
   }
   return r.json();
 }

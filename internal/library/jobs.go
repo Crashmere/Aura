@@ -123,6 +123,10 @@ func (l *Library) retryErrors(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	for _, hash := range hashes {
+		if e = originalDeletion(tx, hash, ""); e != nil {
+			originalFailure(w, e)
+			return
+		}
 		var status string
 		e = tx.QueryRow("SELECT status FROM files WHERE hash=?", hash).Scan(&status)
 		if e == sql.ErrNoRows {

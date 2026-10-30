@@ -2,7 +2,8 @@
 
 Aura is a personal photo library at `/aura/`, protected by ServerPortal device authentication. Its application target is `nas`; `vps` provides public HTTPS port 8443 and temporary `ali` forwarding reaches the same instance. Read `docs/README.md`, then relevant architecture/operations docs. Use server-operations, read each target's remote `/opt/AGENTS.md`, and consult current-state for activation before deployment.
 
-- Preserve uploaded bytes. Originals are immutable, SHA-256 addressed objects. Metadata, previews, and playback derivatives are separate.
+- Preserve uploaded bytes. Originals are immutable, SHA-256 addressed objects; only an explicit, confirmed permanent deletion of selected trash items may remove their live objects. Metadata, previews, and playback derivatives are separate.
+- Permanent deletion must persist the exact cleanup intent before unlinking, finish or retry after interruption, and retain minimal hash/source deletion guards. Never include retained split items, unrelated originals, system Photos, or existing backups. Keep normal removal reversible and require secondary confirmation for permanent deletion.
 - Exact byte or canonical pixel matches may be grouped automatically. Perceptual similarity only proposes review; it must never delete or merge originals automatically.
 - A Live Photo is one library item containing its still image and paired motion resources. Use Apple content identifiers or explicit native resource grouping, never a global filename match.
 - Keep upload and processing state durable. Acknowledged chunks must be flushed; final commits verify the complete server-side SHA-256.

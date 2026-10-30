@@ -5,6 +5,7 @@ import {
   Layers3,
   Video,
   RefreshCw,
+  LoaderCircle,
 } from "lucide-react";
 import { Asset, media } from "./api";
 import { LivePhotoIcon } from "./live-photo-icon";
@@ -14,11 +15,13 @@ export function Photo({
   onClick,
   selected = false,
   select,
+  disabled = false,
 }: {
   asset: Asset;
   onClick: () => void;
   selected?: boolean;
   select?: () => void;
+  disabled?: boolean;
 }) {
   const [broken, setBroken] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -31,7 +34,7 @@ export function Photo({
   }, [broken]);
   return (
     <div className={`photo ${selected ? "selected" : ""}`}>
-      <button className="photo-open" onClick={onClick} aria-label={asset.name}>
+      <button className="photo-open" disabled={disabled} onClick={onClick} aria-label={asset.name}>
         {!broken ? (
           <img
             src={media(asset.primary) + (attempt ? `?retry=${attempt}` : "")}
@@ -60,12 +63,13 @@ export function Photo({
             <Video size={14} />
           </span>
         )}
-        {asset.variants > 1 && asset.kind !== "live" && (
+        {asset.variants > 1 && asset.kind !== "live" && !asset.deletionPending && (
           <span className="photo-versions">
             <Layers3 size={13} />
             {asset.variants}
           </span>
         )}
+        {asset.deletionPending && <span className="photo-deletion-pending"><LoaderCircle className="spin" size={13} />清理中</span>}
       </button>
       {broken && (
         <button
@@ -83,6 +87,7 @@ export function Photo({
           className={`select-photo ${selected ? "checked" : ""}`}
           aria-label={selected ? "取消选择" : "选择照片"}
           aria-pressed={selected}
+          disabled={disabled || !!asset.deletionPending}
           onClick={select}
         >
           {selected && <Check size={15} />}

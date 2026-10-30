@@ -1,6 +1,6 @@
 # Architecture
 
-Aura stores original bytes once and maintains a separate, reversible library view. Upload completion is independent of preview generation, so accepted originals survive processing failures and can be downloaded while derivatives are repaired.
+Aura stores original bytes without rewriting them and maintains grouping and visibility separately. Normal removal and regrouping are reversible; confirmed permanent deletion removes selected trash items' live originals through durable cleanup. Upload completion is independent of preview generation, so accepted originals survive processing failures and remain downloadable while derivatives are repaired.
 
 ## Technology selection
 
@@ -28,7 +28,7 @@ Browser files / PhotoKit original resources
   -> capture-date timeline, original versions, metadata and downloads
 ```
 
-`assets/<first-two-hash-characters>/<sha256>` holds immutable originals. `aura.sqlite` stores files, logical assets, uploads, source observations, grouping keys, and user decisions. The existing decision log also retains manual primary choices, similar-pair dismissals, and native album source mappings; these features require no new schema tables or columns. `derived/` contains disposable JPEG/MP4 previews. `incoming/` holds incomplete byte streams; `work/` holds short-lived decoding material. All paths are relative to the configurable data root.
+`assets/<first-two-hash-characters>/<sha256>` holds immutable originals until their confirmed permanent deletion. `aura.sqlite` stores files, logical assets, uploads, source observations, grouping keys, and user decisions. The existing decision log also retains manual primary choices, similar-pair dismissals, native album source mappings, and permanent-deletion intents and guards; these features require no new schema tables or columns. `derived/` contains disposable JPEG/MP4 previews. `incoming/` holds incomplete byte streams; `work/` holds short-lived decoding material. All paths are relative to the configurable data root.
 
 The upload API identifies a byte stream by SHA-256. Chunk writes require the expected offset and flush before acknowledgment. Stale offsets return the actual offset. Completion recomputes the entire hash, verifies the expected byte count, publishes the original without replacing an existing object, and commits the file plus queue state transactionally. A retry recognizes an object published before a process interruption. Files with invalid checksums are never published. Per-original upload locks keep a slow client from blocking unrelated uploads; chunk body reads have a bounded deadline.
 
@@ -45,9 +45,21 @@ The current worker processes one original at a time. Image decoding is materiali
 
 The primary image is selected deterministically by resolution, metadata completeness, GPS/date availability, and native-original preference until the user chooses a version explicitly. That choice is retained in the decision log and respected by reprocessing and grouping while the chosen resource belongs to the resulting item. A video becomes the motion resource of an image group. Metadata from all retained versions remains available; the detail response provides a combined view with the higher-ranked version winning duplicate keys. The original file is never rewritten to synthesize metadata.
 
-All byte-distinct versions remain downloadable. A user can select another primary, split a resource, or restore an item from recently deleted. Recently deleted is a reversible visibility state and has no automatic purge. A manual split removes the group's automatic keys; a later import can discover exact relationships again. Source observations and merge/split decisions are retained for diagnosis.
+All retained byte-distinct versions remain downloadable. A user can select another primary, split a resource, or restore an item from recently deleted. A split preserves the source item's trash state and album memberships; processing retries respect explicit grouping decisions. A later import can discover compatible exact relationships again. Source observations and merge/split decisions are retained for diagnosis.
+
+Automatic grouping does not merge existing active and trashed groups or transfer their visibility by overwriting a conflicting group key. A newly arriving native resource can join its existing source's trash group without restoring it. Manual merge across active/trash states returns a conflict; the user must first make their visibility consistent. Processing reads current group identity at publication rather than restoring a cached identity after a concurrent merge or split.
 
 Uploading an original whose item is in recently deleted does not restore it automatically. The upload response identifies that state so the web interface can offer an explicit restore action or open the existing item.
+
+## Deletion
+
+Normal removal updates the logical item's trash timestamp and preserves every original and membership. Restore reverses that visibility change. Batch removal and restore validate all selected IDs in one transaction; a failed batch does not partially update the catalog. List, album, month, and library counts refresh together after mutations, including uncertain request failures. Recently deleted has no automatic expiry or purge.
+
+Permanent deletion is available only for explicitly selected trash items and requires a second confirmation. The server first commits a cleanup request in the decision log. That request identifies the selected logical items, exact original hashes, eligible source guards, and planned original bytes. It immediately blocks restore, grouping changes, uploads, processing, and media access for the affected resources. The worker then cancels and drains targeted processing, removes their original objects, derivatives, matching incoming chunks and proven work links, flushes affected directories, and removes catalog rows and memberships before recording completion. The intent survives failure or restart, so partial cleanup remains pending and can resume rather than being reported as complete. Upload and processing locks coordinate on each original hash; no SQLite transaction waits while acquiring those locks.
+
+Completed requests retain minimal hash/source guards to prevent continuous import from recreating deliberately removed items. A source-wide guard is recorded only when no retained file or upload outside the selection still uses that source; shared sources from explicit splits are not grounds to remove or exclude the retained items. Resources already covered by another confirmed cleanup request do not count as retained, but their IDs, hashes, and bytes remain owned by that request. A scoped source rejection must not become a hash rejection for the same bytes retained under another source. These guards, pending requests, and cleanup results use existing decision records rather than a separate schema or external queue.
+
+Permanent deletion applies to the live Aura library, not system Photos, existing backup packages, browser caches, or downloads already in progress. It unlinks live files; it is not a secure-erase operation or a guarantee that the filesystem immediately releases the reported byte count. An older recovery point can contain the removed originals and older deletion history; production restoration remains an explicitly selected maintenance operation.
 
 ## Albums
 

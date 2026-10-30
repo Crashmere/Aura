@@ -13,7 +13,28 @@ struct TransferError: LocalizedError {
     let message: String
     var statusCode: Int? = nil
     var code: String? = nil
+    var deleted = false
+    var deletionScope: String? = nil
+    var hash: String? = nil
+    var sourceKey: String? = nil
     var errorDescription: String? { message }
+
+    func deletion(for expectedHash: String, source expectedSource: String? = nil) -> DeletionNotice? {
+        guard statusCode == 410, code == "original_deleted", deleted, hash == expectedHash,
+              let scope = DeletionScope(rawValue: deletionScope ?? "") else { return nil }
+        if scope == .source {
+            guard let sourceKey, !sourceKey.isEmpty, sourceKey == expectedSource else { return nil }
+        }
+        return DeletionNotice(scope: scope, hash: expectedHash, sourceKey: scope == .source ? sourceKey : nil)
+    }
+}
+
+enum DeletionScope: String { case hash, source }
+
+struct DeletionNotice {
+    let scope: DeletionScope
+    let hash: String
+    var sourceKey: String?
 }
 
 enum ImportStage: String, Codable {
@@ -45,6 +66,9 @@ struct Receipt: Codable {
     var present: Bool?
     var verifiedAt: String?
     var invalidated: Bool?
+    var deleted: Bool?
+    var deletedScope: String?
+    var sourceKey: String?
 
     var sourceAsset: String? {
         // Legacy receipts carry the PhotoKit asset ID inside the composite key.
@@ -65,12 +89,15 @@ struct ClientState: Codable {
     var verificationStatus: String
     var albumSignatures: [String: String]
     var blockedAlbums: [String]
+    var excluded: Int?
+    var deletedSources: [String]?
 }
 
 struct AssetSummary {
     var keys: [String]
     var complete: Bool
     var processing: Bool
+    var excluded: Bool
 }
 
 @MainActor
@@ -93,6 +120,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     @Published var matched = 0
     @Published var completedAssets = 0
     @Published var processingAssets = 0
+    @Published var excludedAssets = 0
     @Published var uploaded = 0
     @Published var duplicates = 0
     @Published var errors: [ImportIssue] = []
@@ -139,6 +167,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private var albumsDirty = true
     private var albumSignatures: [String: String] = [:]
     private var blockedAlbums = Set<String>()
+    private var deletedSources = Set<String>()
     private var processingCursor = 0
     private var lastStateWrite = Date.distantPast
     private var activeExport: ResourceExport?
@@ -154,9 +183,9 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private var receiptURL: URL { cache.appendingPathComponent("receipts.jsonl") }
     private var stateURL: URL { cache.appendingPathComponent("client-state.json") }
     private var clock: String { ISO8601DateFormatter().string(from: Date()) }
-    var remainingAssets: Int { max(0, matched - completedAssets) }
+    var remainingAssets: Int { max(0, matched - completedAssets - excludedAssets) }
     var summaryIsCurrent: Bool { fetchedAssets != nil }
-    var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0" }
+    var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.0" }
     var uploadPauseReason: String? {
         if !networkKnown { return "正在检查网络" }
         if !networkAvailable { return "等待网络连接" }
@@ -409,11 +438,17 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             pendingAssetIDs.remove(asset.localIdentifier)
             let resources = PHAssetResource.assetResources(for: asset)
             let keys = resources.map { receiptKey(asset: asset, resource: $0) }
+            let source = nativeSourceKey(asset.localIdentifier)
+            if sourceDeleted(source) {
+                updateSummary(assetID: asset.localIdentifier, keys: keys)
+                continue
+            }
             for resource in resources {
                 guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
                 let key = receiptKey(asset: asset, resource: resource)
                 if receipts[key] != nil { continue }
                 var stage = ImportStage.export
+                var currentHash: String?
                 do {
                     current = resource.originalFilename
                     status = "读取原件 · \(index + 1) / \(assets.count)"
@@ -425,31 +460,52 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                     status = "校验原件"
                     let checksumTask = Task.detached { try Self.checksum(file) }
                     let checksum = try await withTaskCancellationHandler(operation: { try await checksumTask.value }, onCancel: { checksumTask.cancel() })
+                    currentHash = checksum
                     guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
                     let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
                     var hints: [String: Any] = ["hash": checksum, "name": resource.originalFilename, "size": size,
-                        "sourceKey": "photokit:\(sourceID):\(asset.localIdentifier)", "resourceType": Self.resourceName(resource.type), "favorite": asset.isFavorite]
+                        "sourceKey": source, "resourceType": Self.resourceName(resource.type), "favorite": asset.isFavorite]
                     if let date = asset.creationDate { hints["capturedAt"] = ISO8601DateFormatter().string(from: date) }
                     if let date = asset.modificationDate { hints["modifiedAt"] = ISO8601DateFormatter().string(from: date) }
                     if let location = asset.location { hints["latitude"] = location.coordinate.latitude; hints["longitude"] = location.coordinate.longitude }
                     stage = .upload
-                    let (duplicate, result) = try await transfer(file: file, hints: hints)
-                    if duplicate { duplicates += 1 } else { uploaded += 1 }
-                    let row = Receipt(key: key, hash: checksum, localAssetID: asset.localIdentifier,
-                        serverAssetID: result["assetId"] as? String, status: result["status"] as? String ?? "queued",
-                        trashed: result["trashed"] as? Bool, present: true)
-                    try remember(row)
-                    removeIssues(resourceKey: key)
-                    removeIssues(resourceKey: "missing:" + checksum)
-                    if row.status == "error" {
-                        recordIssue(key: key, assetID: asset.localIdentifier, name: resource.originalFilename, stage: .processing,
-                            error: TransferError(message: result["error"] as? String ?? "原件已保存，但服务器处理失败，请在照片库中重试处理"))
+                    switch try await transfer(file: file, hints: hints) {
+                    case let .accepted(duplicate, result):
+                        let row = Receipt(key: key, hash: checksum, localAssetID: asset.localIdentifier,
+                            serverAssetID: result["assetId"] as? String, status: result["status"] as? String ?? "queued",
+                            trashed: false, present: true, sourceKey: source)
+                        try remember(row)
+                        if duplicate { duplicates += 1 } else { uploaded += 1 }
+                        removeIssues(resourceKey: key)
+                        removeIssues(resourceKey: "missing:" + checksum)
+                        if row.status == "error" {
+                            recordIssue(key: key, assetID: asset.localIdentifier, name: resource.originalFilename, stage: .processing,
+                                error: TransferError(message: result["error"] as? String ?? "原件已保存，但服务器处理失败，请在照片库中重试处理"))
+                        }
+                    case let .trash(result):
+                        try remember(Receipt(key: key, hash: checksum, localAssetID: asset.localIdentifier,
+                            serverAssetID: result["assetId"] as? String, status: result["status"] as? String,
+                            trashed: true, present: result["present"] as? Bool == true, sourceKey: source))
+                        removeIssues(resourceKey: key)
+                        removeIssues(resourceKey: "missing:" + checksum)
+                    case let .deleted(notice):
+                        try recordDeletion(notice, key: key, assetID: asset.localIdentifier, source: source)
                     }
                 } catch {
+                    if let hash = currentHash, let notice = (error as? TransferError)?.deletion(for: hash, source: source) {
+                        do { try recordDeletion(notice, key: key, assetID: asset.localIdentifier, source: source) }
+                        catch {
+                            pendingAssetIDs.insert(asset.localIdentifier)
+                            recordIssue(key: key, assetID: asset.localIdentifier, name: resource.originalFilename, stage: .settings, error: error)
+                        }
+                        if sourceDeleted(source) { break }
+                        continue
+                    }
                     pendingAssetIDs.insert(asset.localIdentifier)
                     if Task.isCancelled || !running || uploadPauseReason != nil { break }
                     recordIssue(key: key, assetID: asset.localIdentifier, name: resource.originalFilename, stage: stage, error: error)
                 }
+                if sourceDeleted(source) { break }
             }
             updateSummary(assetID: asset.localIdentifier, keys: keys)
             saveState()
@@ -474,20 +530,39 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private func receiptKey(asset: PHAsset, resource: PHAssetResource) -> String {
         "\(origin!.absoluteString)|\(asset.localIdentifier)|\(asset.modificationDate?.timeIntervalSince1970 ?? 0)|\(resource.type.rawValue)|\(resource.originalFilename)"
     }
+    private func nativeSourceKey(_ assetID: String) -> String { "photokit:\(sourceID):\(assetID)" }
+    private func sourceDeleted(_ source: String) -> Bool { deletedSources.contains((origin?.absoluteString ?? "") + "|" + source) }
+    private func knownDeletedHash(_ hash: String) -> Bool {
+        let prefix = (origin?.absoluteString ?? "") + "|"
+        return receiptKeysByHash[hash, default: []].contains { key in
+            key.hasPrefix(prefix) && receipts[key]?.deleted == true && receipts[key]?.deletedScope != "source"
+        }
+    }
+    private func knownTrashHash(_ hash: String) -> Bool {
+        let prefix = (origin?.absoluteString ?? "") + "|"
+        return receiptKeysByHash[hash, default: []].contains { $0.hasPrefix(prefix) && receipts[$0]?.trashed == true }
+    }
     private func recountSummaries() {
         matched = activeAssetIDs.count
         completedAssets = summaries.filter { activeAssetIDs.contains($0.key) && $0.value.complete }.count
         processingAssets = summaries.filter { activeAssetIDs.contains($0.key) && $0.value.processing }.count
+        excludedAssets = summaries.filter { activeAssetIDs.contains($0.key) && $0.value.excluded }.count
     }
     private func updateSummary(assetID: String, keys: [String]) {
-        let rows = keys.compactMap { receipts[$0] }
-        let value = AssetSummary(keys: keys, complete: !keys.isEmpty && rows.count == keys.count && rows.allSatisfy { $0.present != false },
-            processing: rows.contains { $0.status == "queued" || $0.status == "processing" || $0.serverAssetID?.isEmpty != false })
+        let eligible = keys.filter { receipts[$0]?.deleted != true && receipts[$0]?.trashed != true }
+        let rows = eligible.compactMap { receipts[$0] }
+        let excluded = sourceDeleted(nativeSourceKey(assetID)) || (!keys.isEmpty && eligible.isEmpty)
+        let value = AssetSummary(keys: keys,
+            complete: !excluded && !eligible.isEmpty && rows.count == eligible.count && rows.allSatisfy { $0.present != false },
+            processing: !excluded && rows.contains { $0.status == "queued" || $0.status == "processing" || $0.serverAssetID?.isEmpty != false },
+            excluded: excluded)
         if activeAssetIDs.contains(assetID) {
             if summaries[assetID]?.complete == true { completedAssets -= 1 }
             if summaries[assetID]?.processing == true { processingAssets -= 1 }
+            if summaries[assetID]?.excluded == true { excludedAssets -= 1 }
             if value.complete { completedAssets += 1 }
             if value.processing { processingAssets += 1 }
+            if value.excluded { excludedAssets += 1 }
         }
         summaries[assetID] = value
     }
@@ -503,11 +578,24 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             try await writer.write(resource: resource, options: options)
         }, onCancel: { writer.cancel() })
     }
-    private func transfer(file: URL, hints: [String: Any]) async throws -> (Bool, [String: Any]) {
+    private enum TransferOutcome {
+        case accepted(Bool, [String: Any])
+        case trash([String: Any])
+        case deleted(DeletionNotice)
+    }
+    private func transfer(file: URL, hints: [String: Any]) async throws -> TransferOutcome {
         guard running && !Task.isCancelled && uploadPauseReason == nil else { throw CancellationError() }
         let hash = hints["hash"] as! String, size = hints["size"] as! Int
+        if knownDeletedHash(hash) { return .deleted(DeletionNotice(scope: .hash, hash: hash)) }
+        if knownTrashHash(hash) {
+            let row = try await presence(hash)
+            let result = try applyServerState(hash: hash, row: row, checked: false, repairMissing: true)
+            if result == .deleted { return .deleted(DeletionNotice(scope: .hash, hash: hash)) }
+            if result == .trash { return .trash(row) }
+        }
         let prepared = try await json("uploads", body: hints)
-        if prepared["complete"] as? Bool == true { return (true, prepared) }
+        if prepared["trashed"] as? Bool == true { return .trash(prepared) }
+        if prepared["complete"] as? Bool == true { return .accepted(true, prepared) }
         var offset = prepared["offset"] as? Int ?? 0
         let chunkSize = prepared["chunkSize"] as? Int ?? 8 * 1024 * 1024
         let input = try FileHandle(forReadingFrom: file)
@@ -532,10 +620,11 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                 let (data, response) = try await BackgroundTransfer.shared.upload(request, file: chunk, wifiOnly: wifiOnly)
                 let row = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
                 if response.statusCode == 409, let received = row["offset"] as? Int { offset = received; continue }
-                guard (200..<300).contains(response.statusCode), let received = row["offset"] as? Int else { throw TransferError(message: row["error"] as? String ?? "上传失败 (\(response.statusCode))") }
+                guard (200..<300).contains(response.statusCode), let received = row["offset"] as? Int else { throw Self.responseError(row, status: response.statusCode) }
                 offset = received; failures = 0
                 progress = 0.1 + 0.9 * Double(offset) / Double(size)
             } catch {
+                if (error as? TransferError)?.deletion(for: hash, source: hints["sourceKey"] as? String) != nil { throw error }
                 if Task.isCancelled || !running || uploadPauseReason != nil { throw error }
                 failures += 1
                 if failures > 3 { throw error }
@@ -545,7 +634,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             }
         }
         let result = try await json("uploads/" + hash + "/complete", body: [:])
-        return (false, result)
+        return result["trashed"] as? Bool == true ? .trash(result) : .accepted(false, result)
     }
     func json(_ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
         guard let origin else { throw TransferError(message: "服务器地址无效") }
@@ -557,10 +646,14 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         let row = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode), !row.isEmpty else {
             if (response as? HTTPURLResponse)?.statusCode == 401 { connected = false; running = false }
-            throw TransferError(message: row["error"] as? String ?? "服务器响应无效，请检查网络或重新完成门户授权",
-                statusCode: (response as? HTTPURLResponse)?.statusCode, code: row["code"] as? String)
+            throw Self.responseError(row, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
         }
         return row
+    }
+    nonisolated private static func responseError(_ row: [String: Any], status: Int) -> TransferError {
+        TransferError(message: row["error"] as? String ?? "服务器响应无效 (\(status))，请检查网络或重新完成门户授权",
+            statusCode: status, code: row["code"] as? String, deleted: row["deleted"] as? Bool == true,
+            deletionScope: row["scope"] as? String, hash: row["hash"] as? String, sourceKey: row["sourceKey"] as? String)
     }
     nonisolated static func checksum(_ file: URL) throws -> String {
         let input = try FileHandle(forReadingFrom: file); defer { try? input.close() }
@@ -609,14 +702,56 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         try file.synchronize()
         receiptsDirty = false
     }
+    private func recordDeletion(_ notice: DeletionNotice, key: String, assetID: String, source: String) throws {
+        let row = Receipt(key: key, hash: notice.hash, localAssetID: assetID, status: "deleted", present: false,
+            deleted: true, deletedScope: notice.scope.rawValue, sourceKey: source)
+        try remember(row)
+        if notice.scope == .source {
+            deletedSources.insert((origin?.absoluteString ?? "") + "|" + source)
+            pendingAssetIDs.remove(assetID)
+            errors.removeAll { $0.assetID == assetID }
+        } else { try markHashDeleted(notice.hash) }
+        saveState(force: true)
+    }
+    private func markHashDeleted(_ hash: String) throws {
+        let prefix = (origin?.absoluteString ?? "") + "|"
+        let keys = Array(receiptKeysByHash[hash, default: []].filter { $0.hasPrefix(prefix) })
+        for key in keys {
+            guard var row = receipts[key] else { continue }
+            // Keep source exclusions recoverable even after the last retained hash is deleted.
+            if row.deleted == true && row.deletedScope == "source" {
+                removeIssues(resourceKey: key)
+                continue
+            }
+            if row.deleted != true || row.deletedScope != "hash" || row.present != false {
+                row.deleted = true; row.deletedScope = "hash"; row.present = false; row.status = "deleted"
+                try remember(row)
+            }
+            removeIssues(resourceKey: key)
+        }
+        for prefix in ["missing:", "audit:", "status:"] { removeIssues(resourceKey: prefix + hash) }
+        for id in Set(keys.compactMap({ receipts[$0]?.sourceAsset })) {
+            if let summary = summaries[id] { updateSummary(assetID: id, keys: summary.keys) }
+        }
+    }
     private func loadState() {
+        defer {
+            // Source-scoped decisions also live in the flushed journal, not only the summary.
+            for row in receipts.values where row.deleted == true && row.deletedScope == "source" {
+                if let source = row.sourceKey, let origin = row.key.split(separator: "|", maxSplits: 1).first {
+                    deletedSources.insert(String(origin) + "|" + source)
+                }
+            }
+        }
         guard let data = try? Data(contentsOf: stateURL), let saved = try? JSONDecoder().decode(ClientState.self, from: data), saved.origin == origin?.absoluteString else {
             matched = 0; completedAssets = 0; processingAssets = 0; uploaded = 0; duplicates = 0
+            excludedAssets = 0; deletedSources = []
             errors = []; lastScan = ""; lastVerified = ""; verificationStatus = "尚未核对服务器原件"
             albumSignatures = [:]; blockedAlbums = []
             return
         }
         matched = saved.matched; completedAssets = saved.completed; processingAssets = saved.processing
+        excludedAssets = saved.excluded ?? 0; deletedSources = Set(saved.deletedSources ?? [])
         uploaded = saved.uploaded; duplicates = saved.duplicates; errors = saved.errors
         lastScan = saved.lastScan; lastVerified = saved.lastVerified
         verificationStatus = saved.verificationStatus.hasPrefix("正在核对") ? "上次核对未完成，已保留上传记录" : saved.verificationStatus
@@ -627,7 +762,8 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         guard force || Date().timeIntervalSince(lastStateWrite) >= 1 else { return }
         let saved = ClientState(origin: origin.absoluteString, matched: matched, completed: completedAssets, processing: processingAssets,
             uploaded: uploaded, duplicates: duplicates, errors: errors, lastScan: lastScan, lastVerified: lastVerified,
-            verificationStatus: verificationStatus, albumSignatures: albumSignatures, blockedAlbums: Array(blockedAlbums).sorted())
+            verificationStatus: verificationStatus, albumSignatures: albumSignatures, blockedAlbums: Array(blockedAlbums).sorted(),
+            excluded: excludedAssets, deletedSources: Array(deletedSources).sorted())
         do {
             try JSONEncoder().encode(saved).write(to: stateURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
@@ -670,18 +806,20 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         guard let origin else { return }
         await rebuildSummarySnapshot()
         let prefix = origin.absoluteString + "|"
-        let hashes = Set(receipts.values.filter { $0.key.hasPrefix(prefix) }.map(\.hash)).sorted()
-        var present = 0, missing = 0, retainedTrash = 0, checked = 0, unresolved = 0
+        let hashes = Set(receipts.values.filter { $0.key.hasPrefix(prefix) && $0.deletedScope != "source" }.map(\.hash)).sorted()
+        var present = 0, missing = 0, retainedTrash = 0, permanentlyDeleted = 0, checked = 0, unresolved = 0
         verificationProgress = 0
         verificationStatus = "正在核对服务器原件 · 0 / \(hashes.count)"
         saveState(force: true)
         defer {
             if Task.isCancelled { verificationStatus = "核对已停止：已确认 \(present) 个原件，剩余记录已保留" }
             else {
-                verificationStatus = "已确认 \(present) 个原件，缺失 \(missing) 个，回收站保留 \(retainedTrash) 个，未确认 \(unresolved + hashes.count - checked) 个"
+                verificationStatus = "已确认 \(present) 个原件，缺失 \(missing) 个，最近删除 \(retainedTrash) 个，永久删除 \(permanentlyDeleted) 个，未确认 \(unresolved + hashes.count - checked) 个"
                 if checked == hashes.count && unresolved == 0 { lastVerified = clock }
             }
             if missing > 0 && !running { verificationStatus += "；开始持续上传后补传可访问的缺失原件" }
+            let sources = deletedSources.filter { $0.hasPrefix(prefix) }.count
+            if sources > 0 { verificationStatus += "；已排除 \(sources) 个永久删除的来源" }
             try? compactReceipts()
             albumsDirty = true; albumSignatures = [:]
             saveState(force: true)
@@ -693,6 +831,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                 let result = try applyServerState(hash: hash, row: row, checked: true, repairMissing: true)
                 if result == .present { present += 1 }
                 else if result == .missing { missing += 1 }
+                else if result == .deleted { permanentlyDeleted += 1 }
                 else { retainedTrash += 1 }
                 removeIssues(resourceKey: "audit:" + hash, stage: .verification)
                 checked += 1
@@ -706,7 +845,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             verificationStatus = "正在核对服务器原件 · \(checked) / \(hashes.count)"
         }
     }
-    private enum PresenceResult { case present, missing, trash }
+    private enum PresenceResult { case present, missing, trash, deleted }
     private func rebuildSummarySnapshot() async {
         guard fetchedAssets == nil else { return }
         let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -727,17 +866,35 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private func presence(_ hash: String) async throws -> [String: Any] {
         do { return try await json("uploads/" + hash) }
         catch let error as TransferError where error.statusCode == 404 { return ["complete": false, "missing": true] }
+        catch let error as TransferError {
+            if let notice = error.deletion(for: hash), notice.scope == .hash {
+                return ["_confirmedDeletion": notice, "complete": false, "present": false, "missing": false]
+            }
+            throw error
+        }
     }
     private func applyServerState(hash: String, row: [String: Any], checked: Bool, repairMissing: Bool) throws -> PresenceResult {
         let prefix = (origin?.absoluteString ?? "") + "|"
         let keys = Array(receiptKeysByHash[hash, default: []].filter { $0.hasPrefix(prefix) })
+        // JSON responses cannot manufacture this locally validated, typed deletion notice.
+        if let notice = row["_confirmedDeletion"] as? DeletionNotice, notice.scope == .hash, notice.hash == hash {
+            try markHashDeleted(hash)
+            return .deleted
+        }
         let confirmed = row["complete"] as? Bool == true && row["present"] as? Bool == true
         let missing = row["missing"] as? Bool == true || row["complete"] as? Bool == false
         guard confirmed || missing else { throw TransferError(message: "服务器未确认原件存在状态，已保留上传记录") }
+        if knownDeletedHash(hash) {
+            try markHashDeleted(hash)
+            return .deleted
+        }
+        let knownTrash = keys.contains { receipts[$0]?.trashed == true }
         var trash = row["trashed"] as? Bool == true
         for key in keys {
             guard var receipt = receipts[key] else { continue }
-            let isTrash = row["trashed"] as? Bool ?? receipt.trashed ?? false
+            if receipt.deleted == true && receipt.deletedScope == "source" { continue }
+            // An omitted state cannot let a legacy alias undo another receipt's deletion.
+            let isTrash = row["trashed"] as? Bool ?? knownTrash
             trash = trash || isTrash
             if missing && !isTrash && repairMissing {
                 try invalidate(receipt)
@@ -752,8 +909,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             receipts[key] = receipt; receiptsDirty = true
             if confirmed { removeIssues(resourceKey: key, stage: .verification) }
             if missing && isTrash {
-                recordIssue(key: key, assetID: receipt.sourceAsset, name: String(hash.prefix(12)), stage: .verification,
-                    error: TransferError(message: "回收站中的原件缺失，未自动恢复或补传"))
+                removeIssues(resourceKey: key)
             } else if receipt.status == "error" {
                 recordIssue(key: key, assetID: receipt.sourceAsset, name: String(hash.prefix(12)), stage: .processing,
                     error: TransferError(message: row["error"] as? String ?? "原件已保存，但服务器处理失败，请在照片库中重试处理"))
@@ -762,12 +918,13 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         let affected = Set(keys.compactMap { receipts[$0]?.sourceAsset ?? $0.split(separator: "|", maxSplits: 4).dropFirst().first.map(String.init) })
         for id in affected { if let summary = summaries[id] { updateSummary(assetID: id, keys: summary.keys) } }
         if confirmed { removeIssues(resourceKey: "missing:" + hash); return trash ? .trash : .present }
+        if trash { removeIssues(resourceKey: "missing:" + hash) }
         return trash ? .trash : .missing
     }
     private func refreshProcessing() async {
         let prefix = (origin?.absoluteString ?? "") + "|"
         let hashes = Set(receipts.values.filter {
-            $0.key.hasPrefix(prefix) && activeAssetIDs.contains($0.sourceAsset ?? "") &&
+            $0.key.hasPrefix(prefix) && $0.deleted != true && $0.trashed != true && activeAssetIDs.contains($0.sourceAsset ?? "") &&
             ($0.status == "queued" || $0.status == "processing" || $0.serverAssetID?.isEmpty != false)
         }.map(\.hash)).sorted()
         guard !hashes.isEmpty else { return }
@@ -819,8 +976,11 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             var hashes = Set<String>()
             for position in 0..<members.count {
                 let id = members.object(at: position).localIdentifier
-                guard let summary = summaries[id], summary.complete else { unfinished = true; continue }
-                for key in summary.keys { if let receipt = receipts[key] { hashes.insert(receipt.hash) } }
+                if sourceDeleted(nativeSourceKey(id)) { continue }
+                guard let summary = summaries[id], summary.complete || summary.excluded else { unfinished = true; continue }
+                for key in summary.keys {
+                    if let receipt = receipts[key], receipt.deleted != true { hashes.insert(receipt.hash) }
+                }
             }
             guard !hashes.isEmpty else { continue }
             let signature = SHA256.hash(data: Data((name + "\n" + hashes.sorted().joined(separator: "\n")).utf8)).map { String(format: "%02x", $0) }.joined()
@@ -835,7 +995,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                     if let known = states[hash] { row = known }
                     else { row = try await presence(hash); states[hash] = row }
                     let result = try applyServerState(hash: hash, row: row, checked: false, repairMissing: true)
-                    if result == .trash { continue }
+                    if result == .trash || result == .deleted { continue }
                     if result != .present { unresolved = true; continue }
                     if row["trashed"] as? Bool == true { continue }
                     guard let id = row["assetId"] as? String, !id.isEmpty else { unresolved = true; continue }
@@ -1100,6 +1260,9 @@ struct AuraContent: View {
                 }.padding(.vertical, 5)
                 if !model.summaryIsCurrent { Text("项目数量为上次扫描结果，开始上传或核对后刷新。").font(.caption2).foregroundStyle(.secondary) }
                 Text("累计新传 \(model.uploaded) 个原件 · 已存在 \(model.duplicates) 个原件 · \(model.processingAssets) 个项目等待服务器处理").font(.caption).foregroundStyle(.secondary)
+                if model.excludedAssets > 0 {
+                    Text("已排除 \(model.excludedAssets) 个已删除项目，不计入待备份；最近删除可在 Aura 恢复，永久删除不会重新上传。").font(.caption).foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.subheadline); Spacer() }
                     if !model.current.isEmpty { Text(model.current).font(.caption).foregroundStyle(.secondary).lineLimit(1); ProgressView(value: model.progress).tint(olive) }
@@ -1116,7 +1279,7 @@ struct AuraContent: View {
                     if model.verifying { ProgressView(value: model.verificationProgress).tint(olive) }
                     Text(model.verificationStatus).font(.caption).foregroundStyle(.secondary)
                     if !model.lastVerified.isEmpty { Text("最近完成：\(displayDate(model.lastVerified))").font(.caption2).foregroundStyle(.secondary) }
-                    Text("检查原件文件是否存在、大小是否匹配。缺失且不在回收站的原件会按上传策略补传；不执行完整哈希扫描。").font(.caption).foregroundStyle(.secondary)
+                    Text("检查原件文件是否存在、大小是否匹配。仅补传未删除的缺失原件；不会恢复最近删除或永久删除，不执行完整哈希扫描。").font(.caption).foregroundStyle(.secondary)
                 }
                 if !model.errors.isEmpty {
                     DisclosureGroup("待处理记录 · \(model.errors.count)") {

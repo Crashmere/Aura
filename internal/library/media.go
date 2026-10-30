@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -90,6 +91,9 @@ func captureDate(m map[string]any, h Hints) string {
 	return now()
 }
 func (l *Library) Worker(ctx context.Context) {
+	if e := l.RecoverDeletions(ctx); e != nil && ctx.Err() == nil {
+		slog.Error("recover permanent deletion", "error", e)
+	}
 	if _, e := l.DB.Exec("UPDATE files SET status='queued' WHERE status='processing'"); e != nil {
 		slog.Error("recover processing jobs", "error", e)
 		return
@@ -100,7 +104,10 @@ func (l *Library) Worker(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		f, e := scanFile(l.DB.QueryRow("SELECT " + fileColumns + " FROM files WHERE status='queued' ORDER BY created_at LIMIT 1"))
+		_ = l.recoverDeletions(ctx, false)
+		f, e := scanFile(l.DB.QueryRow("SELECT " + fileColumns + ` FROM files WHERE status='queued' AND NOT EXISTS
+ (SELECT 1 FROM decisions d,json_each(d.detail,'$.hashes') h WHERE d.action='purge-request' AND h.value=files.hash)
+ ORDER BY created_at LIMIT 1`))
 		if e == sql.ErrNoRows {
 			select {
 			case <-ctx.Done():
@@ -119,24 +126,86 @@ func (l *Library) Worker(ctx context.Context) {
 			}
 			continue
 		}
-		if _, e = l.DB.Exec("UPDATE files SET status='processing' WHERE hash=?", f.Hash); e != nil {
-			slog.Error("job claim", "error", e)
-			continue
-		}
-		if e = l.process(ctx, f); e != nil {
+		if e = l.processQueued(ctx, f.Hash); e != nil {
+			var deleted *deletedOriginal
+			if errors.As(e, &deleted) || errors.Is(e, sql.ErrNoRows) {
+				continue
+			}
 			if ctx.Err() != nil {
-				_, _ = l.DB.Exec("UPDATE files SET status='queued' WHERE hash=?", f.Hash)
+				_, _ = l.DB.Exec("UPDATE files SET status='queued' WHERE hash=? AND status='processing'", f.Hash)
 				return
 			}
 			slog.Error("media processing", "hash", f.Hash, "error", e)
-			_, _ = l.DB.Exec("UPDATE files SET status='error',error=? WHERE hash=?", e.Error(), f.Hash)
+			_, _ = l.DB.Exec("UPDATE files SET status='error',error=? WHERE hash=? AND status='processing'", e.Error(), f.Hash)
 		}
 	}
 }
+
+func (l *Library) processQueued(parent context.Context, hash string) error {
+	unlock := l.lockUpload(hash)
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	job := &processingJob{cancel: cancel, done: make(chan struct{})}
+	l.processingMu.Lock()
+	if l.processing == nil {
+		l.processing = map[string]*processingJob{}
+	}
+	if l.processing[hash] != nil {
+		l.processingMu.Unlock()
+		return sql.ErrNoRows
+	}
+	l.processing[hash] = job
+	l.processingMu.Unlock()
+	defer func() {
+		l.processingMu.Lock()
+		delete(l.processing, hash)
+		close(job.done)
+		l.processingMu.Unlock()
+	}()
+	tx, e := l.DB.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	f, e := scanFile(tx.QueryRow("SELECT "+fileColumns+" FROM files WHERE hash=? AND status='queued'", hash))
+	if e != nil {
+		return e
+	}
+	source := ""
+	if f.AssetID == "" {
+		source = f.Hints.SourceKey
+	}
+	if e = originalDeletion(tx, hash, source); e != nil {
+		return e
+	}
+	if _, e = tx.Exec("UPDATE files SET status='processing' WHERE hash=?", hash); e != nil {
+		return e
+	}
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	unlock()
+	locked = false
+	e = l.process(ctx, f)
+	if deleted := originalDeletion(l.DB, hash, ""); deleted != nil {
+		return deleted
+	}
+	return e
+}
+
 func (l *Library) process(parent context.Context, f File) error {
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	defer cancel()
-	work, e := os.MkdirTemp(filepath.Join(l.Root, "work"), f.Hash[:8]+"-")
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	work, e := os.MkdirTemp(filepath.Join(l.Root, "work"), f.Hash+"-")
 	if e != nil {
 		return e
 	}
@@ -279,18 +348,42 @@ func (l *Library) publish(f File) error {
 		return e
 	}
 	defer tx.Rollback()
+	current, e := scanFile(tx.QueryRow("SELECT "+fileColumns+" FROM files WHERE hash=?", f.Hash))
+	if e != nil {
+		return e
+	}
+	source := ""
+	if current.AssetID == "" {
+		source = current.Hints.SourceKey
+	}
+	if e = originalDeletion(tx, f.Hash, source); e != nil {
+		return e
+	}
+	if current.AssetID != "" {
+		var exists bool
+		if e = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?)", current.AssetID).Scan(&exists); e != nil {
+			return e
+		}
+		if !exists {
+			return fmt.Errorf("resource references missing library item")
+		}
+	}
+	var split bool
+	if e = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM decisions d WHERE d.action='split'
+ AND (json_extract(d.detail,'$.from')=? OR json_extract(d.detail,'$.to')=? OR json_extract(d.detail,'$.hash')=?)
+ AND d.created_at>COALESCE((SELECT max(created_at) FROM observations WHERE hash=?),''))`, current.AssetID, current.AssetID, f.Hash, f.Hash).Scan(&split); e != nil {
+		return e
+	}
+	grouping := current.AssetID == f.AssetID && !split
 	_, e = tx.Exec(`UPDATE files SET mime=?,width=?,height=?,captured_at=?,content_id=?,pixel_hash=?,dhash=?,metadata=?,score=?,status=?,error=? WHERE hash=?`, f.Mime, f.Width, f.Height, f.CapturedAt, f.ContentID, f.PixelHash, f.DHash, string(f.Metadata), f.Score, f.Status, f.Error, f.Hash)
 	if e != nil {
 		return e
 	}
 	keys := []string{}
-	if f.ContentID != "" {
-		keys = append(keys, "apple:"+f.ContentID)
+	if current.Hints.SourceKey != "" {
+		keys = append(keys, "source:"+current.Hints.SourceKey)
 	}
-	if f.PixelHash != "" {
-		keys = append(keys, "pixels:"+f.PixelHash)
-	}
-	observations, e := tx.Query("SELECT hints FROM observations WHERE hash=?", f.Hash)
+	observations, e := tx.Query("SELECT hints FROM observations WHERE hash=? ORDER BY created_at,id", f.Hash)
 	if e != nil {
 		return e
 	}
@@ -306,15 +399,41 @@ func (l *Library) publish(f File) error {
 		favorite = favorite || h.Favorite
 	}
 	observations.Close()
-	asset := f.AssetID
+	if f.ContentID != "" {
+		keys = append(keys, "apple:"+f.ContentID)
+	}
+	if f.PixelHash != "" {
+		keys = append(keys, "pixels:"+f.PixelHash)
+	}
+	asset := current.AssetID
+	skipped := map[string]bool{}
 	for _, key := range keys {
+		if !grouping {
+			break
+		}
 		var other string
-		_ = tx.QueryRow("SELECT asset_id FROM asset_keys WHERE key=?", key).Scan(&other)
+		e = tx.QueryRow("SELECT k.asset_id FROM asset_keys k JOIN assets a ON a.id=k.asset_id WHERE k.key=?", key).Scan(&other)
+		if e != nil && e != sql.ErrNoRows {
+			return e
+		}
 		if other != "" {
+			request, err := assetDeletion(tx, other)
+			if err != nil {
+				return err
+			}
+			if request != "" {
+				skipped[key] = true
+				continue
+			}
 			if asset == "" {
 				asset = other
 			} else if other != asset {
 				if e = mergeTx(tx, asset, other, key); e != nil {
+					var pending *pendingDeletion
+					if errors.Is(e, errTrashStateConflict) || errors.As(e, &pending) {
+						skipped[key] = true
+						continue
+					}
 					return e
 				}
 			}
@@ -330,11 +449,17 @@ func (l *Library) publish(f File) error {
 		return e
 	}
 	for _, key := range keys {
+		if !grouping {
+			break
+		}
+		if skipped[key] {
+			continue
+		}
 		if _, e = tx.Exec("INSERT INTO asset_keys VALUES(?,?) ON CONFLICT(key) DO UPDATE SET asset_id=excluded.asset_id", key, asset); e != nil {
 			return e
 		}
 	}
-	if favorite {
+	if favorite && current.AssetID == "" {
 		if _, e = tx.Exec("UPDATE assets SET favorite=1 WHERE id=?", asset); e != nil {
 			return e
 		}

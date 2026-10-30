@@ -1922,7 +1922,7 @@ input {
     padding: 7px;
     min-height: 30px;
   }
-  .selection-bar .button:last-child {
+  .selection-bar .select-loaded {
     display: none;
   }
   .empty {
@@ -2109,9 +2109,6 @@ input {
   .viewer-actions .icon-button svg {
     width: 17px;
   }
-  .viewer-actions .icon-button:last-child {
-    display: none;
-  }
   .viewer-stage {
     padding: 0 0 15px;
   }
@@ -2194,6 +2191,191 @@ input {
 .protection-summary.is-verified {
   color: var(--accent);
   border-color: #dde5d3;
+}
+.deletion-backdrop {
+  z-index: 110;
+}
+.permanent-delete-dialog {
+  width: min(100%, 520px);
+}
+.permanent-delete-dialog form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.permanent-delete-dialog .dialog-title {
+  border-bottom: 1px solid var(--line);
+}
+.permanent-delete-dialog h2 {
+  font-size: 21px;
+}
+.deletion-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #a95f45;
+  font-size: 14px;
+  margin-bottom: 14px;
+}
+.deletion-note {
+  color: #7d8874;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.deletion-targets {
+  list-style: none;
+  margin: 20px 0;
+  padding: 12px 14px;
+  background: #f0f2eb;
+  border-radius: 8px;
+}
+.deletion-targets li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.deletion-targets span {
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: #8b9580;
+  font-size: 11px;
+}
+.deletion-confirm-label {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #748665;
+  font-size: 12px;
+}
+.deletion-confirm-label input {
+  padding: 12px;
+  border: 1px solid #dce3d2;
+  background: white;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.permanent-delete-dialog .error-banner {
+  margin-top: 16px;
+}
+.button.danger {
+  color: #a95f45;
+  border-color: #dbc7bc;
+  background: #faf0eb;
+}
+.viewer-date {
+  min-width: 0;
+}
+.viewer-actions {
+  flex-shrink: 0;
+}
+.viewer-toolbar .permanent-delete-action {
+  color: #d7937a;
+}
+.viewer-deletion-pending {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #d7b698;
+}
+.photo-deletion-pending {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  background: #27321fde;
+  border-radius: 6px;
+  color: #f2eddf;
+  font-size: 10px;
+}
+.deletion-progress {
+  margin: 0 0 24px;
+  padding: 4px 16px;
+  border: 1px solid #e3d8ca;
+  border-radius: 10px;
+  background: #f6f3ec;
+}
+.deletion-progress article {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  color: #9a7555;
+}
+.deletion-progress article + article {
+  border-top: 1px solid #e9e1d4;
+}
+.deletion-progress article > div {
+  min-width: 0;
+  flex: 1;
+}
+.deletion-progress strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+}
+.deletion-progress small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.7;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.deletion-progress button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.toast.is-error {
+  background: #7e4938;
+}
+@media (max-width: 720px) {
+  .viewer-date {
+    flex: 1;
+  }
+  .viewer-date strong,
+  .viewer-date small {
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .viewer-toolbar > .icon-button {
+    flex-shrink: 0;
+  }
+  .deletion-progress article {
+    flex-wrap: wrap;
+    gap: 9px;
+  }
+  .deletion-progress article > div {
+    flex-basis: calc(100% - 32px);
+  }
+  .permanent-delete-dialog .dialog-title h2 {
+    font-size: 18px;
+  }
+  .viewer-deletion-pending {
+    max-width: 100%;
+    font-size: 9px;
+  }
+}
+@media (hover: none), (pointer: coarse) {
+  .select-photo {
+    opacity: 1;
+    width: 30px;
+    height: 30px;
+    left: 6px;
+    top: 6px;
+    background: #0005;
+  }
 }
 .timeline-jump {
   display: flex;

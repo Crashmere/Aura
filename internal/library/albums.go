@@ -104,6 +104,13 @@ var errAlbumAsset = errors.New("照片不存在或已移入最近删除")
 
 func addAlbumAssets(tx *sql.Tx, id string, assets []string) error {
 	for _, asset := range assets {
+		request, err := assetDeletion(tx, asset)
+		if err != nil {
+			return err
+		}
+		if request != "" {
+			return &pendingDeletion{request: request}
+		}
 		var exists bool
 		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM assets WHERE id=? AND trashed_at='')", asset).Scan(&exists); err != nil {
 			return err
@@ -119,7 +126,10 @@ func addAlbumAssets(tx *sql.Tx, id string, assets []string) error {
 }
 
 func albumWriteError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errAlbumAsset) {
+	var pending *pendingDeletion
+	if errors.As(err, &pending) {
+		assetDeletionFailure(w, pending.request)
+	} else if errors.Is(err, errAlbumAsset) {
 		fail(w, 400, err)
 	} else {
 		fail(w, 500, err)
@@ -230,6 +240,9 @@ func (l *Library) changeAlbumAssets(w http.ResponseWriter, r *http.Request) {
 		err = addAlbumAssets(tx, id, p.Assets)
 	} else {
 		for _, asset := range p.Assets {
+			if !allowAssetMutation(w, tx, asset) {
+				return
+			}
 			if _, err = tx.Exec("DELETE FROM album_assets WHERE album_id=? AND asset_id=?", id, asset); err != nil {
 				break
 			}

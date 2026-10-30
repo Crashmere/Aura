@@ -42,6 +42,9 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `GET /healthz` | Database connectivity; `{status:"ok",service:"Aura"}` |
 | `GET /api/info` | Version, capabilities, library counts, original byte count, processing/error counts |
 | `GET /api/assets` | `{items,next}` with `view`, `album`, `excludeAlbum`, `excludeAlbums`, `q`, `from`, `to`, `cursor`, and `limit` (default 120, maximum 240) |
+| `PATCH /api/assets` | `{ids:[assetId],trash:boolean}`; transactional batch removal or restore, 1–1000 IDs |
+| `POST /api/assets/purge` | `{ids:[assetId],confirmation:"永久删除"}`; persist confirmed permanent deletion of selected trash items |
+| `GET /api/deletions/{id}` | Durable cleanup request, pending/error state or completion |
 | `GET /api/timeline` | `{months:[{month,count}]}` using the same visibility, album, search, exclusion, and date filters |
 | `GET /api/assets/{id}` | Logical asset, all file records, and combined metadata |
 | `PATCH /api/assets/{id}` | Optional `favorite`, `trash`, or durable manual `primary` fields |
@@ -60,7 +63,21 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 
 `album` restricts results to members of that album and returns 404 if it no longer exists. `excludeAlbum` omits existing members for the photo picker. `excludeAlbums=true` omits items belonging to any album. These filters run before cursor pagination and compose with search, date, and visibility filters. The web interface no longer exposes favorites; the legacy API field, filter, and native import hints remain compatible.
 
-The timeline endpoint returns calendar-month keys such as `2026-10`, newest first. A month picker can omit `from` and `to` while retaining the other filters, then set the selected month's inclusive date bounds. The browser retains view, album, query, and dates in its URL; API cursor values remain opaque and must not be synthesized from the display month.
+The timeline endpoint returns calendar-month keys such as `2026-10`, newest first. A month picker can omit `from` and `to` while retaining the other filters, then set the selected month's inclusive date bounds. The browser retains view, album, query, and dates in its URL; API cursor values remain opaque and must not be synthesized from the display month. Library mutations refresh month counts along with items and ordinary counts.
+
+## Deletion and restore
+
+`PATCH /api/assets/{id}` with `trash:true` moves an item to recently deleted; `trash:false` restores it. All originals, native paired resources, and album memberships remain stored. `PATCH /api/assets` accepts 1–1000 exact IDs and a required boolean `trash`, validates the entire batch, and returns `{updated:[assetId]}`. Invalid or unavailable items reject the batch without partially applying it. Ordinary removal has no automatic expiry.
+
+`POST /api/assets/purge` requires the exact confirmation string `永久删除` and 1–1000 selected trash IDs. It rejects active items instead of deleting them implicitly. After committing the durable cleanup intent, it returns 202 `{requestId,state:"pending",accepted:[assetId]}`. Submission is not proof that file cleanup has finished. Repeating an identical accepted selection can recover the existing request; a completed identical retry may return 200 with `state:"complete"`.
+
+`GET /api/deletions/{requestId}` returns `{id,state:"pending"|"complete",ids:[assetId],bytes,error?}`. `bytes` is the planned original-catalog byte count, not measured filesystem space released. A cleanup failure remains pending with an error and is retried; interruption or restart does not discard the intent. Pending assets expose `deletionPending:true`, and `/info` reports `pendingDeletions` as the number of logical items awaiting permanent cleanup. Restore, split, merge, or conflicting catalog mutations return 409 with `code:"asset_deletion_pending"` while cleanup is pending. Completion removes live originals, derivatives, matching temporary material, catalog resources, and memberships for that request. Albums themselves, system Photos, existing backups, and browser caches are unchanged.
+
+`capabilities.permanentDelete` advertises this protocol. Deleted hashes are reported with 410 `{error,code:"original_deleted",deleted:true,scope:"hash",hash}` rather than as missing originals. Upload preparation, chunks, and completion can instead return `scope:"source"` with the exact `sourceKey` when that source is intentionally excluded. Clients must not apply a source-scoped rejection to another source retaining the same hash. Minimal guards survive completion to prevent automatic reimport; no API bypasses them to restore permanently deleted originals.
+
+Wrong confirmation or an empty/oversized selection returns 400. A selection containing an active item returns 409 `asset_not_trashed`; missing selected IDs return 404. An overlapping but nonidentical pending selection returns 409 `asset_deletion_pending` with its `requestId`. ZIP requests for pending or completed deleted items return 410 `original_deleted`; use upload status to check a specific original hash.
+
+Automatic grouping does not merge existing active and trashed items. Manual merge across their visibility states returns 409 with `code:"trash_state_conflict"`; restore or remove the relevant items explicitly first. Splitting an item preserves trash state and album memberships rather than restoring the separated version.
 
 ## Tasks and review
 
@@ -89,10 +106,10 @@ Native import source keys use `photokit-album:<client-library-id>:<collection-id
 
 ## Protection summary
 
-The Aura web interface reads the existing same-origin, device-authenticated `GET /portal/api/recovery` and links to `/portal/#/backups`. It uses the full NAS `coverage` entry and its capture/package/restore verification, including registered agent-created recovery packages. Portal continues to own external-volume policy, backup receipts, and isolated-restore verification. Aura neither proxies the private collector socket nor starts backups through a new endpoint. A Portal request failure or unknown coverage is a summary-unavailable state, not evidence that no backup exists.
+NAS backup and recovery are agent-operated through server-operations tooling. Portal has no backup/recovery API or page, and Aura exposes no API for starting a backup. The web protection summary does not establish external backup coverage; verify recovery packages through the agent-operated workflow in [Operations](OPERATIONS.md).
 
 ## Media
 
 `GET` and `HEAD /media/{sha256}/{kind}` accept `original`, `thumb`, `preview`, and `play`. All are protected by Portal. Original downloads use the original filename; JPEG previews and MP4 playback support standard HTTP Range requests. Media caching is private. Missing derivatives can be requeued from the jobs interface or by requesting a missing derivative of a ready resource.
 
-No API permanently deletes an original. Export/import of the catalog for migration is a maintenance operation, described in [Operations](OPERATIONS.md).
+Permanent deletion is limited to the confirmed selected-trash protocol above; media reads do not delete originals. Export/import of the catalog for migration is a maintenance operation, described in [Operations](OPERATIONS.md).

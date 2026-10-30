@@ -60,6 +60,8 @@ import {
   Page,
   SimilarPair,
   Timeline,
+  ApiError,
+  PurgeResponse,
 } from "./api";
 import * as uploads from "./upload";
 import { Photo } from "./photo";
@@ -69,6 +71,7 @@ import { readLocation, writeLocation, monthRange } from "./library-location";
 import { ProtectionSummary } from "./protection";
 import { TaskCenter } from "./task-center";
 import { useImageGestures } from "./image-gestures";
+import { DeletionProgress, PermanentDeleteDialog, useDeletionOperations } from "./permanent-delete";
 import "./style.css";
 
 document.addEventListener(
@@ -134,11 +137,13 @@ function IconButton({
   onClick,
   title,
   className = "",
+  disabled = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   title: string;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -146,6 +151,7 @@ function IconButton({
       onClick={onClick}
       aria-label={title}
       title={title}
+      disabled={disabled}
     >
       {children}
     </button>
@@ -190,6 +196,7 @@ function App() {
     [viewerId, setViewerId] = useState(initial.asset),
     [selected, setSelected] = useState<Set<string>>(new Set()),
     [toast, setToast] = useState(""),
+    [toastError, setToastError] = useState(false),
     [help, setHelp] = useState(false),
     [mobileMenu, setMobileMenu] = useState(false);
   const [similar, setSimilar] = useState<SimilarPair[]>([]),
@@ -198,10 +205,22 @@ function App() {
     [ignoring, setIgnoring] = useState(""),
     [similarAssets, setSimilarAssets] = useState<Record<string, Asset>>({});
   const [months, setMonths] = useState<Timeline["months"]>([]);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [deletionTargets, setDeletionTargets] = useState<Asset[] | null>(null);
+  const mutationLock = useRef(false);
   const uploading = useSyncExternalStore(uploads.subscribe, uploads.snapshot);
-  const refreshRef = useRef(() => {});
+  const refreshRef = useRef<(reconcile?: boolean) => Promise<void>>(() => Promise.resolve());
   const queryKey = useRef(0);
+  const viewerKey = useRef(viewerId);
+  viewerKey.current = viewerId;
   const more = useRef<HTMLDivElement>(null);
+  const permanentDeleteEnabled = info?.capabilities?.permanentDelete === true;
+  const deletions = useDeletionOperations(permanentDeleteEnabled, () => { void refreshRef.current(true); }, operation => {
+    if (operation.ids.includes(viewerKey.current)) setViewer(null);
+    uploads.markDeleted(operation.ids);
+    notify(`永久删除已完成${operation.ids.length ? ` · ${operation.ids.length} 项` : ""}`);
+  }, info?.pendingDeletions);
   function setViewer(asset: Asset | null) {
     setViewerState(asset);
     setViewerId(asset?.id || "");
@@ -225,6 +244,8 @@ function App() {
       setSelected(new Set());
       setUploadOpen(false);
       setAlbumDialog(null);
+      setDeletionTargets(null);
+      setActionError("");
     };
     window.addEventListener("popstate", change);
     return () => window.removeEventListener("popstate", change);
@@ -241,13 +262,6 @@ function App() {
     return () => { active = false; };
   }, [viewerId]);
   useEffect(() => {
-    if (albumGallery || specialView) { setMonths([]); return; }
-    let active = true;
-    const filter = new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...(excludeAlbums ? { excludeAlbums: "true" } : {}) });
-    api<Timeline>("timeline?" + filter).then(data => { if (active) setMonths(data.months); }).catch(() => { if (active) setMonths([]); });
-    return () => { active = false; };
-  }, [view, albumId, query, excludeAlbums, albumGallery, specialView]);
-  useEffect(() => {
     try {
       localStorage.setItem("aura-hide-album-assets", String(hideAlbumAssets));
     } catch {
@@ -258,8 +272,9 @@ function App() {
     const id = setTimeout(() => setQuery(search), 250);
     return () => clearTimeout(id);
   }, [search]);
-  const notify = (text: string) => {
+  const notify = (text: string, failed = false) => {
     setToast(text);
+    setToastError(failed);
     window.setTimeout(() => setToast(""), 4500);
   };
   const params = (cursor = "") =>
@@ -272,12 +287,12 @@ function App() {
       ...(excludeAlbums ? { excludeAlbums: "true" } : {}),
       ...(cursor ? { cursor } : {}),
     }).toString();
-  async function load(append = false) {
+  async function load(append = false, reconcile = false) {
     const key = ++queryKey.current;
     setLoading(true);
     setError("");
     try {
-      const [data, stats, collections] = await Promise.all([
+      const [data, stats, collections, timeline] = await Promise.all([
         albumGallery || view === "jobs"
           ? Promise.resolve({ items: [] as Asset[], next: "" })
           : api<{ items: Asset[]; next: string }>(
@@ -285,6 +300,7 @@ function App() {
             ),
         api<Info>("info"),
         api<Album[]>("albums"),
+        albumGallery || specialView ? Promise.resolve({ months: [] } as Timeline) : api<Timeline>("timeline?" + new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...(excludeAlbums ? { excludeAlbums: "true" } : {}) })),
       ]);
       if (key !== queryKey.current) return;
       setItems((old) =>
@@ -298,6 +314,8 @@ function App() {
       setNext(data.next);
       setInfo(stats);
       setAlbums(collections);
+      setMonths(timeline.months);
+      if (reconcile) setSelected(old => new Set([...old].filter(id => data.items.some(asset => asset.id === id && !asset.deletionPending))));
     } catch (e) {
       if (key === queryKey.current)
         setError(String(e instanceof Error ? e.message : e));
@@ -309,6 +327,7 @@ function App() {
     const key = ++queryKey.current;
     setLoading(true);
     setError("");
+    setMonths([]);
     try {
       const data = await api<Page<SimilarPair>>("similar?" + new URLSearchParams({ paged: "true", limit: "50", ...(append && similarNext ? { cursor: similarNext } : {}) }));
       if (key !== queryKey.current) return;
@@ -344,12 +363,13 @@ function App() {
     setItems([]);
     setNext("");
     setSelected(new Set());
+    setActionError("");
     if (view === "similar") { setSimilar([]); setSimilarNext(""); setIgnoredPair(null); void loadSimilar(); }
     else void load();
   }, [view, albumId, query, from, to, excludeAlbums]);
-  refreshRef.current = () => {
-    if (view === "similar") void loadSimilar();
-    else void load();
+  refreshRef.current = async (reconcile = false) => {
+    if (view === "similar") await loadSimilar();
+    else await load(false, reconcile);
   };
   useEffect(() => {
     const fn = () => refreshRef.current();
@@ -357,10 +377,10 @@ function App() {
     return () => window.removeEventListener("aura-library-changed", fn);
   }, []);
   useEffect(() => {
-    if (!info?.queued && !uploading.running) return;
+    if (!info?.queued && !info?.pendingDeletions && !uploading.running) return;
     const timer = setInterval(() => refreshRef.current(), 4000);
     return () => clearInterval(timer);
-  }, [info?.queued, uploading.running]);
+  }, [info?.queued, info?.pendingDeletions, uploading.running]);
   useEffect(() => {
     if (!next || loading || view === "similar") return;
     const observer = new IntersectionObserver(
@@ -375,8 +395,8 @@ function App() {
   useEffect(() => {
     const fn = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (albumDialog) {
-          // The dialog owns Escape; keep the photo viewer behind it open.
+        if (albumDialog || deletionTargets || viewer) {
+          // Dialogs and viewers own Escape and their mutation locks.
           return;
         }
         setViewer(null);
@@ -388,7 +408,7 @@ function App() {
     };
     window.addEventListener("keydown", fn);
     return () => window.removeEventListener("keydown", fn);
-  }, [albumDialog]);
+  }, [albumDialog, deletionTargets, viewer]);
   const groups = useMemo(() => {
     const result: { date: string; items: Asset[] }[] = [];
     for (const asset of items) {
@@ -399,17 +419,66 @@ function App() {
     }
     return result;
   }, [items]);
-  async function action(body: unknown) {
+  async function action(trash: boolean) {
+    if (mutationLock.current || !selected.size) return;
+    const ids = [...selected];
+    if (ids.length > 1000) { setActionError("每次最多操作 1000 项，请减少选择"); return; }
+    mutationLock.current = true;
+    setActionBusy(true);
+    setActionError("");
     try {
-      for (const id of selected) await api("assets/" + id, body, "PATCH");
-      setSelected(new Set());
-      refreshRef.current();
-      notify("已更新");
+      const result = await api<{ updated: string[] }>("assets", { ids, trash }, "PATCH");
+      setSelected(old => new Set([...old].filter(id => !result.updated.includes(id))));
+      notify(trash ? `已移入最近删除 · ${result.updated.length} 项` : `已恢复 · ${result.updated.length} 项`);
     } catch (e) {
-      notify(String(e));
+      setActionError(e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError && e.requestId) deletions.track(e.requestId);
+    } finally {
+      await refreshRef.current(true);
+      mutationLock.current = false;
+      setActionBusy(false);
+    }
+  }
+  function openPermanentDelete(targets: Asset[]) {
+    if (mutationLock.current || !permanentDeleteEnabled) return;
+    if (!targets.length || targets.length > 1000 || targets.some(asset => !asset.trashedAt || asset.deletionPending)) {
+      setActionError("请选择 1-1000 项尚未开始永久删除的最近删除照片");
+      return;
+    }
+    setDeletionTargets(targets.map(asset => ({ ...asset })));
+  }
+  function deleteSelected() {
+    const targets = items.filter(asset => selected.has(asset.id));
+    if (targets.length !== selected.size) {
+      setActionError("部分已选照片状态发生变化，请刷新后重新选择");
+      void refreshRef.current(true);
+      return;
+    }
+    openPermanentDelete(targets);
+  }
+  async function permanentDelete(ids: string[], confirmation: string) {
+    if (mutationLock.current) throw new Error("正在处理上一项操作");
+    mutationLock.current = true;
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const result = await api<PurgeResponse>("assets/purge", { ids, confirmation });
+      deletions.track(result.requestId, result.accepted, result.state);
+      setDeletionTargets(null);
+      setSelected(old => new Set([...old].filter(id => !result.accepted.includes(id))));
+      if (result.accepted.includes(viewerKey.current)) setViewer(null);
+      if (result.state === "pending") notify("已确认，正在永久删除；清理完成后会更新状态");
+    } catch (error) {
+      if (error instanceof ApiError && error.requestId) deletions.track(error.requestId);
+      throw error;
+    } finally {
+      await refreshRef.current(true);
+      mutationLock.current = false;
+      setActionBusy(false);
     }
   }
   function toggle(id: string) {
+    if (mutationLock.current || items.find(asset => asset.id === id)?.deletionPending) return;
     setSelected((s) => {
       const n = new Set(s);
       if (n.has(id)) n.delete(id);
@@ -458,25 +527,31 @@ function App() {
     setAlbumDialog({ kind: "add", assets: [...selected] });
   }
   async function removeSelected() {
-    if (removing || !albumId) return;
+    if (mutationLock.current || removing || !albumId) return;
     if (selected.size > 1000) {
       notify("每次最多移除 1000 项，请减少选择");
       return;
     }
     setRemoving(true);
+    mutationLock.current = true;
+    setActionBusy(true);
+    setActionError("");
     try {
       await api(
         `albums/${albumId}/assets`,
         { assets: [...selected] },
         "DELETE",
       );
-      setSelected(new Set());
-      refreshRef.current();
+      const removed = new Set(selected);
+      setSelected(old => new Set([...old].filter(id => !removed.has(id))));
       notify("已从相片集移除，照片仍在照片库中");
     } catch (e) {
-      notify(e instanceof Error ? e.message : String(e));
+      setActionError(e instanceof Error ? e.message : String(e));
     } finally {
+      await refreshRef.current(true);
       setRemoving(false);
+      setActionBusy(false);
+      mutationLock.current = false;
     }
   }
   const completed = uploading.items.filter((i) =>
@@ -746,7 +821,8 @@ function App() {
             </div>
           </div>
           <ProtectionSummary />
-          {!albumGallery && !specialView && !!months.length && (
+          <DeletionProgress state={deletions} otherPending={!!info?.pendingDeletions} />
+          {!albumGallery && !specialView && (!!months.length || !!from || !!to) && (
             <div className="timeline-jump">
               <CalendarDays size={16} />
               <label>按月浏览<select aria-label="按月浏览" value={selectedMonth} onChange={event => {
@@ -756,6 +832,7 @@ function App() {
               }}>
                 <option value="">全部日期</option>
                 {selectedMonth === "custom" && <option value="custom" disabled>自定义日期范围</option>}
+                {selectedMonth && selectedMonth !== "custom" && !months.some(item => item.month === selectedMonth) && <option value={selectedMonth}>{selectedMonth} · 0项</option>}
                 {[...new Set(months.map(item => item.month.slice(0, 4)))].map(year => <optgroup label={`${year}年`} key={year}>{months.filter(item => item.month.startsWith(year)).map(item => <option value={item.month} key={item.month}>{Number(item.month.slice(5))}月 · {item.count}项</option>)}</optgroup>)}
               </select></label>
             </div>
@@ -799,17 +876,17 @@ function App() {
           )}
           {view === "trash" && (
             <p className="view-note">
-              移出照片库的项目会保留在这里，可随时恢复。
+              项目在永久删除前可恢复。永久删除会清理全部原件与对应预览。
             </p>
           )}
           {selected.size > 0 && (
             <div className="selection-bar">
-              <button onClick={() => setSelected(new Set())}>
+              <button disabled={actionBusy} aria-label="取消选择" onClick={() => setSelected(new Set())}>
                 <X size={16} />
               </button>
               <strong>已选 {selected.size} 项</strong>
               {view !== "trash" && (
-                <Button className="subtle" onClick={addSelected}>
+                <Button className="subtle" disabled={actionBusy} onClick={addSelected}>
                   <ImagePlus size={16} />
                   添加到相片集
                 </Button>
@@ -817,7 +894,7 @@ function App() {
               {view === "albums" && albumId && (
                 <Button
                   className="subtle"
-                  disabled={removing}
+                  disabled={actionBusy}
                   onClick={() => void removeSelected()}
                 >
                   <Minus size={16} />
@@ -826,23 +903,27 @@ function App() {
               )}
               <Button
                 className="subtle"
-                onClick={() => void action({ trash: view !== "trash" })}
+                disabled={actionBusy || items.some(asset => selected.has(asset.id) && asset.deletionPending)}
+                onClick={() => void action(view !== "trash")}
               >
                 {view === "trash" ? (
                   <RefreshCw size={16} />
                 ) : (
                   <Trash2 size={16} />
                 )}{" "}
-                {view === "trash" ? "恢复" : "移入最近删除"}
+                {actionBusy ? "正在处理" : view === "trash" ? "恢复" : "移入最近删除"}
               </Button>
+              {view === "trash" && permanentDeleteEnabled && <Button className="danger" disabled={actionBusy || items.some(asset => selected.has(asset.id) && asset.deletionPending)} onClick={deleteSelected}><Trash2 size={16} />永久删除已选</Button>}
               <Button
-                className="subtle"
-                onClick={() => setSelected(new Set(items.map((a) => a.id)))}
+                className="subtle select-loaded"
+                disabled={actionBusy}
+                onClick={() => setSelected(new Set(items.filter(asset => !asset.deletionPending).map(asset => asset.id)))}
               >
                 选择当前已加载项目
               </Button>
             </div>
           )}
+          {actionError && <div className="error-banner" role="alert">{actionError}<Button disabled={actionBusy} onClick={() => { setActionError(""); void refreshRef.current(true); }}>刷新状态</Button></div>}
           {error && (
             <div className="error-banner">
               {error}
@@ -1034,6 +1115,7 @@ function App() {
                         key={a.id}
                         asset={a}
                         selected={selected.has(a.id)}
+                        disabled={actionBusy}
                         select={() => toggle(a.id)}
                         onClick={() =>
                           selected.size ? toggle(a.id) : setViewer(a)
@@ -1135,7 +1217,7 @@ function App() {
       {viewer && (
         <Viewer
           asset={viewer}
-          close={() => setViewer(null)}
+          close={() => { if (viewerKey.current === viewer.id) setViewer(null); }}
           previous={() => {
             const n = items.findIndex((i) => i.id === viewer.id);
             if (n > 0) setViewer(items[n - 1]);
@@ -1144,14 +1226,17 @@ function App() {
             const n = items.findIndex((i) => i.id === viewer.id);
             if (n >= 0 && n < items.length - 1) setViewer(items[n + 1]);
           }}
-          changed={() => refreshRef.current()}
+          changed={() => refreshRef.current(true)}
           notify={notify}
           addToAlbum={() =>
             setAlbumDialog({ kind: "add", assets: [viewer.id] })
           }
-          modalOpen={!!albumDialog}
+          modalOpen={!!albumDialog || !!deletionTargets}
+          permanentDeleteEnabled={permanentDeleteEnabled}
+          permanentlyDelete={openPermanentDelete}
         />
       )}
+      {deletionTargets && <PermanentDeleteDialog targets={deletionTargets} close={() => setDeletionTargets(null)} submit={permanentDelete} />}
       {albumDialog && (
         <AlbumDialog
           state={albumDialog}
@@ -1192,7 +1277,7 @@ function App() {
               EXIF、定位、色彩配置和实况资源。预览与播放文件独立生成。
             </p>
             <p>
-              字节或完整像素一致的照片会自动归并。仅仅看起来相似的照片需要手动核对。原件始终保留，可在详情中下载或分离。
+              字节或完整像素一致的照片会自动归并。仅仅看起来相似的照片需要手动核对。原件可在详情中下载或分离；只有在“最近删除”中确认永久删除才会清理原件。
             </p>
             <a
               href="https://github.com/Crashmere/Aura"
@@ -1205,8 +1290,8 @@ function App() {
         </div>
       )}
       {toast && (
-        <div className="toast">
-          <Check size={17} />
+        <div className={`toast ${toastError ? "is-error" : ""}`} role={toastError ? "alert" : "status"}>
+          {toastError ? <X size={17} /> : <Check size={17} />}
           {toast}
         </div>
       )}
@@ -1597,15 +1682,19 @@ function Viewer({
   notify,
   addToAlbum,
   modalOpen,
+  permanentDeleteEnabled,
+  permanentlyDelete,
 }: {
   asset: Asset;
   close: () => void;
   previous: () => void;
   next: () => void;
-  changed: () => void;
-  notify: (s: string) => void;
+  changed: () => Promise<void>;
+  notify: (s: string, failed?: boolean) => void;
   addToAlbum: () => void;
   modalOpen: boolean;
+  permanentDeleteEnabled: boolean;
+  permanentlyDelete: (targets: Asset[]) => void;
 }) {
   const [detail, setDetail] = useState<Detail>(),
     [showInfo, setShowInfo] = useState(false),
@@ -1613,12 +1702,20 @@ function Viewer({
     [error, setError] = useState(""),
     [imageError, setImageError] = useState(false),
     [previewAttempt, setPreviewAttempt] = useState(0),
-    [motionAttempt, setMotionAttempt] = useState(0);
+    [motionAttempt, setMotionAttempt] = useState(0),
+    [updating, setUpdating] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
-  const refresh = () =>
-    api<Detail>("assets/" + asset.id)
-      .then(setDetail)
-      .catch((e) => setError(String(e)));
+  const currentAsset = useRef(asset.id);
+  currentAsset.current = asset.id;
+  const request = useRef(0);
+  const updateLock = useRef(false);
+  function refresh() {
+    const key = ++request.current;
+    const id = asset.id;
+    return api<Detail>("assets/" + id)
+      .then(data => { if (currentAsset.current === id && request.current === key) setDetail(data); })
+      .catch(e => { if (currentAsset.current === id && request.current === key) setError(e instanceof Error ? e.message : String(e)); });
+  }
   useEffect(() => {
     setDetail(undefined);
     setPlaying(false);
@@ -1626,22 +1723,25 @@ function Viewer({
     setError("");
     setPreviewAttempt(0);
     void refresh();
+    return () => { ++request.current; };
   }, [asset.id]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (modalOpen || e.isComposing || e.ctrlKey || e.metaKey || e.altKey)
+      if (modalOpen || updateLock.current || e.isComposing || e.ctrlKey || e.metaKey || e.altKey)
         return;
       if ((e.target as HTMLElement).matches("input,textarea")) return;
+      if (e.key === "Escape") close();
       if (e.key === "ArrowLeft") previous();
       if (e.key === "ArrowRight") next();
       if (e.key === "i") setShowInfo((x) => !x);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [previous, next, modalOpen]);
-  const a = detail?.asset || asset,
-    primary = detail?.files.find((f) => f.hash === a.primary);
-  const gestures = useImageGestures(a.primary, a.kind !== "video" && !playing && !modalOpen, previous, next);
+  }, [previous, next, modalOpen, close]);
+  const scopedDetail = detail?.asset.id === asset.id ? detail : undefined;
+  const a = scopedDetail?.asset || asset,
+    primary = scopedDetail?.files.find((f) => f.hash === a.primary);
+  const gestures = useImageGestures(a.primary, a.kind !== "video" && !playing && !modalOpen && !updating && !a.deletionPending, previous, next);
   useEffect(() => { setImageError(false); }, [a.primary, a.status]);
   useEffect(() => {
     if (!imageError) return;
@@ -1649,7 +1749,7 @@ function Viewer({
     window.addEventListener("online", retry);
     return () => window.removeEventListener("online", retry);
   }, [imageError]);
-  const meta = detail?.metadata || {};
+  const meta = scopedDetail?.metadata || {};
   const field = (...names: string[]) => {
     for (const name of names) {
       const key = Object.keys(meta).find(
@@ -1659,17 +1759,26 @@ function Viewer({
     }
     return "";
   };
-  async function update(p: unknown) {
+  async function mutate(path: string, p: unknown, method = "PATCH") {
+    if (updateLock.current || a.deletionPending) return false;
+    updateLock.current = true;
+    setUpdating(true);
+    setError("");
     try {
-      await api("assets/" + a.id, p, "PATCH");
+      await api(path, p, method);
       await refresh();
-      changed();
       return true;
     } catch (e) {
-      notify(String(e));
+      notify(e instanceof Error ? e.message : String(e), true);
+      await refresh();
       return false;
+    } finally {
+      await changed();
+      updateLock.current = false;
+      setUpdating(false);
     }
   }
+  const update = (p: unknown) => mutate("assets/" + a.id, p);
   const start = () => {
     setMotionAttempt(n => n + 1);
     setPlaying(true);
@@ -1684,7 +1793,7 @@ function Viewer({
     <div className={`viewer ${showInfo ? "with-info" : ""}`}>
       <div className="viewer-main">
         <header className="viewer-toolbar">
-          <IconButton title="关闭" onClick={close}>
+          <IconButton title="关闭" disabled={updating} onClick={close}>
             <X size={23} />
           </IconButton>
           <div className="viewer-date">
@@ -1692,16 +1801,16 @@ function Viewer({
             <small>{a.name}</small>
           </div>
           <div className="viewer-actions">
-            <IconButton title="添加到相片集" onClick={addToAlbum}>
+            <IconButton title="添加到相片集" disabled={updating || !!a.trashedAt || !!a.deletionPending} onClick={addToAlbum}>
               <ImagePlus size={20} />
             </IconButton>
-            <a
+            {!a.deletionPending && <a
               className="icon-button"
               title="下载全部原件"
               href={`${base}api/assets/${a.id}/download`}
             >
               <ArrowDownToLine size={21} />
-            </a>
+            </a>}
             <IconButton
               title="照片信息"
               className={showInfo ? "active" : ""}
@@ -1710,7 +1819,8 @@ function Viewer({
               <InfoIcon size={21} />
             </IconButton>
             <IconButton
-              title={a.trashedAt ? "恢复" : "移入最近删除"}
+              title={a.deletionPending ? "正在永久删除" : a.trashedAt ? "恢复" : "移入最近删除"}
+              disabled={updating || !!a.deletionPending}
               onClick={async () => {
                 if (await update({ trash: !a.trashedAt })) {
                   notify(a.trashedAt ? "已恢复" : "已移入最近删除");
@@ -1718,14 +1828,16 @@ function Viewer({
                 }
               }}
             >
-              {a.trashedAt ? <RefreshCw size={20} /> : <Trash2 size={20} />}
+              {a.deletionPending ? <LoaderCircle className="spin" size={20} /> : a.trashedAt ? <RefreshCw size={20} /> : <Trash2 size={20} />}
             </IconButton>
+            {a.trashedAt && permanentDeleteEnabled && !a.deletionPending && <IconButton title="永久删除" className="permanent-delete-action" disabled={updating} onClick={() => permanentlyDelete([a])}><Trash2 size={20} /></IconButton>}
           </div>
         </header>
         <div className="viewer-stage">
           <button
             className="viewer-prev"
             onClick={previous}
+            disabled={updating || modalOpen}
             aria-label="上一张"
           >
             <ChevronLeft />
@@ -1770,23 +1882,25 @@ function Viewer({
             {imageError && (
               <div className="viewer-fallback">
                 <ImageIcon size={40} />
-                <p>{a.status === "error" ? "预览处理失败" : ["queued", "processing"].includes(a.status) ? "正在生成预览" : "预览加载失败"}</p>
-                <button className="button" onClick={() => { setPreviewAttempt(n => n + 1); setImageError(false); void refresh(); }}>重新加载预览</button>
-                <a className="button" href={media(a.primary, "original")}>
+                <p>{a.deletionPending ? "正在永久删除，预览暂不可用" : a.status === "error" ? "预览处理失败" : ["queued", "processing"].includes(a.status) ? "正在生成预览" : "预览加载失败"}</p>
+                <button className="button" disabled={!!a.deletionPending} onClick={() => { setPreviewAttempt(n => n + 1); setImageError(false); void refresh(); }}>重新加载预览</button>
+                {!a.deletionPending && <a className="button" href={media(a.primary, "original")}>
                   下载原件
-                </a>
+                </a>}
               </div>
             )}
           </div>
-          <button className="viewer-next" onClick={next} aria-label="下一张">
+          <button className="viewer-next" onClick={next} disabled={updating || modalOpen} aria-label="下一张">
             <ChevronRight />
           </button>
         </div>
         <footer className="viewer-footer">
+          {a.deletionPending && <span className="viewer-deletion-pending"><LoaderCircle className="spin" size={14} />正在永久删除，清理完成后会从图库移除</span>}
           {gestures.transform.scale > 1 && <button className="live-control" onClick={gestures.reset}>还原大小</button>}
           {a.kind === "live" && (
             <button
               className={`live-control ${playing ? "playing" : ""}`}
+              disabled={updating || !!a.deletionPending}
               onClick={() => (playing ? setPlaying(false) : start())}
             >
               <LivePhotoIcon size={18} />
@@ -1866,9 +1980,9 @@ function Viewer({
           </div>
           <div className="originals">
             <h3>
-              原始资源 <span>{detail?.files.length || a.variants}</span>
+              原始资源 <span>{scopedDetail?.files.length || a.variants}</span>
             </h3>
-            {detail?.files.map((f) => (
+            {scopedDetail?.files.map((f) => (
               <div className="original" key={f.hash}>
                 <div className="original-header">
                   <span className="file-type">
@@ -1889,31 +2003,25 @@ function Viewer({
                           : ""}
                     </small>
                   </div>
-                  <a
+                  {!a.deletionPending && <a
                     title="下载此原件"
                     className="icon-button"
                     href={media(f.hash, "original")}
                   >
                     <ArrowDownToLine size={16} />
-                  </a>
+                  </a>}
                 </div>
                 <div className="original-actions">
                   {f.hash !== a.primary && f.mime.startsWith("image/") && (
-                    <button onClick={() => void update({ primary: f.hash })}>
+                    <button disabled={updating || !!a.deletionPending} onClick={() => void update({ primary: f.hash })}>
                       设为主版本
                     </button>
                   )}
-                  {detail.files.length > 1 && (
+                  {scopedDetail.files.length > 1 && (
                     <button
+                      disabled={updating || !!a.deletionPending}
                       onClick={async () => {
-                        try {
-                          await api(`assets/${a.id}/split`, { hash: f.hash });
-                          notify("已分离为独立项目");
-                          await refresh();
-                          changed();
-                        } catch (e) {
-                          notify(String(e));
-                        }
+                        if (await mutate(`assets/${a.id}/split`, { hash: f.hash }, "POST")) notify("已分离为独立项目");
                       }}
                     >
                       分离

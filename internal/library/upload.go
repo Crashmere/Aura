@@ -42,6 +42,9 @@ func (l *Library) originalPresent(f File) (bool, error) {
 }
 
 func originalFailure(w http.ResponseWriter, e error) {
+	if deletedFailure(w, e) {
+		return
+	}
 	if errors.Is(e, errOriginalIntegrity) {
 		writeJSON(w, 409, map[string]string{"error": e.Error(), "code": "original_integrity_error"})
 	} else {
@@ -61,6 +64,9 @@ func (l *Library) incomingOffset(hash string) (int64, error) {
 }
 
 func (l *Library) fileUploadResult(f File, present bool) (map[string]any, error) {
+	if e := originalDeletion(l.DB, f.Hash, ""); e != nil {
+		return nil, e
+	}
 	result := map[string]any{"id": f.Hash, "offset": int64(0), "complete": present, "present": present, "missing": !present, "chunkSize": chunkSize}
 	if present {
 		result["offset"] = f.Size
@@ -81,6 +87,9 @@ func (l *Library) reconcileUpload(f File) error {
 		return e
 	}
 	defer tx.Rollback()
+	if e = originalDeletion(tx, f.Hash, ""); e != nil {
+		return e
+	}
 	result, e := tx.Exec("UPDATE uploads SET state='complete' WHERE id=? AND state='uploading' AND json_extract(hints,'$.size')=?", f.Hash, f.Size)
 	if e != nil {
 		return e
@@ -152,6 +161,10 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock := l.lockUpload(h.Hash)
 	defer unlock()
+	if e := originalDeletion(l.DB, h.Hash, h.SourceKey); e != nil {
+		originalFailure(w, e)
+		return
+	}
 	f, e := l.File(h.Hash)
 	repair := e == nil
 	if e == nil {
@@ -166,16 +179,16 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 		}
 		if present {
 			if e = l.remember(h); e != nil {
-				fail(w, 500, e)
+				originalFailure(w, e)
 				return
 			}
 			if e = l.reconcileUpload(f); e != nil {
-				fail(w, 500, e)
+				originalFailure(w, e)
 				return
 			}
 			result, err := l.fileUploadResult(f, true)
 			if err != nil {
-				fail(w, 500, err)
+				originalFailure(w, err)
 				return
 			}
 			result["duplicate"] = true
@@ -188,10 +201,20 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The checksum identifies the byte stream; a reselected date range applies to the resumed upload.
+	tx, e := l.DB.Begin()
+	if e != nil {
+		fail(w, 500, e)
+		return
+	}
+	defer tx.Rollback()
+	if e = originalDeletion(tx, h.Hash, h.SourceKey); e != nil {
+		originalFailure(w, e)
+		return
+	}
 	var oldHints, state string
-	e = l.DB.QueryRow("SELECT hints,state FROM uploads WHERE id=?", h.Hash).Scan(&oldHints, &state)
+	e = tx.QueryRow("SELECT hints,state FROM uploads WHERE id=?", h.Hash).Scan(&oldHints, &state)
 	if errors.Is(e, sql.ErrNoRows) {
-		_, e = l.DB.Exec("INSERT INTO uploads(id,hints,created_at) VALUES(?,?,?)", h.Hash, marshal(h), now())
+		_, e = tx.Exec("INSERT INTO uploads(id,hints,created_at) VALUES(?,?,?)", h.Hash, marshal(h), now())
 	} else if e == nil {
 		var old Hints
 		_ = json.Unmarshal([]byte(oldHints), &old)
@@ -200,15 +223,23 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if state != "complete" || repair {
-			_, e = l.DB.Exec("UPDATE uploads SET state='uploading',hints=? WHERE id=?", marshal(h), h.Hash)
+			_, e = tx.Exec("UPDATE uploads SET state='uploading',hints=? WHERE id=?", marshal(h), h.Hash)
 		}
 	}
 	if e != nil {
 		fail(w, 500, e)
 		return
 	}
-	if e = l.remember(h); e != nil {
+	if e = rememberTx(tx, h); e != nil {
+		originalFailure(w, e)
+		return
+	}
+	if e = tx.Commit(); e != nil {
 		fail(w, 500, e)
+		return
+	}
+	if e = originalDeletion(l.DB, h.Hash, h.SourceKey); e != nil {
+		originalFailure(w, e)
 		return
 	}
 	offset, e := l.incomingOffset(h.Hash)
@@ -220,7 +251,7 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 	if repair {
 		result, e = l.fileUploadResult(f, false)
 		if e != nil {
-			fail(w, 500, e)
+			originalFailure(w, e)
 			return
 		}
 		result["offset"] = offset
@@ -244,6 +275,10 @@ func (l *Library) uploadStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock := l.lockUpload(id)
 	defer unlock()
+	if e := originalDeletion(l.DB, id, ""); e != nil {
+		originalFailure(w, e)
+		return
+	}
 	if f, e := l.File(id); e == nil {
 		present, err := l.originalPresent(f)
 		if err != nil {
@@ -252,7 +287,7 @@ func (l *Library) uploadStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := l.fileUploadResult(f, present)
 		if err != nil {
-			fail(w, 500, err)
+			originalFailure(w, err)
 			return
 		}
 		if !present {
@@ -298,7 +333,17 @@ func (l *Library) chunk(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock := l.lockUpload(id)
 	defer unlock()
+	if e = originalDeletion(l.DB, id, ""); e != nil {
+		originalFailure(w, e)
+		return
+	}
 	h, state, e := l.uploadState(id)
+	if e == nil {
+		if e = originalDeletion(l.DB, id, h.SourceKey); e != nil {
+			originalFailure(w, e)
+			return
+		}
+	}
 	if e != nil || state != "uploading" {
 		fail(w, 409, "上传已完成或不存在")
 		return
@@ -346,6 +391,10 @@ func (l *Library) chunk(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, e)
 		return
 	}
+	if e = originalDeletion(l.DB, id, h.SourceKey); e != nil {
+		originalFailure(w, e)
+		return
+	}
 	writeJSON(w, 200, map[string]any{"offset": offset + n})
 }
 func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
@@ -356,9 +405,24 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock := l.lockUpload(id)
 	defer unlock()
+	if e := originalDeletion(l.DB, id, ""); e != nil {
+		originalFailure(w, e)
+		return
+	}
+	h, state, stateErr := l.uploadState(id)
+	if stateErr == nil {
+		if e := originalDeletion(l.DB, id, h.SourceKey); e != nil {
+			originalFailure(w, e)
+			return
+		}
+	}
 	existing, fileErr := l.File(id)
 	repair := fileErr == nil
 	if repair {
+		if e := originalDeletion(l.DB, id, existing.Hints.SourceKey); e != nil {
+			originalFailure(w, e)
+			return
+		}
 		present, e := l.originalPresent(existing)
 		if e != nil {
 			originalFailure(w, e)
@@ -366,12 +430,12 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if present {
 			if e = l.reconcileUpload(existing); e != nil {
-				fail(w, 500, e)
+				originalFailure(w, e)
 				return
 			}
 			result, e := l.fileUploadResult(existing, true)
 			if e != nil {
-				fail(w, 500, e)
+				originalFailure(w, e)
 				return
 			}
 			writeJSON(w, 200, result)
@@ -381,12 +445,11 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, fileErr)
 		return
 	}
-	h, state, e := l.uploadState(id)
-	if e != nil {
-		if e == sql.ErrNoRows {
+	if stateErr != nil {
+		if stateErr == sql.ErrNoRows {
 			fail(w, 404, "未找到上传")
 		} else {
-			fail(w, 500, e)
+			fail(w, 500, stateErr)
 		}
 		return
 	}
@@ -396,7 +459,7 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	path := filepath.Join(l.Root, "incoming", id)
 	// Recover publication if the process stopped before committing its database row.
-	if _, e = os.Stat(path); os.IsNotExist(e) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
 		path = l.Object(id)
 	}
 	n, checksum, e := hashUploadFile(path)
@@ -465,6 +528,10 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if e = originalDeletion(tx, id, h.SourceKey); e != nil {
+		originalFailure(w, e)
+		return
+	}
 	if repair {
 		_, e = tx.Exec("UPDATE files SET status='queued',error='' WHERE hash=?", id)
 	} else {
@@ -487,7 +554,7 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	result, e := l.fileUploadResult(file, true)
 	if e != nil {
-		fail(w, 500, e)
+		originalFailure(w, e)
 		return
 	}
 	l.Notify()

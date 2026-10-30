@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -18,16 +19,33 @@ import (
 )
 
 type Library struct {
-	DB       *sql.DB
-	Root     string
-	UploadMu sync.Mutex
-	uploads  map[string]*uploadLock
-	Wake     chan struct{}
+	DB               *sql.DB
+	Root             string
+	UploadMu         sync.Mutex
+	uploads          map[string]*uploadLock
+	processingMu     sync.Mutex
+	processing       map[string]*processingJob
+	deletionMu       sync.Mutex
+	deletionAttempts map[string]time.Time
+	Wake             chan struct{}
 }
 
 type uploadLock struct {
 	mu    sync.Mutex
 	users int
+}
+
+type processingJob struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+var errTrashStateConflict = errors.New("照片的删除状态不同，请先统一状态再合并")
+
+type pendingDeletion struct{ request string }
+
+func (e *pendingDeletion) Error() string {
+	return "照片正在永久删除，不能再修改或恢复"
 }
 
 func (l *Library) lockUpload(hash string) func() {
@@ -90,19 +108,20 @@ type File struct {
 }
 
 type Asset struct {
-	ID         string `json:"id"`
-	Primary    string `json:"primary"`
-	Motion     string `json:"motion,omitempty"`
-	CapturedAt string `json:"capturedAt"`
-	Kind       string `json:"kind"`
-	Favorite   bool   `json:"favorite"`
-	TrashedAt  string `json:"trashedAt,omitempty"`
-	Name       string `json:"name"`
-	Width      int    `json:"width"`
-	Height     int    `json:"height"`
-	Size       int64  `json:"size"`
-	Status     string `json:"status"`
-	Variants   int    `json:"variants"`
+	ID              string `json:"id"`
+	Primary         string `json:"primary"`
+	Motion          string `json:"motion,omitempty"`
+	CapturedAt      string `json:"capturedAt"`
+	Kind            string `json:"kind"`
+	Favorite        bool   `json:"favorite"`
+	TrashedAt       string `json:"trashedAt,omitempty"`
+	Name            string `json:"name"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	Size            int64  `json:"size"`
+	Status          string `json:"status"`
+	Variants        int    `json:"variants"`
+	DeletionPending bool   `json:"deletionPending,omitempty"`
 }
 
 const schema = `
@@ -215,11 +234,13 @@ func (l *Library) Files(asset string) ([]File, error) {
 }
 
 const assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind,a.favorite,a.trashed_at,
- f.name,f.width,f.height,f.size,f.status,(SELECT count(*) FROM files v WHERE v.asset_id=a.id)
+ f.name,f.width,f.height,f.size,f.status,(SELECT count(*) FROM files v WHERE v.asset_id=a.id),
+ EXISTS(SELECT 1 FROM decisions d,json_each(d.detail,'$.ids') p WHERE d.action='purge-request' AND p.value=a.id
+ AND NOT EXISTS(SELECT 1 FROM decisions c WHERE c.action='purge-complete' AND json_extract(c.detail,'$.requestId')=d.id))
  FROM assets a JOIN files f ON f.hash=a.primary_hash `
 
 func scanAsset(row scanner) (a Asset, err error) {
-	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants)
+	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending)
 	return
 }
 func (l *Library) Asset(id string) (Asset, error) {
@@ -230,6 +251,25 @@ func (l *Library) Asset(id string) (Asset, error) {
 func mergeTx(tx *sql.Tx, keep, drop, reason string) error {
 	if keep == drop || drop == "" {
 		return nil
+	}
+	for _, id := range []string{keep, drop} {
+		request, e := assetDeletion(tx, id)
+		if e != nil {
+			return e
+		}
+		if request != "" {
+			return &pendingDeletion{request: request}
+		}
+	}
+	var keepTrash, dropTrash string
+	if e := tx.QueryRow("SELECT trashed_at FROM assets WHERE id=?", keep).Scan(&keepTrash); e != nil {
+		return e
+	}
+	if e := tx.QueryRow("SELECT trashed_at FROM assets WHERE id=?", drop).Scan(&dropTrash); e != nil {
+		return e
+	}
+	if (keepTrash == "") != (dropTrash == "") {
+		return errTrashStateConflict
 	}
 	rows, e := tx.Query("SELECT hash FROM files WHERE asset_id=?", drop)
 	if e != nil {
@@ -290,7 +330,17 @@ func (l *Library) remember(h Hints) error {
 		return e
 	}
 	defer tx.Rollback()
-	_, e = tx.Exec("INSERT INTO observations VALUES(?,?,?,?)", ID(), h.Hash, marshal(h), now())
+	if e = rememberTx(tx, h); e != nil {
+		return e
+	}
+	return tx.Commit()
+}
+
+func rememberTx(tx *sql.Tx, h Hints) error {
+	if e := originalDeletion(tx, h.Hash, h.SourceKey); e != nil {
+		return e
+	}
+	_, e := tx.Exec("INSERT INTO observations VALUES(?,?,?,?)", ID(), h.Hash, marshal(h), now())
 	if e != nil {
 		return e
 	}
@@ -302,6 +352,10 @@ func (l *Library) remember(h Hints) error {
 			_ = tx.QueryRow("SELECT asset_id FROM asset_keys WHERE key=?", key).Scan(&other)
 			if other != "" && other != asset {
 				if e = mergeTx(tx, asset, other, "source resource group"); e != nil {
+					var pending *pendingDeletion
+					if errors.Is(e, errTrashStateConflict) || errors.As(e, &pending) {
+						return nil
+					}
 					return e
 				}
 				if e = refreshTx(tx, asset); e != nil {
@@ -313,7 +367,7 @@ func (l *Library) remember(h Hints) error {
 			}
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 func (l *Library) Check(ctx context.Context) error {
 	var result string

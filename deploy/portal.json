@@ -9,18 +9,15 @@
   "port": 18087,
   "user": "aura",
   "units": [
-    "aura.service",
-    "aura-backup.service",
-    "aura-backup.timer"
+    "aura.service"
   ],
   "database": "/opt/aura/data/aura.sqlite",
-  "backupKind": "media",
   "resources": [
     {
       "id": "data",
       "name": "业务数据",
       "path": "/opt/aura/data",
-      "purpose": "元数据、相片集及照片关联、分片和处理状态、资源分组与导入来源；保留主版本选择、相似忽略及 Apple 相册映射决策。",
+      "purpose": "元数据、相片集及照片关联、分片和处理状态、资源分组与导入来源；保留主版本、相似忽略、Apple 相册映射及永久删除意图、清理状态和最小防重导入标记。",
       "kind": "data",
       "browse": true,
       "cleanup": false
@@ -29,7 +26,7 @@
       "id": "originals",
       "name": "照片原件",
       "path": "/opt/aura/data/assets",
-      "purpose": "SHA-256 寻址的不可变原始照片、实况视频、RAW 与编辑资源；纳入原生备份。",
+      "purpose": "SHA-256 寻址的原始照片、实况视频、RAW 与编辑资源，不改写字节；仅明确确认永久删除所选最近删除项目时移除其现用原件，不影响已有备份。",
       "kind": "media",
       "browse": true,
       "cleanup": false
@@ -59,15 +56,6 @@
       "purpose": "媒体提取工作目录，任务完成后删除。",
       "kind": "cache",
       "browse": false,
-      "cleanup": false
-    },
-    {
-      "id": "backups",
-      "name": "数据备份",
-      "path": "/opt/aura/backups",
-      "purpose": "nas 的日常备份由门户或 agent 手动写入外置盘，完整收录数据库、原件、派生资源和持久上传状态，采用压缩归档；历史原生材料不自动清理。升级临时全量副本由 /var/lib/server-upgrades 管理，运行和数据验证成功后立即删除，失败或未确认时保留。",
-      "kind": "backups",
-      "browse": true,
       "cleanup": false
     },
     {
@@ -122,6 +110,21 @@
       "method": "GET",
       "path": "/api/assets",
       "description": "按相片集、类型、拍摄日期、关键词查询照片；游标分页"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/assets",
+      "description": "原子批量移入最近删除或恢复；失败不部分提交"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assets/purge",
+      "description": "二次确认永久删除所选最近删除项目；持久化意图后清理全部原件与预览，不改动系统照片或已有备份"
+    },
+    {
+      "method": "GET",
+      "path": "/api/deletions/{id}",
+      "description": "永久删除请求的待清理、错误及完成状态；中断后继续"
     },
     {
       "method": "GET",

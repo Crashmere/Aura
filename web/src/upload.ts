@@ -1,5 +1,5 @@
 import exifr from "exifr";
-import { api, Asset, base, localDay } from "./api";
+import { api, ApiError, Asset, base, isOriginalDeleted, localDay } from "./api";
 
 export type UploadItem = {
   id: string;
@@ -104,6 +104,16 @@ export function clearFinished() {
   );
   emit();
 }
+export function markDeleted(ids: string[]) {
+  for (const item of state.items) {
+    if (!item.assetId || !ids.includes(item.assetId) || !["done", "duplicate", "trashed"].includes(item.state)) continue;
+    item.state = "skipped";
+    item.error = "已永久删除，不会重新导入";
+    item.assetId = undefined;
+    item.trashedAt = undefined;
+  }
+  emit();
+}
 export async function restore(id: string) {
   const item = state.items.find(item => item.id === id);
   if (!item?.assetId || item.restoring) return;
@@ -196,6 +206,7 @@ async function fileDate(file: File): Promise<Date> {
 }
 async function upload(item: UploadItem) {
   item.state = "reading";
+  item.error = undefined;
   emit();
   const date = await fileDate(item.file);
   item.date = localDay(date);
@@ -251,11 +262,11 @@ async function upload(item: UploadItem) {
         continue;
       }
       if (!response.ok)
-        throw new Error(
+        throw new ApiError(
           data.error ||
             (response.status === 401
               ? "请返回门户重新登录"
-              : `上传失败 (${response.status})`),
+              : `上传失败 (${response.status})`), response.status, data,
         );
       if (!Number.isInteger(data.offset) || data.offset <= offset || data.offset > item.file.size) throw new Error("服务器未确认已接收的分片");
       offset = data.offset;
@@ -263,6 +274,7 @@ async function upload(item: UploadItem) {
       item.progress = 0.05 + (0.95 * offset) / item.file.size;
       emit();
     } catch (e) {
+      if (isOriginalDeleted(e)) throw e;
       if (++failures > 3) throw e;
       await new Promise((r) => setTimeout(r, 1000 * 2 ** failures));
       session = await api<Session>(`uploads/${hash}`);
@@ -305,8 +317,9 @@ async function run() {
       try {
         await upload(item);
       } catch (e) {
-        item.state = "error";
-        item.error = e instanceof Error ? e.message : String(e);
+        item.state = isOriginalDeleted(e) ? "skipped" : "error";
+        item.error = isOriginalDeleted(e) ? "已永久删除，不会重新导入" : e instanceof Error ? e.message : String(e);
+        if (isOriginalDeleted(e)) item.progress = 1;
         emit();
       }
     }
