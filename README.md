@@ -2,7 +2,7 @@
 
 A personal photo library that keeps original files, pairs Apple Live Photos, and groups duplicates without discarding their source data.
 
-The web interface provides a chronological library, favorites, Live Photo playback, video playback, date filters, resumable uploads, original downloads, and duplicate review. An Apple PhotoKit companion continuously imports original resources within a selected capture-date range.
+The web interface provides a chronological library, albums, month navigation, Live Photo and video playback, resumable uploads, original downloads, and duplicate review. A task center retains processing and upload state, while library links retain the current view and filters. The Apple PhotoKit companion imports original resources within a selected capture-date range and can check whether previously uploaded originals remain available on the server.
 
 ## Run locally
 

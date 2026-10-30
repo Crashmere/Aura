@@ -7,14 +7,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"math"
-	"math/bits"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -57,8 +54,10 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	})
 	r.Get("/api/info", l.info)
 	r.Get("/api/assets", l.list)
+	r.Get("/api/timeline", l.timeline)
 	r.Get("/api/albums", l.listAlbums)
 	r.Post("/api/albums", l.createAlbum)
+	r.Post("/api/albums/import", l.importAlbum)
 	r.Get("/api/albums/{id}", l.albumDetail)
 	r.Patch("/api/albums/{id}", l.renameAlbum)
 	r.Delete("/api/albums/{id}", l.deleteAlbum)
@@ -70,9 +69,13 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Post("/api/assets/{id}/split", l.split)
 	r.Get("/api/assets/{id}/download", l.download)
 	r.Get("/api/similar", l.similar)
+	r.Post("/api/similar/ignore", l.ignoreSimilar)
+	r.Delete("/api/similar/ignore", l.ignoreSimilar)
 	r.Get("/api/jobs", l.jobs)
+	r.Post("/api/files/retry", l.retryErrors)
 	r.Post("/api/files/{hash}/retry", l.retry)
 	r.Post("/api/uploads", l.prepare)
+	r.Get("/api/uploads", l.listUploads)
 	r.Get("/api/uploads/{id}", l.uploadStatus)
 	r.Put("/api/uploads/{id}", l.chunk)
 	r.Post("/api/uploads/{id}/complete", l.commitUpload)
@@ -125,7 +128,8 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	})
 }
 func (l *Library) info(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"name": "Aura", "version": "0.1.0", "chunkSize": chunkSize}
+	out := map[string]any{"name": "Aura", "version": "0.2.0", "chunkSize": chunkSize,
+		"capabilities": map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "timeline": true}}
 	counts := map[string]string{
 		"total": "SELECT count(*) FROM assets WHERE trashed_at=''", "favorites": "SELECT count(*) FROM assets WHERE favorite=1 AND trashed_at=''",
 		"live": "SELECT count(*) FROM assets WHERE kind='live' AND trashed_at=''", "videos": "SELECT count(*) FROM assets WHERE kind='video' AND trashed_at=''",
@@ -145,60 +149,18 @@ func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 }
 func (l *Library) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	where := "WHERE a.trashed_at=''"
-	args := []any{}
-	switch q.Get("view") {
-	case "favorites":
-		where += " AND a.favorite=1"
-	case "live":
-		where += " AND a.kind='live'"
-	case "videos":
-		where += " AND a.kind='video'"
-	case "trash":
-		where = "WHERE a.trashed_at!=''"
-	case "grouped":
-		where += " AND (SELECT count(*) FROM files v WHERE v.asset_id=a.id AND v.mime LIKE 'image/%')>1"
+	where, args, ok := l.assetFilter(w, q)
+	if !ok {
+		return
 	}
-	if album := q.Get("album"); album != "" {
-		if _, e := l.Album(album); e != nil {
-			fail(w, 404, "相片集不存在")
-			return
-		}
-		where += " AND EXISTS (SELECT 1 FROM album_assets aa WHERE aa.album_id=? AND aa.asset_id=a.id)"
-		args = append(args, album)
+	limit := pageLimit(q, 120, 240)
+	date, id, ok := pageCursor(w, q.Get("cursor"))
+	if !ok {
+		return
 	}
-	if album := q.Get("excludeAlbum"); album != "" {
-		where += " AND NOT EXISTS (SELECT 1 FROM album_assets aa WHERE aa.album_id=? AND aa.asset_id=a.id)"
-		args = append(args, album)
-	}
-	if q.Get("excludeAlbums") == "true" {
-		where += " AND NOT EXISTS (SELECT 1 FROM album_assets aa WHERE aa.asset_id=a.id)"
-	}
-	if search := strings.TrimSpace(q.Get("q")); search != "" {
-		where += ` AND EXISTS (SELECT 1 FROM files s WHERE s.asset_id=a.id AND (s.name LIKE ? ESCAPE '\' OR s.metadata LIKE ? ESCAPE '\'))`
-		search = strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(search)
-		args = append(args, "%"+search+"%", "%"+search+"%")
-	}
-	if from := q.Get("from"); from != "" {
-		where += " AND substr(a.captured_at,1,10)>=?"
-		args = append(args, from)
-	}
-	if to := q.Get("to"); to != "" {
-		where += " AND substr(a.captured_at,1,10)<=?"
-		args = append(args, to)
-	}
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	if limit < 1 || limit > 240 {
-		limit = 120
-	}
-	if cursor := q.Get("cursor"); cursor != "" {
-		parts := strings.SplitN(cursor, "|", 2)
-		if len(parts) != 2 {
-			fail(w, 400, "分页位置无效")
-			return
-		}
+	if date != "" {
 		where += " AND (a.captured_at<? OR (a.captured_at=? AND a.id<?))"
-		args = append(args, parts[0], parts[0], parts[1])
+		args = append(args, date, date, id)
 	}
 	args = append(args, limit+1)
 	rows, e := l.DB.Query(assetSelect+where+" ORDER BY a.captured_at DESC,a.id DESC LIMIT ?", args...)
@@ -286,7 +248,10 @@ func (l *Library) updateAsset(w http.ResponseWriter, r *http.Request) {
 			e = fmt.Errorf("主版本必须为照片")
 		}
 		if e == nil {
-			_, e = tx.Exec("UPDATE assets SET primary_hash=? WHERE id=?", p.Primary, id)
+			_, e = tx.Exec("INSERT INTO decisions(id,action,detail,created_at) VALUES(?,?,?,?)", ID(), "primary", marshal(map[string]string{"asset": id, "hash": p.Primary}), now())
+		}
+		if e == nil {
+			e = refreshTx(tx, id)
 		}
 	}
 	if e == nil {
@@ -402,6 +367,10 @@ func (l *Library) split(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"id": newID})
 }
 func (l *Library) jobs(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("paged") == "true" {
+		l.pagedJobs(w, r)
+		return
+	}
 	rows, e := l.DB.Query("SELECT " + fileColumns + " FROM files WHERE status IN ('queued','processing','error') ORDER BY created_at DESC LIMIT 100")
 	if e != nil {
 		fail(w, 500, e)
@@ -416,6 +385,10 @@ func (l *Library) jobs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out = append(out, f)
+	}
+	if e = rows.Err(); e != nil {
+		fail(w, 500, e)
+		return
 	}
 	writeJSON(w, 200, out)
 }
@@ -465,6 +438,10 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, e = os.Stat(path); e != nil {
+		if kind == "original" {
+			writeJSON(w, 503, map[string]string{"error": "原件暂不可读，请检查存储或重新选择源文件修复", "code": "original_missing"})
+			return
+		}
 		if kind != "original" && f.Status == "ready" {
 			_, _ = l.DB.Exec("UPDATE files SET status='queued' WHERE hash=? AND status='ready'", hash)
 			l.Notify()
@@ -523,71 +500,4 @@ func (l *Library) download(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-}
-
-type similarItem struct {
-	ID, Hash string
-	Value    uint64
-	Ratio    float64
-}
-type bkNode struct {
-	Item     similarItem
-	Children map[int]*bkNode
-}
-
-func (n *bkNode) add(v similarItem) {
-	d := bits.OnesCount64(n.Item.Value ^ v.Value)
-	if child := n.Children[d]; child != nil {
-		child.add(v)
-	} else {
-		n.Children[d] = &bkNode{v, map[int]*bkNode{}}
-	}
-}
-func (n *bkNode) find(v similarItem, out *[]map[string]any) {
-	d := bits.OnesCount64(n.Item.Value ^ v.Value)
-	if d <= 4 && math.Abs(n.Item.Ratio-v.Ratio) < 0.03 {
-		*out = append(*out, map[string]any{"left": n.Item.ID, "right": v.ID, "distance": d})
-	}
-	for step, child := range n.Children {
-		if step >= d-4 && step <= d+4 {
-			child.find(v, out)
-		}
-	}
-}
-func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
-	rows, e := l.DB.Query("SELECT a.id,f.hash,f.dhash,f.width,f.height FROM assets a JOIN files f ON f.hash=a.primary_hash WHERE a.trashed_at='' AND f.dhash!='' ORDER BY a.captured_at DESC")
-	if e != nil {
-		fail(w, 500, e)
-		return
-	}
-	defer rows.Close()
-	var root *bkNode
-	out := []map[string]any{}
-	for rows.Next() {
-		if r.Context().Err() != nil {
-			return
-		}
-		var item similarItem
-		var h string
-		var width, height int
-		if e = rows.Scan(&item.ID, &item.Hash, &h, &width, &height); e != nil {
-			fail(w, 500, e)
-			return
-		}
-		if height == 0 {
-			continue
-		}
-		item.Value, _ = strconv.ParseUint(h, 16, 64)
-		item.Ratio = float64(width) / float64(height)
-		if root == nil {
-			root = &bkNode{item, map[int]*bkNode{}}
-		} else {
-			root.find(item, &out)
-			root.add(item)
-		}
-		if len(out) >= 100 {
-			break
-		}
-	}
-	writeJSON(w, 200, out)
 }

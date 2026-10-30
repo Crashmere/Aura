@@ -44,6 +44,7 @@ import {
   CalendarDays,
   Monitor,
   ExternalLink,
+  ListChecks,
 } from "lucide-react";
 import {
   api,
@@ -56,11 +57,18 @@ import {
   media,
   bytes,
   displayDate,
+  Page,
+  SimilarPair,
+  Timeline,
 } from "./api";
 import * as uploads from "./upload";
 import { Photo } from "./photo";
 import { LivePhotoIcon } from "./live-photo-icon";
 import { AlbumDialog, AlbumDialogState, AlbumGrid } from "./albums";
+import { readLocation, writeLocation, monthRange } from "./library-location";
+import { ProtectionSummary } from "./protection";
+import { TaskCenter } from "./task-center";
+import { useImageGestures } from "./image-gestures";
 import "./style.css";
 
 document.addEventListener(
@@ -87,6 +95,7 @@ const titles: Record<string, string> = {
   grouped: "已归并",
   similar: "相似照片",
   trash: "最近删除",
+  jobs: "任务中心",
 };
 function Brand() {
   return (
@@ -143,27 +152,31 @@ function IconButton({
   );
 }
 function App() {
-  const [view, setView] = useState("all"),
+  const [initial] = useState(readLocation);
+  const urlMode = useRef<"push" | "replace">("replace");
+  const [view, setView] = useState(initial.view),
     [info, setInfo] = useState<Info>(),
     [items, setItems] = useState<Asset[]>([]),
     [next, setNext] = useState(""),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
   const [albums, setAlbums] = useState<Album[]>([]),
-    [albumId, setAlbumId] = useState(""),
+    [albumId, setAlbumId] = useState(initial.album),
     [albumDialog, setAlbumDialog] = useState<AlbumDialogState | null>(null),
     [removing, setRemoving] = useState(false);
   const album = albums.find((a) => a.id === albumId);
   const albumGallery = view === "albums" && !albumId;
+  const specialView = view === "similar" || view === "jobs";
   const pageTitle =
     view === "albums" && albumId ? album?.name || "相片集" : titles[view];
-  const [search, setSearch] = useState(""),
-    [query, setQuery] = useState(""),
-    [from, setFrom] = useState(""),
-    [to, setTo] = useState(""),
+  const [search, setSearch] = useState(initial.query),
+    [query, setQuery] = useState(initial.query),
+    [from, setFrom] = useState(initial.from),
+    [to, setTo] = useState(initial.to),
     [filters, setFilters] = useState(false),
     [density, setDensity] = useState(4);
   const [hideAlbumAssets, setHideAlbumAssets] = useState(() => {
+    if (initial.hideAlbums !== undefined) return initial.hideAlbums;
     try {
       return localStorage.getItem("aura-hide-album-assets") === "true";
     } catch {
@@ -173,19 +186,67 @@ function App() {
   const excludeAlbums = view === "all" && hideAlbumAssets;
   const [uploadOpen, setUploadOpen] = useState(false),
     [uploadTab, setUploadTab] = useState("files"),
-    [viewer, setViewer] = useState<Asset | null>(null),
+    [viewer, setViewerState] = useState<Asset | null>(null),
+    [viewerId, setViewerId] = useState(initial.asset),
     [selected, setSelected] = useState<Set<string>>(new Set()),
     [toast, setToast] = useState(""),
     [help, setHelp] = useState(false),
     [mobileMenu, setMobileMenu] = useState(false);
-  const [similar, setSimilar] = useState<
-      { left: string; right: string; distance: number }[]
-    >([]),
+  const [similar, setSimilar] = useState<SimilarPair[]>([]),
+    [similarNext, setSimilarNext] = useState(""),
+    [ignoredPair, setIgnoredPair] = useState<SimilarPair | null>(null),
+    [ignoring, setIgnoring] = useState(""),
     [similarAssets, setSimilarAssets] = useState<Record<string, Asset>>({});
+  const [months, setMonths] = useState<Timeline["months"]>([]);
   const uploading = useSyncExternalStore(uploads.subscribe, uploads.snapshot);
   const refreshRef = useRef(() => {});
   const queryKey = useRef(0);
   const more = useRef<HTMLDivElement>(null);
+  function setViewer(asset: Asset | null) {
+    setViewerState(asset);
+    setViewerId(asset?.id || "");
+  }
+  useEffect(() => {
+    writeLocation({ view, album: albumId, query, from, to, asset: viewerId, hideAlbums: hideAlbumAssets }, urlMode.current);
+    urlMode.current = "replace";
+  }, [view, albumId, query, from, to, viewerId, hideAlbumAssets]);
+  useEffect(() => {
+    const change = () => {
+      const state = readLocation();
+      setView(state.view);
+      setAlbumId(state.album);
+      setSearch(state.query);
+      setQuery(state.query);
+      setFrom(state.from);
+      setTo(state.to);
+      setViewerState(null);
+      setViewerId(state.asset);
+      if (state.hideAlbums !== undefined) setHideAlbumAssets(state.hideAlbums);
+      setSelected(new Set());
+      setUploadOpen(false);
+      setAlbumDialog(null);
+    };
+    window.addEventListener("popstate", change);
+    return () => window.removeEventListener("popstate", change);
+  }, []);
+  useEffect(() => {
+    if (!viewerId) { setViewerState(null); return; }
+    if (viewer?.id === viewerId) return;
+    let active = true;
+    api<Detail>(`assets/${viewerId}`).then(detail => {
+      if (active) setViewerState(detail.asset);
+    }).catch(e => {
+      if (active) { setViewerId(""); notify(e instanceof Error ? e.message : String(e)); }
+    });
+    return () => { active = false; };
+  }, [viewerId]);
+  useEffect(() => {
+    if (albumGallery || specialView) { setMonths([]); return; }
+    let active = true;
+    const filter = new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...(excludeAlbums ? { excludeAlbums: "true" } : {}) });
+    api<Timeline>("timeline?" + filter).then(data => { if (active) setMonths(data.months); }).catch(() => { if (active) setMonths([]); });
+    return () => { active = false; };
+  }, [view, albumId, query, excludeAlbums, albumGallery, specialView]);
   useEffect(() => {
     try {
       localStorage.setItem("aura-hide-album-assets", String(hideAlbumAssets));
@@ -217,7 +278,7 @@ function App() {
     setError("");
     try {
       const [data, stats, collections] = await Promise.all([
-        albumGallery
+        albumGallery || view === "jobs"
           ? Promise.resolve({ items: [] as Asset[], next: "" })
           : api<{ items: Asset[]; next: string }>(
               "assets?" + params(append ? next : ""),
@@ -244,12 +305,16 @@ function App() {
       if (key === queryKey.current) setLoading(false);
     }
   }
-  async function loadSimilar() {
+  async function loadSimilar(append = false) {
+    const key = ++queryKey.current;
     setLoading(true);
     setError("");
     try {
-      const pairs = await api<typeof similar>("similar");
-      setSimilar(pairs);
+      const data = await api<Page<SimilarPair>>("similar?" + new URLSearchParams({ paged: "true", limit: "50", ...(append && similarNext ? { cursor: similarNext } : {}) }));
+      if (key !== queryKey.current) return;
+      const pairs = data.items;
+      setSimilar(old => append ? [...old, ...pairs.filter(pair => !old.some(previous => previous.left === pair.left && previous.right === pair.right))] : pairs);
+      setSimilarNext(data.next);
       const ids = [...new Set(pairs.flatMap((p) => [p.left, p.right]))];
       const assets: Record<string, Asset> = {};
       for (let i = 0; i < ids.length; i += 8) {
@@ -264,12 +329,14 @@ function App() {
           }),
         );
       }
-      setSimilarAssets(assets);
-      setInfo(await api<Info>("info"));
+      if (key !== queryKey.current) return;
+      setSimilarAssets(old => append ? { ...old, ...assets } : assets);
+      const stats = await api<Info>("info");
+      if (key === queryKey.current) setInfo(stats);
     } catch (e) {
-      setError(String(e));
+      if (key === queryKey.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (key === queryKey.current) setLoading(false);
     }
   }
   useEffect(() => {
@@ -277,7 +344,7 @@ function App() {
     setItems([]);
     setNext("");
     setSelected(new Set());
-    if (view === "similar") void loadSimilar();
+    if (view === "similar") { setSimilar([]); setSimilarNext(""); setIgnoredPair(null); void loadSimilar(); }
     else void load();
   }, [view, albumId, query, from, to, excludeAlbums]);
   refreshRef.current = () => {
@@ -351,8 +418,37 @@ function App() {
     });
   }
   function navigate(id: string) {
+    urlMode.current = "push";
+    setViewer(null);
     setAlbumId("");
     setView(id);
+  }
+  function openAlbum(id: string) {
+    urlMode.current = "push";
+    setSearch(""); setQuery(""); setFrom(""); setTo("");
+    setView("albums");
+    setAlbumId(id);
+  }
+  async function locateAsset(id: string) {
+    try {
+      const detail = await api<Detail>(`assets/${id}`);
+      urlMode.current = "push";
+      setView(detail.asset.trashedAt ? "trash" : "all");
+      setAlbumId("");
+      setSearch(""); setQuery(""); setFrom(""); setTo("");
+      setUploadOpen(false);
+      setViewer(detail.asset);
+    } catch (e) { notify(e instanceof Error ? e.message : String(e)); }
+  }
+  async function ignore(pair: SimilarPair, undo = false) {
+    if (ignoring) return;
+    setIgnoring(pair.left + pair.right);
+    try {
+      await api("similar/ignore", { left: pair.left, right: pair.right }, undo ? "DELETE" : "POST");
+      if (undo) { setIgnoredPair(null); await loadSimilar(); }
+      else { setSimilar(old => old.filter(candidate => candidate.left !== pair.left || candidate.right !== pair.right)); setIgnoredPair(pair); }
+    } catch (e) { notify(e instanceof Error ? e.message : String(e)); }
+    finally { setIgnoring(""); }
   }
   function addSelected() {
     if (selected.size > 1000) {
@@ -384,8 +480,11 @@ function App() {
     }
   }
   const completed = uploading.items.filter((i) =>
-    ["done", "duplicate", "skipped"].includes(i.state),
+    ["done", "duplicate", "trashed", "skipped"].includes(i.state),
   ).length;
+  const month = from.slice(0, 7);
+  const range = monthRange(month);
+  const selectedMonth = from === range.from && to === range.to ? month : from || to ? "custom" : "";
   return (
     <div
       className="app"
@@ -434,6 +533,7 @@ function App() {
               ["grouped", Layers3],
               ["similar", Copy],
               ["trash", Trash2],
+              ["jobs", ListChecks],
             ] as const
           ).map(([id, Icon]) => (
             <button
@@ -446,6 +546,7 @@ function App() {
               {id === "grouped" && !!info?.grouped && (
                 <small>{info.grouped}</small>
               )}
+              {id === "jobs" && !!(info?.queued || info?.errors) && <small>{(info?.queued || 0) + (info?.errors || 0)}</small>}
             </button>
           ))}
         </nav>
@@ -507,7 +608,7 @@ function App() {
             个人照片库 <span>/</span> {pageTitle}
           </span>
           <div className="top-actions">
-            <div className="search">
+            {!specialView && <div className="search">
               <Search size={17} />
               <input
                 aria-label={albumGallery ? "搜索相片集" : "搜索照片"}
@@ -520,7 +621,7 @@ function App() {
                   <X size={14} />
                 </button>
               )}
-            </div>
+            </div>}
             <Button
               className="primary upload-trigger"
               title="上传照片"
@@ -536,7 +637,7 @@ function App() {
         </header>
         <div className="page">
           {view === "albums" && albumId && (
-            <button className="album-back" onClick={() => setAlbumId("")}>
+            <button className="album-back" onClick={() => { urlMode.current = "push"; setAlbumId(""); }}>
               <ArrowLeft size={16} />
               全部相片集
             </button>
@@ -620,7 +721,7 @@ function App() {
                     </>
                   )
                 ))}
-              {!albumGallery && (
+              {!albumGallery && !specialView && (
                 <>
                   <IconButton
                     title="日期筛选"
@@ -644,7 +745,22 @@ function App() {
               )}
             </div>
           </div>
-          {filters && !albumGallery && (
+          <ProtectionSummary />
+          {!albumGallery && !specialView && !!months.length && (
+            <div className="timeline-jump">
+              <CalendarDays size={16} />
+              <label>按月浏览<select aria-label="按月浏览" value={selectedMonth} onChange={event => {
+                if (event.target.value === "custom") return;
+                const next = monthRange(event.target.value);
+                setFrom(next.from); setTo(next.to);
+              }}>
+                <option value="">全部日期</option>
+                {selectedMonth === "custom" && <option value="custom" disabled>自定义日期范围</option>}
+                {[...new Set(months.map(item => item.month.slice(0, 4)))].map(year => <optgroup label={`${year}年`} key={year}>{months.filter(item => item.month.startsWith(year)).map(item => <option value={item.month} key={item.month}>{Number(item.month.slice(5))}月 · {item.count}项</option>)}</optgroup>)}
+              </select></label>
+            </div>
+          )}
+          {filters && !albumGallery && !specialView && (
             <div className="date-filters">
               <label>
                 拍摄日期
@@ -733,7 +849,9 @@ function App() {
               <Button onClick={() => refreshRef.current()}>重试</Button>
             </div>
           )}
-          {albumGallery ? (
+          {view === "jobs" ? (
+            <TaskCenter openUpload={() => { setUploadTab("files"); setUploadOpen(true); }} openAsset={id => void locateAsset(id)} changed={() => refreshRef.current()} />
+          ) : albumGallery ? (
             loading ? (
               <div className="loading-inline">
                 <LoaderCircle className="spin" size={20} />
@@ -751,13 +869,7 @@ function App() {
                       .toLocaleLowerCase()
                       .includes(query.trim().toLocaleLowerCase()),
                   )}
-                  open={(a) => {
-                    setSearch("");
-                    setQuery("");
-                    setFrom("");
-                    setTo("");
-                    setAlbumId(a.id);
-                  }}
+                  open={a => openAlbum(a.id)}
                 />
               ) : (
                 <Empty icon={<Search />} title="没有符合条件的相片集" />
@@ -783,12 +895,13 @@ function App() {
             </div>
           ) : view === "similar" ? (
             <div className="similar-list">
-              {loading ? (
+              {ignoredPair && <div className="similar-undo">已确认一组候选不同，后续不再提示。<button disabled={!!ignoring} onClick={() => void ignore(ignoredPair, true)}>撤销</button></div>}
+              {loading && !similar.length ? (
                 <div className="loading-inline">
                   <LoaderCircle className="spin" />
                   正在查找相似照片
                 </div>
-              ) : !similar.length ? (
+              ) : !similar.length && !similarNext ? (
                 <Empty icon={<Copy />} title="没有需要核对的相似照片" />
               ) : (
                 similar.map((pair) => {
@@ -804,6 +917,7 @@ function App() {
                           {a.width} × {a.height} · {b.width} × {b.height}
                         </small>
                         <Button
+                          disabled={!!ignoring}
                           onClick={async () => {
                             try {
                               await api(`assets/${a.id}/merge`, {
@@ -819,11 +933,13 @@ function App() {
                           <Layers3 size={16} />
                           归并为一项
                         </Button>
+                        <Button className="similar-ignore" disabled={!!ignoring} onClick={() => void ignore(pair)}>确认不同</Button>
                       </div>
                     </div>
                   ) : null;
                 })
               )}
+              {similarNext && <Button className="similar-more" disabled={loading} onClick={() => void loadSimilar(true)}>{loading ? "正在加载" : "加载更多候选"}</Button>}
             </div>
           ) : !items.length && !error ? (
             <Empty
@@ -985,6 +1101,7 @@ function App() {
                 ["grouped", Layers3],
                 ["similar", Copy],
                 ["trash", Trash2],
+                ["jobs", ListChecks],
               ] as const
             ).map(([id, Icon]) => (
               <button
@@ -1011,6 +1128,8 @@ function App() {
           tab={uploadTab}
           setTab={setUploadTab}
           close={() => setUploadOpen(false)}
+          locate={id => void locateAsset(id)}
+          openJobs={() => { setUploadOpen(false); navigate("jobs"); }}
         />
       )}
       {viewer && (
@@ -1044,12 +1163,7 @@ function App() {
             if (kind === "delete") setAlbumId("");
             if (kind === "create" && saved) {
               setAlbums((old) => [saved, ...old]);
-              setSearch("");
-              setQuery("");
-              setFrom("");
-              setTo("");
-              setView("albums");
-              setAlbumId(saved.id);
+              openAlbum(saved.id);
             } else refreshRef.current();
             notify(
               kind === "delete"
@@ -1126,27 +1240,33 @@ function UploadDialog({
   tab,
   setTab,
   close,
+  locate,
+  openJobs,
 }: {
   tab: string;
   setTab: (s: string) => void;
   close: () => void;
+  locate: (id: string) => void;
+  openJobs: () => void;
 }) {
   const state = useSyncExternalStore(uploads.subscribe, uploads.snapshot),
     fileInput = useRef<HTMLInputElement>(null),
     folderInput = useRef<HTMLInputElement>(null);
   const [jobs, setJobs] = useState<Original[]>([]);
+  const [jobError, setJobError] = useState("");
+  const [queueError, setQueueError] = useState("");
   useEffect(() => {
     const refresh = () =>
       api<Original[]>("jobs")
-        .then(setJobs)
-        .catch(() => {});
+        .then(data => { setJobs(data); setJobError(""); })
+        .catch(e => setJobError(e instanceof Error ? e.message : String(e)));
     void refresh();
     const timer = setInterval(refresh, 4000);
     return () => clearInterval(timer);
   }, []);
   const busy = state.running || state.scanning,
     finished = state.items.filter((i) =>
-      ["done", "duplicate", "skipped"].includes(i.state),
+      ["done", "duplicate", "trashed", "skipped"].includes(i.state),
     ).length,
     errors = state.items.filter((i) => i.state === "error").length;
   const label: Record<string, string> = {
@@ -1155,6 +1275,7 @@ function UploadDialog({
     uploading: "上传中",
     done: "已保存",
     duplicate: "原件已存在",
+    trashed: "已在最近删除中",
     skipped: "不在日期范围",
     error: "上传失败",
   };
@@ -1339,6 +1460,7 @@ function UploadDialog({
             </div>
           )}
           {state.error && <div className="error-banner">{state.error}</div>}
+          {queueError && <div className="error-banner" role="alert">{queueError}</div>}
           {tab !== "apple" && state.items.length > 0 && (
             <div className="upload-queue">
               <div className="queue-header">
@@ -1364,7 +1486,7 @@ function UploadDialog({
                 {state.items.slice(-150).map((item) => (
                   <div className="queue-item" key={item.id}>
                     <span className={`queue-state ${item.state}`}>
-                      {item.state === "done" || item.state === "duplicate" ? (
+                      {item.state === "trashed" ? <Trash2 size={17} /> : item.state === "done" || item.state === "duplicate" ? (
                         <Check size={17} />
                       ) : item.state === "error" ? (
                         <X size={17} />
@@ -1381,6 +1503,11 @@ function UploadDialog({
                         {item.error || label[item.state]} ·{" "}
                         {bytes(item.file.size)}
                       </small>
+                      {item.restoreError && <small className="queue-restore-error">{item.restoreError}</small>}
+                      {item.assetId && ["done", "duplicate", "trashed"].includes(item.state) && <div className="queue-actions">
+                        <button onClick={() => void uploads.locate(item.id).then(locate).catch(e => setQueueError(e instanceof Error ? e.message : String(e)))}>定位照片</button>
+                        {item.state === "trashed" && <button disabled={item.restoring} onClick={() => void uploads.restore(item.id)}>{item.restoring ? "正在恢复" : "恢复照片"}</button>}
+                      </div>}
                       {["reading", "uploading"].includes(item.state) && (
                         <div className="progress-track">
                           <i style={{ width: `${item.progress * 100}%` }} />
@@ -1393,6 +1520,8 @@ function UploadDialog({
               </div>
             </div>
           )}
+          {tab !== "apple" && jobError && <div className="error-banner" role="alert">{jobError}</div>}
+          {tab !== "apple" && <button className="text-link processing-link" onClick={openJobs}><ListChecks size={15} />查看全部导入与处理任务</button>}
           {tab !== "apple" && jobs.length > 0 && (
             <details className="processing-jobs">
               <summary>服务器处理 · {jobs.length} 项</summary>
@@ -1402,7 +1531,7 @@ function UploadDialog({
                     {f.name}
                     <small>
                       {f.status === "error"
-                        ? "预览处理失败，原件已保存"
+                        ? f.error || "预览处理失败，原件已保存"
                         : f.status === "queued"
                           ? "等待整理"
                           : "正在生成预览"}
@@ -1413,7 +1542,7 @@ function UploadDialog({
                       onClick={() =>
                         void api(`files/${f.hash}/retry`, {}).then(() =>
                           api<Original[]>("jobs").then(setJobs),
-                        )
+                        ).catch(e => setJobError(e instanceof Error ? e.message : String(e)))
                       }
                     >
                       重试
@@ -1483,7 +1612,8 @@ function Viewer({
     [playing, setPlaying] = useState(false),
     [error, setError] = useState(""),
     [imageError, setImageError] = useState(false),
-    [zoom, setZoom] = useState(false);
+    [previewAttempt, setPreviewAttempt] = useState(0),
+    [motionAttempt, setMotionAttempt] = useState(0);
   const video = useRef<HTMLVideoElement>(null);
   const refresh = () =>
     api<Detail>("assets/" + asset.id)
@@ -1494,7 +1624,7 @@ function Viewer({
     setPlaying(false);
     setImageError(false);
     setError("");
-    setZoom(false);
+    setPreviewAttempt(0);
     void refresh();
   }, [asset.id]);
   useEffect(() => {
@@ -1511,6 +1641,14 @@ function Viewer({
   }, [previous, next, modalOpen]);
   const a = detail?.asset || asset,
     primary = detail?.files.find((f) => f.hash === a.primary);
+  const gestures = useImageGestures(a.primary, a.kind !== "video" && !playing && !modalOpen, previous, next);
+  useEffect(() => { setImageError(false); }, [a.primary, a.status]);
+  useEffect(() => {
+    if (!imageError) return;
+    const retry = () => { setPreviewAttempt(n => n + 1); setImageError(false); void refresh(); };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [imageError]);
   const meta = detail?.metadata || {};
   const field = (...names: string[]) => {
     for (const name of names) {
@@ -1526,11 +1664,14 @@ function Viewer({
       await api("assets/" + a.id, p, "PATCH");
       await refresh();
       changed();
+      return true;
     } catch (e) {
       notify(String(e));
+      return false;
     }
   }
   const start = () => {
+    setMotionAttempt(n => n + 1);
     setPlaying(true);
     setTimeout(() => {
       if (video.current) {
@@ -1571,16 +1712,17 @@ function Viewer({
             <IconButton
               title={a.trashedAt ? "恢复" : "移入最近删除"}
               onClick={async () => {
-                await update({ trash: !a.trashedAt });
-                notify(a.trashedAt ? "已恢复" : "已移入最近删除");
-                close();
+                if (await update({ trash: !a.trashedAt })) {
+                  notify(a.trashedAt ? "已恢复" : "已移入最近删除");
+                  close();
+                }
               }}
             >
               {a.trashedAt ? <RefreshCw size={20} /> : <Trash2 size={20} />}
             </IconButton>
           </div>
         </header>
-        <div className={`viewer-stage ${zoom ? "zoomed" : ""}`}>
+        <div className="viewer-stage">
           <button
             className="viewer-prev"
             onClick={previous}
@@ -1588,11 +1730,11 @@ function Viewer({
           >
             <ChevronLeft />
           </button>
-          <div className="media-stage">
+          <div className={`media-stage ${a.kind !== "video" && !playing ? "image-gesture-stage" : ""}`} {...gestures.handlers}>
             {a.kind === "video" ? (
               <video
-                key={a.primary}
-                src={media(a.primary, "play")}
+                key={a.primary + previewAttempt}
+                src={media(a.primary, "play") + (previewAttempt ? `?retry=${previewAttempt}` : "")}
                 controls
                 playsInline
                 poster={media(a.primary)}
@@ -1602,24 +1744,24 @@ function Viewer({
               <>
                 <img
                   key={a.primary}
-                  src={media(a.primary, "preview")}
+                  src={media(a.primary, "preview") + (previewAttempt ? `?retry=${previewAttempt}` : "")}
                   alt={a.name}
-                  style={{ visibility: playing ? "hidden" : "visible" }}
-                  onClick={() => setZoom(!zoom)}
+                  style={{ visibility: playing ? "hidden" : "visible", transform: `translate(${gestures.transform.x}px, ${gestures.transform.y}px) scale(${gestures.transform.scale})`, cursor: gestures.transform.scale > 1 ? "grab" : "zoom-in" }}
+                  draggable={false}
                   onError={() => setImageError(true)}
                 />
                 {a.motion && playing && (
                   <video
                     ref={video}
                     className="live-video"
-                    src={media(a.motion, "play")}
+                    src={media(a.motion, "play") + `?retry=${motionAttempt}`}
                     autoPlay
                     playsInline
                     controls
                     onEnded={() => setPlaying(false)}
                     onError={() => {
                       setPlaying(false);
-                      notify("实况预览正在生成，可从详情下载视频原件");
+                      notify("实况预览加载失败，请重试或下载视频原件");
                     }}
                   />
                 )}
@@ -1628,7 +1770,8 @@ function Viewer({
             {imageError && (
               <div className="viewer-fallback">
                 <ImageIcon size={40} />
-                <p>预览尚未就绪</p>
+                <p>{a.status === "error" ? "预览处理失败" : ["queued", "processing"].includes(a.status) ? "正在生成预览" : "预览加载失败"}</p>
+                <button className="button" onClick={() => { setPreviewAttempt(n => n + 1); setImageError(false); void refresh(); }}>重新加载预览</button>
                 <a className="button" href={media(a.primary, "original")}>
                   下载原件
                 </a>
@@ -1640,6 +1783,7 @@ function Viewer({
           </button>
         </div>
         <footer className="viewer-footer">
+          {gestures.transform.scale > 1 && <button className="live-control" onClick={gestures.reset}>还原大小</button>}
           {a.kind === "live" && (
             <button
               className={`live-control ${playing ? "playing" : ""}`}

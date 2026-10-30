@@ -1,5 +1,5 @@
 import exifr from "exifr";
-import { api, base, localDay } from "./api";
+import { api, Asset, base, localDay } from "./api";
 
 export type UploadItem = {
   id: string;
@@ -11,11 +11,17 @@ export type UploadItem = {
     | "uploading"
     | "done"
     | "duplicate"
+    | "trashed"
     | "skipped"
     | "error";
   progress: number;
   error?: string;
   date?: string;
+  assetId?: string;
+  hash?: string;
+  trashedAt?: string;
+  restoring?: boolean;
+  restoreError?: string;
 };
 export type UploadState = {
   items: UploadItem[];
@@ -35,6 +41,10 @@ type Session = {
   duplicate?: boolean;
   filtered?: boolean;
   chunkSize: number;
+  assetId?: string;
+  trashed?: boolean;
+  trashedAt?: string;
+  missing?: boolean;
 };
 type Directory = FileSystemDirectoryHandle & {
   values(): AsyncIterable<FileSystemHandle>;
@@ -90,9 +100,35 @@ export function resume() {
 }
 export function clearFinished() {
   state.items = state.items.filter(
-    (i) => !["done", "duplicate", "skipped"].includes(i.state),
+    (i) => !["done", "duplicate", "trashed", "skipped"].includes(i.state),
   );
   emit();
+}
+export async function restore(id: string) {
+  const item = state.items.find(item => item.id === id);
+  if (!item?.assetId || item.restoring) return;
+  item.restoring = true;
+  item.restoreError = undefined;
+  emit();
+  try {
+    await locate(id);
+    await api<Asset>(`assets/${item.assetId}`, { trash: false }, "PATCH");
+    item.state = "duplicate";
+    item.trashedAt = undefined;
+    window.dispatchEvent(new Event("aura-library-changed"));
+  } catch (e) {
+    item.restoreError = e instanceof Error ? e.message : String(e);
+  } finally { item.restoring = false; emit(); }
+}
+export async function locate(id: string) {
+  const item = state.items.find(item => item.id === id);
+  if (!item) throw new Error("上传记录已清除");
+  if (item.hash) {
+    const current = await api<Session>(`uploads/${item.hash}`);
+    item.assetId = current.assetId || item.assetId;
+  }
+  if (!item.assetId) throw new Error("服务器尚未建立照片项目，请稍后重试");
+  return item.assetId;
 }
 export function stopWatch() {
   if (timer) clearInterval(timer);
@@ -168,6 +204,7 @@ async function upload(item: UploadItem) {
     item.progress = n * 0.05;
     emit();
   });
+  item.hash = hash;
   let session = await api<Session>("uploads", {
     hash,
     name: item.file.name,
@@ -177,8 +214,11 @@ async function upload(item: UploadItem) {
     from: state.from,
     to: state.to,
   });
+  validateSession(session, item.file.size);
+  item.assetId = session.assetId;
+  item.trashedAt = session.trashedAt;
   if (session.complete) {
-    item.state = session.filtered ? "skipped" : "duplicate";
+    item.state = session.filtered ? "skipped" : session.trashed || session.trashedAt ? "trashed" : "duplicate";
     item.progress = 1;
     emit();
     return;
@@ -206,6 +246,7 @@ async function upload(item: UploadItem) {
       });
       const data = await response.json().catch(() => ({}));
       if (response.status === 409 && typeof data.offset === "number") {
+        if (!Number.isInteger(data.offset) || data.offset < 0 || data.offset > item.file.size) throw new Error("服务器返回了无效的续传位置");
         offset = data.offset;
         continue;
       }
@@ -216,6 +257,7 @@ async function upload(item: UploadItem) {
               ? "请返回门户重新登录"
               : `上传失败 (${response.status})`),
         );
+      if (!Number.isInteger(data.offset) || data.offset <= offset || data.offset > item.file.size) throw new Error("服务器未确认已接收的分片");
       offset = data.offset;
       failures = 0;
       item.progress = 0.05 + (0.95 * offset) / item.file.size;
@@ -224,18 +266,26 @@ async function upload(item: UploadItem) {
       if (++failures > 3) throw e;
       await new Promise((r) => setTimeout(r, 1000 * 2 ** failures));
       session = await api<Session>(`uploads/${hash}`);
+      validateSession(session, item.file.size);
       offset = session.offset;
       if (session.complete) break;
     }
   }
-  const result = await api<{ filtered?: boolean }>(
+  const result = await api<{ filtered?: boolean; assetId?: string; trashed?: boolean; trashedAt?: string }>(
     `uploads/${hash}/complete`,
     {},
   );
-  item.state = result.filtered ? "skipped" : "done";
+  item.assetId = result.assetId || item.assetId;
+  item.trashedAt = result.trashedAt || item.trashedAt;
+  item.state = result.filtered ? "skipped" : result.trashed || item.trashedAt ? "trashed" : "done";
   item.progress = 1;
   emit();
   window.dispatchEvent(new Event("aura-library-changed"));
+}
+function validateSession(session: Session, size: number) {
+  if (typeof session.complete !== "boolean") throw new Error("服务器返回了无效的上传状态");
+  if (session.complete) return;
+  if (!Number.isInteger(session.offset) || session.offset < 0 || session.offset > size || !Number.isInteger(session.chunkSize) || session.chunkSize < 1 || session.chunkSize > 8 * 1024 * 1024) throw new Error("服务器返回了无效的续传参数");
 }
 async function run() {
   if (active || state.paused) return;

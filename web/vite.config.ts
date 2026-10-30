@@ -5,7 +5,8 @@ export default defineConfig({
   base: "/aura/",
   server: {
     proxy: {
-      "/aura/api": "http://127.0.0.1:18087",
+      // Preserve the browser Host for the backend's same-origin write check.
+      "/aura/api": { target: "http://127.0.0.1:18087", changeOrigin: false },
       "/aura/media": "http://127.0.0.1:18087",
       "/aura/healthz": "http://127.0.0.1:18087",
     },

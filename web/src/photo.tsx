@@ -4,6 +4,7 @@ import {
   Image as ImageIcon,
   Layers3,
   Video,
+  RefreshCw,
 } from "lucide-react";
 import { Asset, media } from "./api";
 import { LivePhotoIcon } from "./live-photo-icon";
@@ -20,13 +21,20 @@ export function Photo({
   select?: () => void;
 }) {
   const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [asset.primary, asset.status]);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => setBroken(false), [asset]);
+  useEffect(() => {
+    if (!broken) return;
+    const retry = () => { setAttempt(n => n + 1); setBroken(false); };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [broken]);
   return (
     <div className={`photo ${selected ? "selected" : ""}`}>
       <button className="photo-open" onClick={onClick} aria-label={asset.name}>
         {!broken ? (
           <img
-            src={media(asset.primary)}
+            src={media(asset.primary) + (attempt ? `?retry=${attempt}` : "")}
             alt={asset.name}
             loading="lazy"
             decoding="async"
@@ -36,7 +44,7 @@ export function Photo({
           <div className="photo-missing">
             <ImageIcon />
             <span>
-              {asset.status === "error" ? "预览待处理" : "正在生成预览"}
+              {asset.status === "error" ? "预览处理失败" : ["queued", "processing"].includes(asset.status) ? "正在生成预览" : "预览加载失败"}
             </span>
           </div>
         )}
@@ -59,6 +67,17 @@ export function Photo({
           </span>
         )}
       </button>
+      {broken && (
+        <button
+          className="photo-retry"
+          aria-label="重新加载预览"
+          title="重新加载预览"
+          onClick={() => { setAttempt(n => n + 1); setBroken(false); }}
+        >
+          <RefreshCw size={14} />
+          重试
+        </button>
+      )}
       {select && (
         <button
           className={`select-photo ${selected ? "checked" : ""}`}

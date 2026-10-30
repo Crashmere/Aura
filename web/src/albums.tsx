@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Images, LoaderCircle, Plus, Search, X } from "lucide-react";
+import { Check, Images, LoaderCircle, Plus, RefreshCw, Search, X } from "lucide-react";
 import { Album, Asset, api, media } from "./api";
 import { Photo } from "./photo";
 
@@ -10,25 +10,46 @@ export type AlbumDialogState =
   | { kind: "pick"; album: Album }
   | { kind: "delete"; album: Album };
 
-function AlbumCover({ album }: { album: Album }) {
+function AlbumCover({ album, attempt = 0, failed }: { album: Album; attempt?: number; failed?: (value: boolean) => void }) {
   const [broken, setBroken] = useState(false);
   useEffect(
-    () => setBroken(false),
-    [album.cover?.primary, album.cover?.status],
+    () => { setBroken(false); failed?.(false); },
+    [album, attempt],
   );
+  useEffect(() => {
+    if (!broken) return;
+    const retry = () => { setBroken(false); failed?.(false); };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [broken, failed]);
   return (
     <span className="album-cover">
       {album.cover && !broken ? (
         <img
-          src={media(album.cover.primary)}
+          src={media(album.cover.primary) + (attempt ? `?retry=${attempt}` : "")}
           alt=""
           loading="lazy"
-          onError={() => setBroken(true)}
+          onError={() => { setBroken(true); failed?.(true); }}
         />
       ) : (
         <Images size={32} strokeWidth={1.2} />
       )}
     </span>
+  );
+}
+
+function AlbumCard({ album, open }: { album: Album; open: (album: Album) => void }) {
+  const [broken, setBroken] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  return (
+    <div className="album-card-wrapper">
+      <button className="album-card" onClick={() => open(album)}>
+        <AlbumCover album={album} attempt={attempt} failed={setBroken} />
+        <strong>{album.name}</strong>
+        <small>{album.count.toLocaleString()} 项</small>
+      </button>
+      {broken && <button className="album-cover-retry" title="重新加载封面" aria-label="重新加载封面" onClick={() => setAttempt(n => n + 1)}><RefreshCw size={15} /></button>}
+    </div>
   );
 }
 
@@ -42,15 +63,7 @@ export function AlbumGrid({
   return (
     <div className="album-grid">
       {albums.map((album) => (
-        <button
-          className="album-card"
-          key={album.id}
-          onClick={() => open(album)}
-        >
-          <AlbumCover album={album} />
-          <strong>{album.name}</strong>
-          <small>{album.count.toLocaleString()} 项</small>
-        </button>
+        <AlbumCard key={album.id} album={album} open={open} />
       ))}
     </div>
   );

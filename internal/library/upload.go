@@ -25,6 +25,84 @@ const chunkSize int64 = 8 << 20
 var validHash = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var allowedExtensions = map[string]bool{}
+var errOriginalIntegrity = errors.New("原件完整性异常，需要单独检查，未覆盖现有文件")
+
+func (l *Library) originalPresent(f File) (bool, error) {
+	stat, e := os.Lstat(l.Object(f.Hash))
+	if os.IsNotExist(e) {
+		return false, nil
+	}
+	if e != nil {
+		return false, e
+	}
+	if !stat.Mode().IsRegular() || stat.Size() != f.Size {
+		return false, errOriginalIntegrity
+	}
+	return true, nil
+}
+
+func originalFailure(w http.ResponseWriter, e error) {
+	if errors.Is(e, errOriginalIntegrity) {
+		writeJSON(w, 409, map[string]string{"error": e.Error(), "code": "original_integrity_error"})
+	} else {
+		fail(w, 500, e)
+	}
+}
+
+func (l *Library) incomingOffset(hash string) (int64, error) {
+	stat, e := os.Stat(filepath.Join(l.Root, "incoming", hash))
+	if os.IsNotExist(e) {
+		return 0, nil
+	}
+	if e != nil {
+		return 0, e
+	}
+	return stat.Size(), nil
+}
+
+func (l *Library) fileUploadResult(f File, present bool) (map[string]any, error) {
+	result := map[string]any{"id": f.Hash, "offset": int64(0), "complete": present, "present": present, "missing": !present, "chunkSize": chunkSize}
+	if present {
+		result["offset"] = f.Size
+	}
+	var asset, status, trashed string
+	e := l.DB.QueryRow("SELECT f.asset_id,f.status,COALESCE(a.trashed_at,'') FROM files f LEFT JOIN assets a ON a.id=f.asset_id WHERE f.hash=?", f.Hash).Scan(&asset, &status, &trashed)
+	if e != nil {
+		return nil, e
+	}
+	result["assetId"], result["status"] = asset, status
+	result["trashed"], result["trashedAt"] = trashed != "", trashed
+	return result, nil
+}
+
+func (l *Library) reconcileUpload(f File) error {
+	tx, e := l.DB.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	result, e := tx.Exec("UPDATE uploads SET state='complete' WHERE id=? AND state='uploading' AND json_extract(hints,'$.size')=?", f.Hash, f.Size)
+	if e != nil {
+		return e
+	}
+	changed, e := result.RowsAffected()
+	if e != nil {
+		return e
+	}
+	if changed > 0 {
+		// An interrupted repair may have restored bytes before queuing their processing.
+		if _, e = tx.Exec("UPDATE files SET status='queued',error='' WHERE hash=? AND status='error'", f.Hash); e != nil {
+			return e
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	if changed > 0 {
+		l.Notify()
+	}
+	return nil
+}
 
 func init() {
 	for _, s := range strings.Fields("jpg jpeg heic heif png webp gif tif tiff avif jxl dng cr2 cr3 nef arw raf rw2 orf pef srw mov mp4 m4v avi mkv mts 3gp aae xmp") {
@@ -72,22 +150,40 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "开始日期不能晚于结束日期")
 		return
 	}
-	l.UploadMu.Lock()
-	defer l.UploadMu.Unlock()
+	unlock := l.lockUpload(h.Hash)
+	defer unlock()
 	f, e := l.File(h.Hash)
+	repair := e == nil
 	if e == nil {
 		if f.Size != h.Size {
 			fail(w, 409, "文件长度与已存原件不一致")
 			return
 		}
-		if e = l.remember(h); e != nil {
-			fail(w, 500, e)
+		present, err := l.originalPresent(f)
+		if err != nil {
+			originalFailure(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"id": h.Hash, "offset": h.Size, "complete": true, "duplicate": true, "assetId": f.AssetID, "status": f.Status})
-		return
+		if present {
+			if e = l.remember(h); e != nil {
+				fail(w, 500, e)
+				return
+			}
+			if e = l.reconcileUpload(f); e != nil {
+				fail(w, 500, e)
+				return
+			}
+			result, err := l.fileUploadResult(f, true)
+			if err != nil {
+				fail(w, 500, err)
+				return
+			}
+			result["duplicate"] = true
+			writeJSON(w, 200, result)
+			return
+		}
 	}
-	if !errors.Is(e, sql.ErrNoRows) {
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		fail(w, 500, e)
 		return
 	}
@@ -103,7 +199,7 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 			fail(w, 409, "上传长度冲突")
 			return
 		}
-		if state != "complete" {
+		if state != "complete" || repair {
 			_, e = l.DB.Exec("UPDATE uploads SET state='uploading',hints=? WHERE id=?", marshal(h), h.Hash)
 		}
 	}
@@ -115,14 +211,21 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, e)
 		return
 	}
-	var offset int64
-	if st, e := os.Stat(filepath.Join(l.Root, "incoming", h.Hash)); e == nil {
-		offset = st.Size()
-	} else if !os.IsNotExist(e) {
+	offset, e := l.incomingOffset(h.Hash)
+	if e != nil {
 		fail(w, 500, e)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": h.Hash, "offset": offset, "chunkSize": chunkSize, "complete": false})
+	result := map[string]any{"id": h.Hash, "offset": offset, "chunkSize": chunkSize, "complete": false, "missing": false}
+	if repair {
+		result, e = l.fileUploadResult(f, false)
+		if e != nil {
+			fail(w, 500, e)
+			return
+		}
+		result["offset"] = offset
+	}
+	writeJSON(w, 200, result)
 }
 func (l *Library) uploadState(id string) (Hints, string, error) {
 	var h Hints
@@ -139,17 +242,45 @@ func (l *Library) uploadStatus(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "未找到上传")
 		return
 	}
-	h, state, e := l.uploadState(id)
-	if e != nil {
-		fail(w, 404, "未找到上传")
+	unlock := l.lockUpload(id)
+	defer unlock()
+	if f, e := l.File(id); e == nil {
+		present, err := l.originalPresent(f)
+		if err != nil {
+			originalFailure(w, err)
+			return
+		}
+		result, err := l.fileUploadResult(f, present)
+		if err != nil {
+			fail(w, 500, err)
+			return
+		}
+		if !present {
+			offset, err := l.incomingOffset(id)
+			if err != nil {
+				fail(w, 500, err)
+				return
+			}
+			result["offset"] = offset
+		}
+		writeJSON(w, 200, result)
+		return
+	} else if e != sql.ErrNoRows {
+		fail(w, 500, e)
 		return
 	}
-	var offset int64
-	if st, e := os.Stat(filepath.Join(l.Root, "incoming", id)); e == nil {
-		offset = st.Size()
+	_, state, e := l.uploadState(id)
+	if e != nil {
+		if e == sql.ErrNoRows {
+			fail(w, 404, "未找到上传")
+		} else {
+			fail(w, 500, e)
+		}
+		return
 	}
-	if f, e := l.File(id); e == nil {
-		writeJSON(w, 200, map[string]any{"id": id, "offset": h.Size, "complete": true, "assetId": f.AssetID, "status": f.Status})
+	offset, e := l.incomingOffset(id)
+	if e != nil {
+		fail(w, 500, e)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"id": id, "offset": offset, "complete": state == "filtered", "filtered": state == "filtered", "chunkSize": chunkSize})
@@ -165,8 +296,8 @@ func (l *Library) chunk(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "缺少有效 Upload-Offset")
 		return
 	}
-	l.UploadMu.Lock()
-	defer l.UploadMu.Unlock()
+	unlock := l.lockUpload(id)
+	defer unlock()
 	h, state, e := l.uploadState(id)
 	if e != nil || state != "uploading" {
 		fail(w, 409, "上传已完成或不存在")
@@ -196,6 +327,9 @@ func (l *Library) chunk(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, e)
 		return
 	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(120 * time.Second))
+	defer controller.SetReadDeadline(time.Time{})
 	n, e := io.Copy(f, http.MaxBytesReader(w, r.Body, max))
 	if e != nil {
 		_ = f.Truncate(offset)
@@ -220,47 +354,80 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "未找到上传")
 		return
 	}
-	l.UploadMu.Lock()
-	defer l.UploadMu.Unlock()
-	if f, e := l.File(id); e == nil {
-		writeJSON(w, 200, map[string]any{"complete": true, "assetId": f.AssetID, "status": f.Status})
+	unlock := l.lockUpload(id)
+	defer unlock()
+	existing, fileErr := l.File(id)
+	repair := fileErr == nil
+	if repair {
+		present, e := l.originalPresent(existing)
+		if e != nil {
+			originalFailure(w, e)
+			return
+		}
+		if present {
+			if e = l.reconcileUpload(existing); e != nil {
+				fail(w, 500, e)
+				return
+			}
+			result, e := l.fileUploadResult(existing, true)
+			if e != nil {
+				fail(w, 500, e)
+				return
+			}
+			writeJSON(w, 200, result)
+			return
+		}
+	} else if fileErr != sql.ErrNoRows {
+		fail(w, 500, fileErr)
 		return
 	}
-	h, _, e := l.uploadState(id)
+	h, state, e := l.uploadState(id)
 	if e != nil {
-		fail(w, 404, "未找到上传")
+		if e == sql.ErrNoRows {
+			fail(w, 404, "未找到上传")
+		} else {
+			fail(w, 500, e)
+		}
+		return
+	}
+	if state == "filtered" && !repair {
+		writeJSON(w, 200, map[string]any{"id": id, "complete": true, "filtered": true, "present": false})
 		return
 	}
 	path := filepath.Join(l.Root, "incoming", id)
-	// Recover the atomic rename if the process stopped before committing its database row.
+	// Recover publication if the process stopped before committing its database row.
 	if _, e = os.Stat(path); os.IsNotExist(e) {
 		path = l.Object(id)
 	}
-	f, e := os.Open(path)
+	n, checksum, e := hashUploadFile(path)
 	if e != nil {
-		fail(w, 409, "尚未接收完整文件")
-		return
-	}
-	hasher := sha256.New()
-	n, e := io.Copy(hasher, f)
-	_ = f.Close()
-	if e != nil {
-		fail(w, 500, e)
+		if os.IsNotExist(e) {
+			fail(w, 409, "尚未接收完整文件")
+		} else {
+			fail(w, 500, e)
+		}
 		return
 	}
 	if n != h.Size {
-		fail(w, 409, "文件尚未传完")
+		if path == l.Object(id) {
+			originalFailure(w, errOriginalIntegrity)
+		} else {
+			fail(w, 409, "文件尚未传完")
+		}
 		return
 	}
-	if hex.EncodeToString(hasher.Sum(nil)) != id {
+	if checksum != id {
 		// Discard only this failed temporary stream; no accepted original is replaced.
 		if path != l.Object(id) {
 			_ = os.Remove(path)
+			fail(w, 422, "文件校验失败，请重新上传")
+		} else {
+			originalFailure(w, errOriginalIntegrity)
 		}
-		fail(w, 422, "文件校验失败，请重新上传")
 		return
 	}
-	if h.From != "" || h.To != "" {
+	// A repair restores an already accepted object regardless of new import filters.
+	if !repair && (h.From != "" || h.To != "") {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		data, err := command(ctx, "exiftool", "-j", "-G1", "-n", "-api", "QuickTimeUTC=1", path)
 		cancel()
@@ -288,19 +455,9 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if e = os.MkdirAll(filepath.Dir(l.Object(id)), 0700); e != nil {
-		fail(w, 500, e)
+	if e = l.publishUploadObject(path, id, h.Size); e != nil {
+		originalFailure(w, e)
 		return
-	}
-	if path != l.Object(id) {
-		if e = os.Rename(path, l.Object(id)); e != nil {
-			fail(w, 500, e)
-			return
-		}
-		if d, e := os.Open(filepath.Dir(l.Object(id))); e == nil {
-			_ = d.Sync()
-			d.Close()
-		}
 	}
 	tx, e := l.DB.Begin()
 	if e != nil {
@@ -308,7 +465,12 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, e = tx.Exec("INSERT INTO files(hash,name,size,hints,created_at) VALUES(?,?,?,?,?)", id, h.Name, h.Size, marshal(h), now()); e == nil {
+	if repair {
+		_, e = tx.Exec("UPDATE files SET status='queued',error='' WHERE hash=?", id)
+	} else {
+		_, e = tx.Exec("INSERT INTO files(hash,name,size,hints,created_at) VALUES(?,?,?,?,?)", id, h.Name, h.Size, marshal(h), now())
+	}
+	if e == nil {
 		_, e = tx.Exec("UPDATE uploads SET state='complete' WHERE id=?", id)
 	}
 	if e == nil {
@@ -318,6 +480,79 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, e)
 		return
 	}
+	file, e := l.File(id)
+	if e != nil {
+		fail(w, 500, e)
+		return
+	}
+	result, e := l.fileUploadResult(file, true)
+	if e != nil {
+		fail(w, 500, e)
+		return
+	}
 	l.Notify()
-	writeJSON(w, 202, map[string]any{"complete": true, "status": "queued"})
+	writeJSON(w, 202, result)
+}
+
+func hashUploadFile(path string) (int64, string, error) {
+	file, e := os.Open(path)
+	if e != nil {
+		return 0, "", e
+	}
+	defer file.Close()
+	hasher := sha256.New()
+	n, e := io.Copy(hasher, file)
+	return n, hex.EncodeToString(hasher.Sum(nil)), e
+}
+
+func (l *Library) publishUploadObject(path, hash string, size int64) error {
+	object := l.Object(hash)
+	if e := os.MkdirAll(filepath.Dir(object), 0700); e != nil {
+		return e
+	}
+	if path != object {
+		// Linking publishes atomically without replacing any existing original.
+		if e := os.Link(path, object); e != nil {
+			if !os.IsExist(e) {
+				return e
+			}
+			present, e := l.originalPresent(File{Hash: hash, Size: size})
+			if e != nil {
+				return e
+			}
+			if !present {
+				return os.ErrNotExist
+			}
+			n, checksum, e := hashUploadFile(object)
+			if e != nil {
+				return e
+			}
+			if n != size || checksum != hash {
+				return errOriginalIntegrity
+			}
+		}
+	} else {
+		present, e := l.originalPresent(File{Hash: hash, Size: size})
+		if e != nil {
+			return e
+		}
+		if !present {
+			return os.ErrNotExist
+		}
+	}
+	for _, dir := range []string{filepath.Dir(object), filepath.Join(l.Root, "assets")} {
+		d, e := os.Open(dir)
+		if e != nil {
+			return e
+		}
+		e = d.Sync()
+		d.Close()
+		if e != nil {
+			return e
+		}
+	}
+	if path != object {
+		return os.Remove(path)
+	}
+	return nil
 }

@@ -21,7 +21,37 @@ type Library struct {
 	DB       *sql.DB
 	Root     string
 	UploadMu sync.Mutex
+	uploads  map[string]*uploadLock
 	Wake     chan struct{}
+}
+
+type uploadLock struct {
+	mu    sync.Mutex
+	users int
+}
+
+func (l *Library) lockUpload(hash string) func() {
+	l.UploadMu.Lock()
+	if l.uploads == nil {
+		l.uploads = map[string]*uploadLock{}
+	}
+	lock := l.uploads[hash]
+	if lock == nil {
+		lock = &uploadLock{}
+		l.uploads[hash] = lock
+	}
+	lock.users++
+	l.UploadMu.Unlock()
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		l.UploadMu.Lock()
+		lock.users--
+		if lock.users == 0 {
+			delete(l.uploads, hash)
+		}
+		l.UploadMu.Unlock()
+	}
 }
 
 type Hints struct {
@@ -232,7 +262,14 @@ func mergeTx(tx *sql.Tx, keep, drop, reason string) error {
 }
 func refreshTx(tx *sql.Tx, id string) error {
 	var primary, motion, date, mime string
-	e := tx.QueryRow(`SELECT hash,captured_at,mime FROM files WHERE asset_id=? ORDER BY CASE WHEN mime LIKE 'image/%' THEN 0 WHEN mime LIKE 'video/%' THEN 1 ELSE 2 END,score DESC,hash LIMIT 1`, id).Scan(&primary, &date, &mime)
+	// Preferences follow original hashes when groups are merged or split.
+	e := tx.QueryRow(`SELECT f.hash,f.captured_at,f.mime FROM decisions d
+ JOIN files f ON f.hash=json_extract(d.detail,'$.hash')
+ WHERE d.action='primary' AND f.asset_id=? AND f.mime LIKE 'image/%'
+ ORDER BY d.created_at DESC,d.id DESC LIMIT 1`, id).Scan(&primary, &date, &mime)
+	if e == sql.ErrNoRows {
+		e = tx.QueryRow(`SELECT hash,captured_at,mime FROM files WHERE asset_id=? ORDER BY CASE WHEN mime LIKE 'image/%' THEN 0 WHEN mime LIKE 'video/%' THEN 1 ELSE 2 END,score DESC,hash LIMIT 1`, id).Scan(&primary, &date, &mime)
+	}
 	if e != nil {
 		return e
 	}

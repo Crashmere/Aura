@@ -54,6 +54,32 @@ export type Info = {
   errors: number;
   grouped: number;
 };
+export type Page<T> = { items: T[]; next: string };
+export type JobStatus = "all" | "queued" | "processing" | "error" | "ready";
+export type Job = {
+  hash: string;
+  name: string;
+  mime: string;
+  size: number;
+  assetId: string;
+  status: Exclude<JobStatus, "all">;
+  error?: string;
+  createdAt: string;
+};
+export type JobPage = Page<Job> & {
+  counts: Record<JobStatus, number>;
+};
+export type PendingUpload = {
+  id: string;
+  name: string;
+  size: number;
+  offset: number;
+  createdAt: string;
+  state: string;
+  missing?: boolean;
+};
+export type SimilarPair = { left: string; right: string; distance: number };
+export type Timeline = { months: { month: string; count: number }[] };
 export const base = "/aura/";
 export async function api<T>(
   path: string,

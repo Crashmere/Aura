@@ -7,7 +7,7 @@ build_number=${AURA_CLIENT_BUILD:-1}
 bundle=apple/build/Aura.app
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" apple/build/Aura.iconset
 for architecture in arm64 x86_64; do
-  xcrun swiftc -swift-version 5 -parse-as-library -O -target "${architecture}-apple-macosx14.0" apple/AuraApp.swift -o "apple/build/Aura-$architecture" -framework SwiftUI -framework Photos -framework WebKit -framework CryptoKit
+  xcrun swiftc -swift-version 5 -parse-as-library -O -target "${architecture}-apple-macosx14.0" apple/AuraApp.swift -o "apple/build/Aura-$architecture" -framework SwiftUI -framework Photos -framework WebKit -framework CryptoKit -framework Network -framework ServiceManagement
 done
 lipo -create apple/build/Aura-arm64 apple/build/Aura-x86_64 -output "$bundle/Contents/MacOS/Aura"
 cp apple/Info.plist "$bundle/Contents/Info.plist"

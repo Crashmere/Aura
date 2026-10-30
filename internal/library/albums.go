@@ -247,3 +247,84 @@ func (l *Library) changeAlbumAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	l.writeAlbum(w, id, 200)
 }
+
+func (l *Library) importAlbum(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		SourceKey string   `json:"sourceKey"`
+		Name      string   `json:"name"`
+		Assets    []string `json:"assets"`
+	}
+	if !decode(w, r, &p) {
+		return
+	}
+	p.SourceKey = strings.TrimSpace(p.SourceKey)
+	name, valid := albumName(p.Name)
+	if p.SourceKey == "" || len(p.SourceKey) > 1024 || !valid || len(p.Assets) > 1000 {
+		fail(w, 400, "相片集来源或名称无效，每次最多添加 1000 项")
+		return
+	}
+	tx, e := l.DB.Begin()
+	if e != nil {
+		fail(w, 500, e)
+		return
+	}
+	defer tx.Rollback()
+	var id string
+	e = tx.QueryRow(`SELECT json_extract(detail,'$.albumId') FROM decisions
+ WHERE action='album-import' AND json_extract(detail,'$.sourceKey')=? ORDER BY created_at DESC,id DESC LIMIT 1`, p.SourceKey).Scan(&id)
+	created := e == sql.ErrNoRows
+	if e != nil && !created {
+		fail(w, 500, e)
+		return
+	}
+	if created {
+		id = ID()
+		date := now()
+		if _, e = tx.Exec("INSERT INTO albums(id,name,created_at,updated_at) VALUES(?,?,?,?)", id, name, date, date); e != nil {
+			fail(w, 500, e)
+			return
+		}
+		if _, e = tx.Exec("INSERT INTO decisions(id,action,detail,created_at) VALUES(?,?,?,?)", ID(), "album-import", marshal(map[string]string{"sourceKey": p.SourceKey, "albumId": id}), date); e != nil {
+			fail(w, 500, e)
+			return
+		}
+	} else {
+		var exists bool
+		if e = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM albums WHERE id=?)", id).Scan(&exists); e != nil {
+			fail(w, 500, e)
+			return
+		}
+		if !exists {
+			writeJSON(w, 409, map[string]string{"error": "导入的相片集已在 Aura 删除，不会自动重建", "code": "imported_album_deleted"})
+			return
+		}
+	}
+	var before, after int
+	if e = tx.QueryRow("SELECT count(*) FROM album_assets WHERE album_id=?", id).Scan(&before); e != nil {
+		fail(w, 500, e)
+		return
+	}
+	if e = addAlbumAssets(tx, id, p.Assets); e != nil {
+		albumWriteError(w, e)
+		return
+	}
+	if e = tx.QueryRow("SELECT count(*) FROM album_assets WHERE album_id=?", id).Scan(&after); e != nil {
+		fail(w, 500, e)
+		return
+	}
+	if after != before {
+		if _, e = tx.Exec("UPDATE albums SET updated_at=? WHERE id=?", now(), id); e != nil {
+			fail(w, 500, e)
+			return
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		fail(w, 500, e)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	l.writeAlbum(w, id, status)
+}

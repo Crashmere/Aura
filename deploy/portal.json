@@ -20,7 +20,7 @@
       "id": "data",
       "name": "业务数据",
       "path": "/opt/aura/data",
-      "purpose": "元数据、相片集及照片关联、分片状态、资源分组与导入来源。",
+      "purpose": "元数据、相片集及照片关联、分片和处理状态、资源分组与导入来源；保留主版本选择、相似忽略及 Apple 相册映射决策。",
       "kind": "data",
       "browse": true,
       "cleanup": false
@@ -47,7 +47,7 @@
       "id": "incoming",
       "name": "上传暂存",
       "path": "/opt/aura/data/incoming",
-      "purpose": "已确认写入但尚未提交的持久化分片；nas 手工全量备份和升级冷副本完整收录。恢复旧状态后由 agent 检查客户端回执与服务端数据是否对齐。",
+      "purpose": "已确认写入但尚未提交的持久化分片；nas 手工全量备份和升级冷副本完整收录。恢复旧状态后用 Apple 客户端核对回执，仅补传确认缺失且不在最近删除中的原件。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -116,12 +116,17 @@
     {
       "method": "GET",
       "path": "/api/info",
-      "description": "照片库数量、原件体积与处理状态"
+      "description": "版本、能力声明、照片库数量、原件体积与处理状态"
     },
     {
       "method": "GET",
       "path": "/api/assets",
       "description": "按相片集、类型、拍摄日期、关键词查询照片；游标分页"
+    },
+    {
+      "method": "GET",
+      "path": "/api/timeline",
+      "description": "与照片列表筛选一致的拍摄月份及项目数量"
     },
     {
       "method": "GET",
@@ -132,6 +137,11 @@
       "method": "POST",
       "path": "/api/albums",
       "description": "新建相片集并原子添加所选照片"
+    },
+    {
+      "method": "POST",
+      "path": "/api/albums/import",
+      "description": "Apple 相册来源映射与增量添加；保留 Aura 命名和删除决定"
     },
     {
       "method": "GET",
@@ -166,7 +176,7 @@
     {
       "method": "PATCH",
       "path": "/api/assets/{id}",
-      "description": "收藏、最近删除、恢复与主版本选择"
+      "description": "收藏、最近删除、恢复与持久主版本选择"
     },
     {
       "method": "POST",
@@ -186,12 +196,22 @@
     {
       "method": "GET",
       "path": "/api/similar",
-      "description": "感知哈希相似候选，仅供核对"
+      "description": "分页感知哈希相似候选，排除已忽略项目；仅供人工核对"
+    },
+    {
+      "method": "POST",
+      "path": "/api/similar/ignore",
+      "description": "持久忽略指定相似候选，不合并或删除原件"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/similar/ignore",
+      "description": "撤销指定相似候选的忽略决定"
     },
     {
       "method": "GET",
       "path": "/api/jobs",
-      "description": "待处理与失败媒体任务"
+      "description": "分页持久处理历史、状态数量与失败原因"
     },
     {
       "method": "POST",
@@ -200,13 +220,23 @@
     },
     {
       "method": "POST",
+      "path": "/api/files/retry",
+      "description": "原子批量重试失败媒体处理，保留原件"
+    },
+    {
+      "method": "GET",
       "path": "/api/uploads",
-      "description": "按 SHA-256 准备或恢复上传；重复检查"
+      "description": "分页未完成上传、已确认偏移与缺失原件补传状态"
+    },
+    {
+      "method": "POST",
+      "path": "/api/uploads",
+      "description": "按 SHA-256 准备或恢复上传；检查原件存在，保留最近删除状态"
     },
     {
       "method": "GET",
       "path": "/api/uploads/{id}",
-      "description": "已接收偏移与提交状态"
+      "description": "已接收偏移、提交及原件存在状态、当前项目与最近删除状态"
     },
     {
       "method": "PUT",

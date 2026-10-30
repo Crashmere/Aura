@@ -252,7 +252,7 @@ func (l *Library) process(parent context.Context, f File) error {
 				return e
 			}
 		}
-		_, videoErr := command(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-i", input, "-map", "0:v:0", "-map", "0:a?", "-vf", "scale=1920:1920:force_original_aspect_ratio=decrease:force_divisible_by=2", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-threads", "2", "-y", filepath.Join(work, "play.mp4"))
+		_, videoErr := command(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-i", input, "-map", "0:v:0", "-map", "0:a?", "-vf", "scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-threads", "2", "-y", filepath.Join(work, "play.mp4"))
 		if videoErr == nil {
 			if e = os.Rename(filepath.Join(work, "play.mp4"), l.Derived(f.Hash, "-play.mp4")); e != nil {
 				return e

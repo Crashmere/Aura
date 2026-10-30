@@ -2,18 +2,84 @@ import SwiftUI
 import Photos
 import WebKit
 import CryptoKit
+import Network
 #if os(iOS)
 import BackgroundTasks
+#else
+import ServiceManagement
 #endif
 
 struct TransferError: LocalizedError {
     let message: String
+    var statusCode: Int? = nil
+    var code: String? = nil
     var errorDescription: String? { message }
+}
+
+enum ImportStage: String, Codable {
+    case export = "iCloud / 系统原件"
+    case upload = "上传原件"
+    case processing = "服务器处理"
+    case verification = "核对原件"
+    case album = "导入相册"
+    case settings = "客户端设置"
+}
+
+struct ImportIssue: Codable, Identifiable {
+    var id: String
+    var resourceKey: String
+    var assetID: String?
+    var name: String
+    var stage: ImportStage
+    var message: String
+    var occurredAt: String
+}
+
+struct Receipt: Codable {
+    var key: String
+    var hash: String
+    var localAssetID: String?
+    var serverAssetID: String?
+    var status: String?
+    var trashed: Bool?
+    var present: Bool?
+    var verifiedAt: String?
+    var invalidated: Bool?
+
+    var sourceAsset: String? {
+        // Legacy receipts carry the PhotoKit asset ID inside the composite key.
+        localAssetID ?? key.split(separator: "|", maxSplits: 4).dropFirst().first.map(String.init)
+    }
+}
+
+struct ClientState: Codable {
+    var origin: String
+    var matched: Int
+    var completed: Int
+    var processing: Int
+    var uploaded: Int
+    var duplicates: Int
+    var errors: [ImportIssue]
+    var lastScan: String
+    var lastVerified: String
+    var verificationStatus: String
+    var albumSignatures: [String: String]
+    var blockedAlbums: [String]
+}
+
+struct AssetSummary {
+    var keys: [String]
+    var complete: Bool
+    var processing: Bool
 }
 
 @MainActor
 final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver {
-    @Published var server = UserDefaults.standard.string(forKey: "server") ?? ""
+    @Published var server = UserDefaults.standard.string(forKey: "server") ?? "" {
+        didSet {
+            if oldValue != server { connected = false; originalPresenceAvailable = false; albumImportAvailable = false }
+        }
+    }
     @Published var start = UserDefaults.standard.object(forKey: "start") as? Date ?? Calendar.current.date(byAdding: .month, value: -1, to: Date())!
     @Published var end = UserDefaults.standard.object(forKey: "end") as? Date ?? Date()
     @Published var openEnd = UserDefaults.standard.object(forKey: "openEnd") as? Bool ?? true
@@ -25,17 +91,81 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     @Published var current = ""
     @Published var status = "连接照片库"
     @Published var matched = 0
+    @Published var completedAssets = 0
+    @Published var processingAssets = 0
     @Published var uploaded = 0
     @Published var duplicates = 0
-    @Published var errors: [String] = []
+    @Published var errors: [ImportIssue] = []
     @Published var limited = false
+    @Published var verifying = false
+    @Published var verificationProgress: Double = 0
+    @Published var verificationStatus = "尚未核对服务器原件"
+    @Published var lastVerified = ""
+    @Published var lastScan = ""
+    @Published var originalPresenceAvailable = false
+    @Published var albumImportAvailable = false
+    @Published var wifiOnly = UserDefaults.standard.object(forKey: "wifiOnly") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(wifiOnly, forKey: "wifiOnly"); policyChanged() }
+    }
+    @Published var chargingOnly = UserDefaults.standard.bool(forKey: "chargingOnly") {
+        didSet { UserDefaults.standard.set(chargingOnly, forKey: "chargingOnly"); policyChanged() }
+    }
+    @Published var importAlbums = UserDefaults.standard.bool(forKey: "importAlbums") {
+        didSet {
+            UserDefaults.standard.set(importAlbums, forKey: "importAlbums")
+            albumsDirty = true
+            rescan()
+        }
+    }
+    #if os(macOS)
+    @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published var loginItemStatus = SMAppService.mainApp.status == .requiresApproval ? "请在系统设置中批准 Aura 登录项" : ""
+    #endif
     let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
     private var timer: Timer?
     private var scanTask: Task<Void, Never>?
-    private var receipts = Set<String>()
+    private var verificationTask: Task<Void, Never>?
+    private var startupTask: Task<Void, Never>?
+    private var receipts: [String: Receipt] = [:]
+    private var receiptKeysByAsset: [String: Set<String>] = [:]
+    private var receiptKeysByHash: [String: Set<String>] = [:]
+    private var receiptsDirty = false
+    private var fetchedAssets: PHFetchResult<PHAsset>?
+    private var activeAssetIDs = Set<String>()
+    private var summaries: [String: AssetSummary] = [:]
+    private var pendingAssetIDs = Set<String>()
+    private var needsFullScan = true
+    private var scanRequested = false
+    private var albumsDirty = true
+    private var albumSignatures: [String: String] = [:]
+    private var blockedAlbums = Set<String>()
+    private var processingCursor = 0
+    private var lastStateWrite = Date.distantPast
+    private var activeExport: ResourceExport?
+    private var networkKnown = false
+    private var networkAvailable = false
+    private var nonCellularNetwork = false
+    private let networkMonitor = NWPathMonitor()
+    #if os(iOS)
+    private var charging = false
+    #endif
     private let sourceID: String
     private let cache: URL
     private var receiptURL: URL { cache.appendingPathComponent("receipts.jsonl") }
+    private var stateURL: URL { cache.appendingPathComponent("client-state.json") }
+    private var clock: String { ISO8601DateFormatter().string(from: Date()) }
+    var remainingAssets: Int { max(0, matched - completedAssets) }
+    var summaryIsCurrent: Bool { fetchedAssets != nil }
+    var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0" }
+    var uploadPauseReason: String? {
+        if !networkKnown { return "正在检查网络" }
+        if !networkAvailable { return "等待网络连接" }
+        if wifiOnly && !nonCellularNetwork { return "等待 Wi-Fi 或有线网络" }
+        #if os(iOS)
+        if chargingOnly && !charging { return "等待设备充电" }
+        #endif
+        return nil
+    }
     var origin: URL? {
         guard var u = URLComponents(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
               let host = u.host, !host.isEmpty, u.scheme == "https" || (u.scheme == "http" && ["localhost", "127.0.0.1"].contains(host)) else { return nil }
@@ -52,42 +182,82 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         BackgroundTransfer.shared.reconnect()
         if let text = try? String(contentsOf: receiptURL, encoding: .utf8) {
             for line in text.split(separator: "\n") {
-                if let data = line.data(using: .utf8), let row = try? JSONSerialization.jsonObject(with: data) as? [String: String], let key = row["key"] { receipts.insert(key) }
+                if let data = line.data(using: .utf8), let row = try? JSONDecoder().decode(Receipt.self, from: data) {
+                    if row.invalidated == true { receipts.removeValue(forKey: row.key) }
+                    else { receipts[row.key] = row }
+                }
             }
         }
+        for row in receipts.values {
+            if let id = row.sourceAsset { receiptKeysByAsset[id, default: []].insert(row.key) }
+            receiptKeysByHash[row.hash, default: []].insert(row.key)
+        }
+        loadState()
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let available = path.status == .satisfied
+            let local = !path.usesInterfaceType(.cellular) && (path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet) || path.usesInterfaceType(.loopback))
+            Task { @MainActor in
+                guard let self else { return }
+                self.networkKnown = true; self.networkAvailable = available; self.nonCellularNetwork = local
+                self.policyChanged()
+            }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "app.aura.photos.network"))
         PHPhotoLibrary.shared().register(self)
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in Task { @MainActor in self?.rescan() } }
         #if os(iOS)
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(self, selector: #selector(batteryChanged), name: UIDevice.batteryStateDidChangeNotification, object: nil)
+        batteryChanged()
         BGTaskScheduler.shared.register(forTaskWithIdentifier: "app.aura.photos.refresh", using: nil) { [weak self] task in
             Task { @MainActor in
                 guard let self, let task = task as? BGProcessingTask else { task.setTaskCompleted(success: false); return }
-                task.expirationHandler = { Task { @MainActor in self.scanTask?.cancel() } }
-                await self.restoreAuthorization()
-                if self.connected && UserDefaults.standard.bool(forKey: "continuous") {
-                    self.running = true
-                    self.scanTask = Task { await self.scan() }
-                    await self.scanTask?.value
-                }
-                self.scheduleBackground()
-                task.setTaskCompleted(success: true)
+                await self.runBackground(task)
             }
         }
         #endif
-        Task { await restoreAuthorization() }
+        startupTask = Task { await cleanAbandonedOriginals() }
+        Task { await restoreAuthorization(resume: Self.isForeground) }
     }
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task { @MainActor [weak self] in self?.rescan() }
+        Task { @MainActor [weak self] in self?.libraryChanged(changeInstance) }
     }
-    func restoreAuthorization() async {
+    private func libraryChanged(_ change: PHChange) {
+        if let fetchedAssets, let detail = change.changeDetails(for: fetchedAssets) {
+            self.fetchedAssets = detail.fetchResultAfterChanges
+            if detail.hasIncrementalChanges {
+                for asset in detail.insertedObjects + detail.changedObjects { pendingAssetIDs.insert(asset.localIdentifier) }
+                for asset in detail.removedObjects { pendingAssetIDs.remove(asset.localIdentifier); activeAssetIDs.remove(asset.localIdentifier) }
+                activeAssetIDs = Set((0..<detail.fetchResultAfterChanges.count).map { detail.fetchResultAfterChanges.object(at: $0).localIdentifier })
+                recountSummaries()
+            } else { needsFullScan = true }
+        } else { needsFullScan = true }
+        albumsDirty = true
+        rescan()
+    }
+    static var isForeground: Bool {
+        #if os(iOS)
+        return UIApplication.shared.applicationState == .active
+        #else
+        return true
+        #endif
+    }
+    func restoreAuthorization(resume: Bool = true) async {
+        await startupTask?.value
         guard origin != nil else { return }
         await copyCookies()
         do {
-            _ = try await json("info"); connected = true; status = "已连接 Aura"
+            let info = try await json("info")
+            let capabilities = info["capabilities"] as? [String: Any] ?? [:]
+            originalPresenceAvailable = capabilities["originalPresence"] as? Bool == true
+            albumImportAvailable = capabilities["albumImport"] as? Bool == true
+            connected = true; status = "已连接 Aura"
             let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-            if UserDefaults.standard.bool(forKey: "continuous") && (access == .authorized || access == .limited) && !running {
+            limited = access == .limited
+            if resume && UserDefaults.standard.bool(forKey: "continuous") && (access == .authorized || access == .limited) && !running {
                 running = true; rescan()
             }
-        } catch { connected = false }
+        } catch { connected = false; status = error.localizedDescription }
     }
     func copyCookies() async {
         let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
@@ -99,6 +269,8 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         guard let origin else { status = "请输入 HTTPS 服务器地址"; return }
         running = false; connected = false
         UserDefaults.standard.set(origin.absoluteString, forKey: "server")
+        summaries = [:]; fetchedAssets = nil; needsFullScan = true
+        loadState()
         webView.load(URLRequest(url: origin.appendingPathComponent("portal/login")))
         showLogin = true
     }
@@ -112,48 +284,183 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         UserDefaults.standard.set(start, forKey: "start")
         UserDefaults.standard.set(end, forKey: "end")
         UserDefaults.standard.set(openEnd, forKey: "openEnd")
-        UserDefaults.standard.set(true, forKey: "continuous")
-        scanTask = Task {
+        guard scanTask == nil && !verifying else { return }
+        scanTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishScanTask() }
             let access = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-            guard access == .authorized || access == .limited else { status = "请在系统设置中允许 Aura 访问照片"; return }
-            limited = access == .limited
-            running = true
+            guard access == .authorized || access == .limited else { self.status = "请在系统设置中允许 Aura 访问照片"; return }
+            self.limited = access == .limited
+            self.running = true
+            self.needsFullScan = true
+            UserDefaults.standard.set(true, forKey: "continuous")
             #if os(iOS)
-            scheduleBackground()
+            self.scheduleBackground()
             #endif
-            await scan()
+            await self.scan()
         }
     }
     func pauseUpload() {
         running = false
         UserDefaults.standard.set(false, forKey: "continuous")
+        activeExport?.cancel()
         status = busy ? "当前分片完成后暂停" : "已暂停"
         #if os(iOS)
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: "app.aura.photos.refresh")
         #endif
     }
     func rescan() {
-        guard running && !busy else { return }
-        scanTask = Task { await scan() }
+        guard running && !verifying else { return }
+        guard scanTask == nil else { scanRequested = true; return }
+        scanTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishScanTask() }
+            await self.scan()
+        }
+    }
+    private func finishScanTask() {
+        scanTask = nil
+        if scanRequested && running && Self.isForeground {
+            scanRequested = false
+            rescan()
+        }
+    }
+    private func policyChanged() {
+        if let reason = uploadPauseReason {
+            activeExport?.cancel()
+            if running { status = reason }
+        } else if running { rescan() }
+        #if os(iOS)
+        scheduleBackground()
+        #endif
     }
     #if os(iOS)
+    @objc private func batteryChanged() {
+        let state = UIDevice.current.batteryState
+        charging = state == .charging || state == .full
+        policyChanged()
+    }
+    private func runBackground(_ background: BGProcessingTask) async {
+        let operation = Task { @MainActor in
+            await startupTask?.value
+            guard !Task.isCancelled else { return false }
+            await restoreAuthorization(resume: false)
+            guard !Task.isCancelled && connected && UserDefaults.standard.bool(forKey: "continuous") else { return false }
+            let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            guard access == .authorized || access == .limited else { return false }
+            limited = access == .limited
+            running = true
+            if scanTask == nil { rescan() }
+            guard let ownedTask = scanTask else { return false }
+            // Await and expire the same scan, including one already active at wake-up.
+            return await withTaskCancellationHandler(operation: {
+                await ownedTask.value
+                return !Task.isCancelled && !ownedTask.isCancelled && connected && uploadPauseReason == nil && pendingAssetIDs.isEmpty
+            }, onCancel: { ownedTask.cancel() })
+        }
+        background.expirationHandler = { operation.cancel() }
+        let success = await operation.value
+        background.expirationHandler = nil
+        scheduleBackground()
+        background.setTaskCompleted(success: success)
+    }
     func scheduleBackground() {
         guard UserDefaults.standard.bool(forKey: "continuous") else { return }
         let request = BGProcessingTaskRequest(identifier: "app.aura.photos.refresh")
         request.requiresNetworkConnectivity = true
-        request.requiresExternalPower = false
+        request.requiresExternalPower = chargingOnly
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         try? BGTaskScheduler.shared.submit(request)
     }
     #endif
     func scan() async {
-        guard running && !busy && connected else { return }
-        busy = true; errors = []
+        await startupTask?.value
+        guard running && !busy && !verifying && connected && !Task.isCancelled else { return }
+        guard uploadPauseReason == nil else { status = uploadPauseReason!; return }
+        busy = true
         #if os(macOS)
         let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Uploading original photo resources")
         defer { ProcessInfo.processInfo.endActivity(activity) }
         #endif
-        defer { busy = false; current = ""; progress = 0; status = running ? (errors.isEmpty ? "持续监测中" : "部分文件待重试") : "已暂停" }
+        defer {
+            busy = false; current = ""; progress = 0
+            status = running ? (uploadPauseReason ?? (errors.isEmpty ? "持续监测中" : "有待处理项目")) : "已暂停"
+            try? compactReceipts()
+            saveState(force: true)
+        }
+        let options = fetchOptions()
+        let assets: PHFetchResult<PHAsset>
+        if needsFullScan || fetchedAssets == nil {
+            let all = PHAsset.fetchAssets(with: options)
+            fetchedAssets = all
+            activeAssetIDs = Set((0..<all.count).map { all.object(at: $0).localIdentifier })
+            pendingAssetIDs.formUnion(activeAssetIDs)
+            needsFullScan = false
+            summaries = [:]
+            recountSummaries()
+            assets = all
+        } else {
+            assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(pendingAssetIDs), options: options)
+        }
+        for index in 0..<assets.count {
+            if index.isMultiple(of: 64) { await Task.yield() }
+            guard running && !Task.isCancelled && uploadPauseReason == nil else { break }
+            let asset = assets.object(at: index)
+            pendingAssetIDs.remove(asset.localIdentifier)
+            let resources = PHAssetResource.assetResources(for: asset)
+            let keys = resources.map { receiptKey(asset: asset, resource: $0) }
+            for resource in resources {
+                guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
+                let key = receiptKey(asset: asset, resource: resource)
+                if receipts[key] != nil { continue }
+                var stage = ImportStage.export
+                do {
+                    current = resource.originalFilename
+                    status = "读取原件 · \(index + 1) / \(assets.count)"
+                    progress = 0
+                    let file = cache.appendingPathComponent(UUID().uuidString + "-" + resource.originalFilename)
+                    defer { try? FileManager.default.removeItem(at: file) }
+                    try await export(resource, to: file)
+                    guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
+                    status = "校验原件"
+                    let checksumTask = Task.detached { try Self.checksum(file) }
+                    let checksum = try await withTaskCancellationHandler(operation: { try await checksumTask.value }, onCancel: { checksumTask.cancel() })
+                    guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
+                    let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
+                    var hints: [String: Any] = ["hash": checksum, "name": resource.originalFilename, "size": size,
+                        "sourceKey": "photokit:\(sourceID):\(asset.localIdentifier)", "resourceType": Self.resourceName(resource.type), "favorite": asset.isFavorite]
+                    if let date = asset.creationDate { hints["capturedAt"] = ISO8601DateFormatter().string(from: date) }
+                    if let date = asset.modificationDate { hints["modifiedAt"] = ISO8601DateFormatter().string(from: date) }
+                    if let location = asset.location { hints["latitude"] = location.coordinate.latitude; hints["longitude"] = location.coordinate.longitude }
+                    stage = .upload
+                    let (duplicate, result) = try await transfer(file: file, hints: hints)
+                    if duplicate { duplicates += 1 } else { uploaded += 1 }
+                    let row = Receipt(key: key, hash: checksum, localAssetID: asset.localIdentifier,
+                        serverAssetID: result["assetId"] as? String, status: result["status"] as? String ?? "queued",
+                        trashed: result["trashed"] as? Bool, present: true)
+                    try remember(row)
+                    removeIssues(resourceKey: key)
+                    removeIssues(resourceKey: "missing:" + checksum)
+                    if row.status == "error" {
+                        recordIssue(key: key, assetID: asset.localIdentifier, name: resource.originalFilename, stage: .processing,
+                            error: TransferError(message: result["error"] as? String ?? "原件已保存，但服务器处理失败，请在照片库中重试处理"))
+                    }
+                } catch {
+                    pendingAssetIDs.insert(asset.localIdentifier)
+                    if Task.isCancelled || !running || uploadPauseReason != nil { break }
+                    recordIssue(key: key, assetID: asset.localIdentifier, name: resource.originalFilename, stage: stage, error: error)
+                }
+            }
+            updateSummary(assetID: asset.localIdentifier, keys: keys)
+            saveState()
+            if !connected { break }
+        }
+        guard running && !Task.isCancelled && uploadPauseReason == nil && connected else { return }
+        await refreshProcessing()
+        if importAlbums && albumsDirty { await syncAlbums(options: options) }
+        lastScan = clock
+    }
+    private func fetchOptions() -> PHFetchOptions {
         let options = PHFetchOptions()
         let begin = Calendar.current.startOfDay(for: start)
         if openEnd { options.predicate = NSPredicate(format: "creationDate >= %@", begin as NSDate) }
@@ -162,56 +469,45 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             options.predicate = NSPredicate(format: "creationDate >= %@ AND creationDate < %@", begin as NSDate, finish as NSDate)
         }
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-        let assets = PHAsset.fetchAssets(with: options)
-        matched = assets.count
-        for index in 0..<assets.count {
-            guard running && !Task.isCancelled else { break }
-            let asset = assets.object(at: index)
-            let resources = PHAssetResource.assetResources(for: asset)
-            for resource in resources {
-                guard running && !Task.isCancelled else { break }
-                let key = "\(origin!.absoluteString)|\(asset.localIdentifier)|\(asset.modificationDate?.timeIntervalSince1970 ?? 0)|\(resource.type.rawValue)|\(resource.originalFilename)"
-                if receipts.contains(key) { continue }
-                do {
-                    current = resource.originalFilename
-                    status = "读取原件 · \(index + 1) / \(assets.count)"
-                    progress = 0
-                    let file = cache.appendingPathComponent(UUID().uuidString + "-" + resource.originalFilename)
-                    defer { try? FileManager.default.removeItem(at: file) }
-                    try await export(resource, to: file)
-                    guard running && !Task.isCancelled else { break }
-                    let checksum = try await Task.detached { try Self.checksum(file) }.value
-                    let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
-                    var hints: [String: Any] = ["hash": checksum, "name": resource.originalFilename, "size": size,
-                        "sourceKey": "photokit:\(sourceID):\(asset.localIdentifier)", "resourceType": Self.resourceName(resource.type), "favorite": asset.isFavorite]
-                    if let date = asset.creationDate { hints["capturedAt"] = ISO8601DateFormatter().string(from: date) }
-                    if let date = asset.modificationDate { hints["modifiedAt"] = ISO8601DateFormatter().string(from: date) }
-                    if let location = asset.location { hints["latitude"] = location.coordinate.latitude; hints["longitude"] = location.coordinate.longitude }
-                    let result = try await transfer(file: file, hints: hints)
-                    if result { duplicates += 1 } else { uploaded += 1 }
-                    try remember(key: key, hash: checksum)
-                } catch {
-                    if Task.isCancelled || !running { break }
-                    errors.append("\(resource.originalFilename)：\(error.localizedDescription)")
-                    if errors.count > 20 { errors.removeFirst() }
-                }
-            }
+        return options
+    }
+    private func receiptKey(asset: PHAsset, resource: PHAssetResource) -> String {
+        "\(origin!.absoluteString)|\(asset.localIdentifier)|\(asset.modificationDate?.timeIntervalSince1970 ?? 0)|\(resource.type.rawValue)|\(resource.originalFilename)"
+    }
+    private func recountSummaries() {
+        matched = activeAssetIDs.count
+        completedAssets = summaries.filter { activeAssetIDs.contains($0.key) && $0.value.complete }.count
+        processingAssets = summaries.filter { activeAssetIDs.contains($0.key) && $0.value.processing }.count
+    }
+    private func updateSummary(assetID: String, keys: [String]) {
+        let rows = keys.compactMap { receipts[$0] }
+        let value = AssetSummary(keys: keys, complete: !keys.isEmpty && rows.count == keys.count && rows.allSatisfy { $0.present != false },
+            processing: rows.contains { $0.status == "queued" || $0.status == "processing" || $0.serverAssetID?.isEmpty != false })
+        if activeAssetIDs.contains(assetID) {
+            if summaries[assetID]?.complete == true { completedAssets -= 1 }
+            if summaries[assetID]?.processing == true { processingAssets -= 1 }
+            if value.complete { completedAssets += 1 }
+            if value.processing { processingAssets += 1 }
         }
+        summaries[assetID] = value
     }
     private func export(_ resource: PHAssetResource, to file: URL) async throws {
+        guard uploadPauseReason == nil else { throw CancellationError() }
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
         options.progressHandler = { [weak self] value in Task { @MainActor in self?.progress = value * 0.1 } }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHAssetResourceManager.default().writeData(for: resource, toFile: file, options: options) { error in
-                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-            }
-        }
+        let writer = try ResourceExport(file: file)
+        activeExport = writer
+        defer { activeExport = nil }
+        try await withTaskCancellationHandler(operation: {
+            try await writer.write(resource: resource, options: options)
+        }, onCancel: { writer.cancel() })
     }
-    private func transfer(file: URL, hints: [String: Any]) async throws -> Bool {
+    private func transfer(file: URL, hints: [String: Any]) async throws -> (Bool, [String: Any]) {
+        guard running && !Task.isCancelled && uploadPauseReason == nil else { throw CancellationError() }
         let hash = hints["hash"] as! String, size = hints["size"] as! Int
         let prepared = try await json("uploads", body: hints)
-        if prepared["complete"] as? Bool == true { return true }
+        if prepared["complete"] as? Bool == true { return (true, prepared) }
         var offset = prepared["offset"] as? Int ?? 0
         let chunkSize = prepared["chunkSize"] as? Int ?? 8 * 1024 * 1024
         let input = try FileHandle(forReadingFrom: file)
@@ -220,6 +516,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         var failures = 0
         while offset < size {
             guard running && !Task.isCancelled else { throw CancellationError() }
+            guard uploadPauseReason == nil else { throw CancellationError() }
             try input.seek(toOffset: UInt64(offset))
             let bytes = try input.read(upToCount: min(chunkSize, size - offset)) ?? Data()
             guard !bytes.isEmpty else { throw TransferError(message: "无法读取原件") }
@@ -232,13 +529,14 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
             request.timeoutInterval = 180
             do {
-                let (data, response) = try await BackgroundTransfer.shared.upload(request, file: chunk)
+                let (data, response) = try await BackgroundTransfer.shared.upload(request, file: chunk, wifiOnly: wifiOnly)
                 let row = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
                 if response.statusCode == 409, let received = row["offset"] as? Int { offset = received; continue }
                 guard (200..<300).contains(response.statusCode), let received = row["offset"] as? Int else { throw TransferError(message: row["error"] as? String ?? "上传失败 (\(response.statusCode))") }
                 offset = received; failures = 0
                 progress = 0.1 + 0.9 * Double(offset) / Double(size)
             } catch {
+                if Task.isCancelled || !running || uploadPauseReason != nil { throw error }
                 failures += 1
                 if failures > 3 { throw error }
                 try await Task.sleep(nanoseconds: UInt64(1 << failures) * 1_000_000_000)
@@ -246,35 +544,336 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                 offset = current["offset"] as? Int ?? offset
             }
         }
-        _ = try await json("uploads/" + hash + "/complete", body: [:])
-        return false
+        let result = try await json("uploads/" + hash + "/complete", body: [:])
+        return (false, result)
     }
     func json(_ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
         guard let origin else { throw TransferError(message: "服务器地址无效") }
         var request = URLRequest(url: origin.appendingPathComponent("aura/api/" + path))
         request.timeoutInterval = 60
+        request.allowsCellularAccess = !wifiOnly
         if let body { request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONSerialization.data(withJSONObject: body) }
         let (data, response) = try await URLSession.shared.data(for: request)
         let row = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode), !row.isEmpty else {
             if (response as? HTTPURLResponse)?.statusCode == 401 { connected = false; running = false }
-            throw TransferError(message: row["error"] as? String ?? "请重新完成门户授权")
+            throw TransferError(message: row["error"] as? String ?? "服务器响应无效，请检查网络或重新完成门户授权",
+                statusCode: (response as? HTTPURLResponse)?.statusCode, code: row["code"] as? String)
         }
         return row
     }
     nonisolated static func checksum(_ file: URL) throws -> String {
         let input = try FileHandle(forReadingFrom: file); defer { try? input.close() }
         var hash = SHA256()
-        while let data = try input.read(upToCount: 4 * 1024 * 1024), !data.isEmpty { hash.update(data: data) }
+        while let data = try input.read(upToCount: 4 * 1024 * 1024), !data.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: data)
+        }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
-    private func remember(key: String, hash: String) throws {
-        var line = try JSONSerialization.data(withJSONObject: ["key": key, "hash": hash]); line.append(10)
+    private func remember(_ receipt: Receipt) throws {
+        try appendReceipt(receipt)
+        receipts[receipt.key] = receipt
+        if let id = receipt.sourceAsset { receiptKeysByAsset[id, default: []].insert(receipt.key) }
+        receiptKeysByHash[receipt.hash, default: []].insert(receipt.key)
+        receiptsDirty = true
+    }
+    private func appendReceipt(_ receipt: Receipt) throws {
+        var line = try JSONEncoder().encode(receipt); line.append(10)
         if !FileManager.default.fileExists(atPath: receiptURL.path) { FileManager.default.createFile(atPath: receiptURL.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
         let file = try FileHandle(forWritingTo: receiptURL); defer { try? file.close() }
         try file.seekToEnd(); try file.write(contentsOf: line); try file.synchronize()
-        receipts.insert(key)
     }
+    private func invalidate(_ receipt: Receipt) throws {
+        var removed = receipt
+        removed.invalidated = true
+        try appendReceipt(removed)
+        receipts.removeValue(forKey: receipt.key)
+        receiptKeysByHash[receipt.hash]?.remove(receipt.key)
+        if let id = receipt.sourceAsset {
+            receiptKeysByAsset[id]?.remove(receipt.key)
+            pendingAssetIDs.insert(id)
+        }
+        receiptsDirty = true
+    }
+    private func compactReceipts() throws {
+        guard receiptsDirty else { return }
+        var data = Data()
+        let encoder = JSONEncoder()
+        for key in receipts.keys.sorted() {
+            data.append(try encoder.encode(receipts[key]!)); data.append(10)
+        }
+        try data.write(to: receiptURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: receiptURL.path)
+        let file = try FileHandle(forWritingTo: receiptURL); defer { try? file.close() }
+        try file.synchronize()
+        receiptsDirty = false
+    }
+    private func loadState() {
+        guard let data = try? Data(contentsOf: stateURL), let saved = try? JSONDecoder().decode(ClientState.self, from: data), saved.origin == origin?.absoluteString else {
+            matched = 0; completedAssets = 0; processingAssets = 0; uploaded = 0; duplicates = 0
+            errors = []; lastScan = ""; lastVerified = ""; verificationStatus = "尚未核对服务器原件"
+            albumSignatures = [:]; blockedAlbums = []
+            return
+        }
+        matched = saved.matched; completedAssets = saved.completed; processingAssets = saved.processing
+        uploaded = saved.uploaded; duplicates = saved.duplicates; errors = saved.errors
+        lastScan = saved.lastScan; lastVerified = saved.lastVerified
+        verificationStatus = saved.verificationStatus.hasPrefix("正在核对") ? "上次核对未完成，已保留上传记录" : saved.verificationStatus
+        albumSignatures = saved.albumSignatures; blockedAlbums = Set(saved.blockedAlbums)
+    }
+    private func saveState(force: Bool = false) {
+        guard let origin else { return }
+        guard force || Date().timeIntervalSince(lastStateWrite) >= 1 else { return }
+        let saved = ClientState(origin: origin.absoluteString, matched: matched, completed: completedAssets, processing: processingAssets,
+            uploaded: uploaded, duplicates: duplicates, errors: errors, lastScan: lastScan, lastVerified: lastVerified,
+            verificationStatus: verificationStatus, albumSignatures: albumSignatures, blockedAlbums: Array(blockedAlbums).sorted())
+        do {
+            try JSONEncoder().encode(saved).write(to: stateURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
+            lastStateWrite = Date()
+        } catch { status = "无法保存客户端进度：\(error.localizedDescription)" }
+    }
+    private func recordIssue(key: String, assetID: String? = nil, name: String, stage: ImportStage, error: Error) {
+        let id = key + "|" + stage.rawValue
+        let row = ImportIssue(id: id, resourceKey: key, assetID: assetID, name: name, stage: stage, message: error.localizedDescription, occurredAt: clock)
+        if let index = errors.firstIndex(where: { $0.id == id }) { errors[index] = row }
+        else { errors.append(row) }
+        saveState(force: true)
+    }
+    private func removeIssues(resourceKey: String, stage: ImportStage? = nil) {
+        errors.removeAll { $0.resourceKey == resourceKey && (stage == nil || $0.stage == stage) }
+    }
+    private func cleanAbandonedOriginals() async {
+        let referenced = await BackgroundTransfer.shared.activeFiles()
+        guard let files = try? FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { return }
+        for file in files {
+            let name = file.lastPathComponent
+            guard name.count > 37, UUID(uuidString: String(name.prefix(36))) != nil, name.dropFirst(36).first == "-",
+                  !referenced.contains(file.path), (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+    func verifyServer() {
+        if verifying { verificationTask?.cancel(); return }
+        guard connected && !busy && scanTask == nil else { return }
+        guard originalPresenceAvailable else { verificationStatus = "服务器需更新到支持原件存在检查的版本"; saveState(force: true); return }
+        verifying = true
+        verificationTask = Task { [weak self] in
+            guard let self else { return }
+            await self.verifyReceipts()
+            self.verifying = false; self.verificationTask = nil
+            if self.running { self.rescan() }
+        }
+    }
+    private func verifyReceipts() async {
+        guard let origin else { return }
+        await rebuildSummarySnapshot()
+        let prefix = origin.absoluteString + "|"
+        let hashes = Set(receipts.values.filter { $0.key.hasPrefix(prefix) }.map(\.hash)).sorted()
+        var present = 0, missing = 0, retainedTrash = 0, checked = 0, unresolved = 0
+        verificationProgress = 0
+        verificationStatus = "正在核对服务器原件 · 0 / \(hashes.count)"
+        saveState(force: true)
+        defer {
+            if Task.isCancelled { verificationStatus = "核对已停止：已确认 \(present) 个原件，剩余记录已保留" }
+            else {
+                verificationStatus = "已确认 \(present) 个原件，缺失 \(missing) 个，回收站保留 \(retainedTrash) 个，未确认 \(unresolved + hashes.count - checked) 个"
+                if checked == hashes.count && unresolved == 0 { lastVerified = clock }
+            }
+            if missing > 0 && !running { verificationStatus += "；开始持续上传后补传可访问的缺失原件" }
+            try? compactReceipts()
+            albumsDirty = true; albumSignatures = [:]
+            saveState(force: true)
+        }
+        for hash in hashes {
+            guard !Task.isCancelled && connected else { break }
+            do {
+                let row = try await presence(hash)
+                let result = try applyServerState(hash: hash, row: row, checked: true, repairMissing: true)
+                if result == .present { present += 1 }
+                else if result == .missing { missing += 1 }
+                else { retainedTrash += 1 }
+                removeIssues(resourceKey: "audit:" + hash, stage: .verification)
+                checked += 1
+            } catch {
+                if Task.isCancelled { break }
+                unresolved += 1; checked += 1
+                recordIssue(key: "audit:" + hash, name: String(hash.prefix(12)), stage: .verification, error: error)
+                if !(error is TransferError) || !connected { break }
+            }
+            verificationProgress = hashes.isEmpty ? 1 : Double(checked) / Double(hashes.count)
+            verificationStatus = "正在核对服务器原件 · \(checked) / \(hashes.count)"
+        }
+    }
+    private enum PresenceResult { case present, missing, trash }
+    private func rebuildSummarySnapshot() async {
+        guard fetchedAssets == nil else { return }
+        let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard access == .authorized || access == .limited else { return }
+        limited = access == .limited
+        let assets = PHAsset.fetchAssets(with: fetchOptions())
+        fetchedAssets = assets
+        activeAssetIDs = Set((0..<assets.count).map { assets.object(at: $0).localIdentifier })
+        summaries = [:]; recountSummaries()
+        for index in 0..<assets.count {
+            if index.isMultiple(of: 64) { await Task.yield() }
+            guard !Task.isCancelled else { return }
+            let asset = assets.object(at: index)
+            let keys = PHAssetResource.assetResources(for: asset).map { receiptKey(asset: asset, resource: $0) }
+            updateSummary(assetID: asset.localIdentifier, keys: keys)
+        }
+    }
+    private func presence(_ hash: String) async throws -> [String: Any] {
+        do { return try await json("uploads/" + hash) }
+        catch let error as TransferError where error.statusCode == 404 { return ["complete": false, "missing": true] }
+    }
+    private func applyServerState(hash: String, row: [String: Any], checked: Bool, repairMissing: Bool) throws -> PresenceResult {
+        let prefix = (origin?.absoluteString ?? "") + "|"
+        let keys = Array(receiptKeysByHash[hash, default: []].filter { $0.hasPrefix(prefix) })
+        let confirmed = row["complete"] as? Bool == true && row["present"] as? Bool == true
+        let missing = row["missing"] as? Bool == true || row["complete"] as? Bool == false
+        guard confirmed || missing else { throw TransferError(message: "服务器未确认原件存在状态，已保留上传记录") }
+        var trash = row["trashed"] as? Bool == true
+        for key in keys {
+            guard var receipt = receipts[key] else { continue }
+            let isTrash = row["trashed"] as? Bool ?? receipt.trashed ?? false
+            trash = trash || isTrash
+            if missing && !isTrash && repairMissing {
+                try invalidate(receipt)
+                recordIssue(key: "missing:" + hash, assetID: receipt.sourceAsset, name: String(hash.prefix(12)), stage: .verification,
+                    error: TransferError(message: "服务器原件缺失，等待从系统照片补传；不会改动系统照片"))
+                continue
+            }
+            if let value = row["assetId"] as? String { receipt.serverAssetID = value }
+            if let value = row["status"] as? String { receipt.status = value }
+            receipt.trashed = isTrash; receipt.present = confirmed
+            if checked && confirmed { receipt.verifiedAt = clock }
+            receipts[key] = receipt; receiptsDirty = true
+            if confirmed { removeIssues(resourceKey: key, stage: .verification) }
+            if missing && isTrash {
+                recordIssue(key: key, assetID: receipt.sourceAsset, name: String(hash.prefix(12)), stage: .verification,
+                    error: TransferError(message: "回收站中的原件缺失，未自动恢复或补传"))
+            } else if receipt.status == "error" {
+                recordIssue(key: key, assetID: receipt.sourceAsset, name: String(hash.prefix(12)), stage: .processing,
+                    error: TransferError(message: row["error"] as? String ?? "原件已保存，但服务器处理失败，请在照片库中重试处理"))
+            } else if receipt.status == "ready" { removeIssues(resourceKey: key, stage: .processing) }
+        }
+        let affected = Set(keys.compactMap { receipts[$0]?.sourceAsset ?? $0.split(separator: "|", maxSplits: 4).dropFirst().first.map(String.init) })
+        for id in affected { if let summary = summaries[id] { updateSummary(assetID: id, keys: summary.keys) } }
+        if confirmed { removeIssues(resourceKey: "missing:" + hash); return trash ? .trash : .present }
+        return trash ? .trash : .missing
+    }
+    private func refreshProcessing() async {
+        let prefix = (origin?.absoluteString ?? "") + "|"
+        let hashes = Set(receipts.values.filter {
+            $0.key.hasPrefix(prefix) && activeAssetIDs.contains($0.sourceAsset ?? "") &&
+            ($0.status == "queued" || $0.status == "processing" || $0.serverAssetID?.isEmpty != false)
+        }.map(\.hash)).sorted()
+        guard !hashes.isEmpty else { return }
+        let begin = processingCursor % hashes.count
+        let count = min(32, hashes.count)
+        for index in 0..<count {
+            guard running && connected && !Task.isCancelled && uploadPauseReason == nil else { return }
+            let hash = hashes[(begin + index) % hashes.count]
+            do {
+                let row = try await presence(hash)
+                if originalPresenceAvailable { _ = try applyServerState(hash: hash, row: row, checked: false, repairMissing: true) }
+                else {
+                    for key in receiptKeysByHash[hash, default: []].filter({ $0.hasPrefix(prefix) }) {
+                        receipts[key]?.status = row["status"] as? String
+                        receipts[key]?.serverAssetID = row["assetId"] as? String
+                    }
+                    receiptsDirty = true
+                }
+                removeIssues(resourceKey: "status:" + hash, stage: .processing)
+            } catch {
+                if Task.isCancelled { return }
+                recordIssue(key: "status:" + hash, name: String(hash.prefix(12)), stage: .processing, error: error)
+                if !(error is TransferError) || !connected { return }
+            }
+        }
+        processingCursor = (begin + count) % hashes.count
+    }
+    func refreshAlbums() {
+        guard importAlbums && !busy && !verifying else { return }
+        albumSignatures = [:]; albumsDirty = true
+        rescan()
+    }
+    private func syncAlbums(options: PHFetchOptions) async {
+        guard albumImportAvailable && originalPresenceAvailable else {
+            recordIssue(key: "album-capability", name: "Apple 相册", stage: .album, error: TransferError(message: "服务器需更新到支持 Apple 相册导入的版本"))
+            return
+        }
+        removeIssues(resourceKey: "album-capability")
+        let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil)
+        var states: [String: [String: Any]] = [:]
+        var unfinished = false
+        for index in 0..<collections.count {
+            guard running && connected && !Task.isCancelled && uploadPauseReason == nil else { return }
+            let album = collections.object(at: index)
+            let source = "photokit-album:\(sourceID):\(album.localIdentifier)"
+            guard !blockedAlbums.contains(source) else { continue }
+            let name = album.localizedTitle ?? "未命名相册"
+            let members = PHAsset.fetchAssets(in: album, options: options)
+            var hashes = Set<String>()
+            for position in 0..<members.count {
+                let id = members.object(at: position).localIdentifier
+                guard let summary = summaries[id], summary.complete else { unfinished = true; continue }
+                for key in summary.keys { if let receipt = receipts[key] { hashes.insert(receipt.hash) } }
+            }
+            guard !hashes.isEmpty else { continue }
+            let signature = SHA256.hash(data: Data((name + "\n" + hashes.sorted().joined(separator: "\n")).utf8)).map { String(format: "%02x", $0) }.joined()
+            guard albumSignatures[source] != signature else { continue }
+            do {
+                status = "导入相册 · \(name)"
+                var ids = Set<String>()
+                var unresolved = false
+                for hash in hashes.sorted() {
+                    guard running && connected && !Task.isCancelled && uploadPauseReason == nil else { return }
+                    let row: [String: Any]
+                    if let known = states[hash] { row = known }
+                    else { row = try await presence(hash); states[hash] = row }
+                    let result = try applyServerState(hash: hash, row: row, checked: false, repairMissing: true)
+                    if result == .trash { continue }
+                    if result != .present { unresolved = true; continue }
+                    if row["trashed"] as? Bool == true { continue }
+                    guard let id = row["assetId"] as? String, !id.isEmpty else { unresolved = true; continue }
+                    ids.insert(id)
+                }
+                if unresolved { unfinished = true }
+                let sorted = ids.sorted()
+                for offset in stride(from: 0, to: sorted.count, by: 1000) {
+                    _ = try await json("albums/import", body: ["sourceKey": source, "name": name, "assets": Array(sorted[offset..<min(offset + 1000, sorted.count)])])
+                }
+                if !unresolved { albumSignatures[source] = signature }
+                removeIssues(resourceKey: source, stage: .album)
+            } catch {
+                if Task.isCancelled { return }
+                recordIssue(key: source, name: name, stage: .album, error: error)
+                if let error = error as? TransferError, error.code == "imported_album_deleted" { blockedAlbums.insert(source) }
+                else { unfinished = true }
+                if !(error is TransferError) || !connected { return }
+            }
+        }
+        albumsDirty = unfinished
+        saveState()
+    }
+    #if os(macOS)
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            loginItemStatus = SMAppService.mainApp.status == .requiresApproval ? "请在系统设置中批准 Aura 登录项" : ""
+            removeIssues(resourceKey: "login-item")
+        } catch {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            recordIssue(key: "login-item", name: "登录时启动", stage: .settings, error: error)
+        }
+        saveState()
+    }
+    #endif
     nonisolated static func resourceName(_ type: PHAssetResourceType) -> String {
         switch type {
         case .photo: return "originalPhoto"
@@ -290,45 +889,145 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     }
 }
 
+final class ResourceExport: @unchecked Sendable {
+    private let lock = NSLock()
+    private let file: FileHandle
+    private var requestID: PHAssetResourceDataRequestID?
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var result: Result<Void, Error>?
+
+    init(file url: URL) throws {
+        guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw TransferError(message: "无法创建原件缓存，请检查可用空间")
+        }
+        file = try FileHandle(forWritingTo: url)
+    }
+    func write(resource: PHAssetResource, options: PHAssetResourceRequestOptions) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let result { lock.unlock(); continuation.resume(with: result); return }
+            self.continuation = continuation
+            lock.unlock()
+            let identifier = PHAssetResourceManager.default().requestData(for: resource, options: options, dataReceivedHandler: { [self] data in
+                receive(data)
+            }, completionHandler: { [self] error in finish(error) })
+            lock.lock(); requestID = identifier; let completed = result != nil; lock.unlock()
+            if completed { PHAssetResourceManager.default().cancelDataRequest(identifier) }
+        }
+    }
+    private func receive(_ data: Data) {
+        lock.lock()
+        guard result == nil else { lock.unlock(); return }
+        do { try file.write(contentsOf: data); lock.unlock() }
+        catch { lock.unlock(); finish(error); cancel() }
+    }
+    private func finish(_ error: Error?) {
+        lock.lock()
+        guard result == nil else { lock.unlock(); return }
+        var failure = error
+        if failure == nil { do { try file.synchronize() } catch { failure = error } }
+        try? file.close()
+        let value: Result<Void, Error> = failure.map { .failure($0) } ?? .success(())
+        result = value
+        let pending = continuation; continuation = nil
+        lock.unlock()
+        pending?.resume(with: value)
+    }
+    func cancel() {
+        lock.lock(); let identifier = requestID; lock.unlock()
+        finish(CancellationError())
+        if let identifier { PHAssetResourceManager.default().cancelDataRequest(identifier) }
+    }
+}
+
+final class TransferCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionTask?
+    private var cancelled = false
+    func bind(_ task: URLSessionTask) {
+        lock.lock(); self.task = task; let stop = cancelled; lock.unlock()
+        if stop { task.cancel() }
+    }
+    func cancel() {
+        lock.lock(); cancelled = true; let task = task; lock.unlock()
+        task?.cancel()
+    }
+}
+
 final class BackgroundTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     static let shared = BackgroundTransfer()
     private let lock = NSLock()
-    private var pending: [Int: CheckedContinuation<(Data, HTTPURLResponse), Error>] = [:]
-    private var buffers: [Int: Data] = [:]
-    var eventsCompletion: (() -> Void)?
-    private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.background(withIdentifier: "app.aura.photos.upload")
+    private var pending: [String: CheckedContinuation<(Data, HTTPURLResponse), Error>] = [:]
+    private var buffers: [String: Data] = [:]
+    private var sessions: [String: URLSession] = [:]
+    private var completions: [String: () -> Void] = [:]
+    private func session(wifiOnly: Bool) -> URLSession {
+        // A background session's policy is fixed; reconnect both identifiers after relaunch.
+        let identifier = "app.aura.photos.upload" + (wifiOnly ? ".wifi" : "")
+        lock.lock(); defer { lock.unlock() }
+        if let existing = sessions[identifier] { return existing }
+        let config = URLSessionConfiguration.background(withIdentifier: identifier)
         config.isDiscretionary = false
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpMaximumConnectionsPerHost = 2
         config.timeoutIntervalForResource = 24 * 60 * 60
+        config.allowsCellularAccess = !wifiOnly
         #if os(iOS)
         config.sessionSendsLaunchEvents = true
         #endif
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }()
-    func reconnect() { _ = session }
-    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        DispatchQueue.main.async { self.eventsCompletion?(); self.eventsCompletion = nil }
+        let created = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        sessions[identifier] = created
+        return created
     }
-    func upload(_ request: URLRequest, file: URL) async throws -> (Data, HTTPURLResponse) {
-        try await withCheckedThrowingContinuation { continuation in
+    func reconnect() { _ = session(wifiOnly: false); _ = session(wifiOnly: true) }
+    func setCompletion(_ completion: @escaping () -> Void, identifier: String) {
+        lock.lock(); completions[identifier] = completion; lock.unlock()
+    }
+    func activeFiles() async -> Set<String> {
+        var paths = Set<String>()
+        for wifiOnly in [false, true] {
+            let session = session(wifiOnly: wifiOnly)
+            let tasks: [URLSessionTask] = await withCheckedContinuation { continuation in
+                session.getAllTasks { continuation.resume(returning: $0) }
+            }
+            paths.formUnion(tasks.compactMap(\.taskDescription))
+        }
+        return paths
+    }
+    private func key(_ session: URLSession, _ task: URLSessionTask) -> String {
+        (session.configuration.identifier ?? "") + "|" + String(task.taskIdentifier)
+    }
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        lock.lock(); let completion = completions.removeValue(forKey: session.configuration.identifier ?? ""); lock.unlock()
+        DispatchQueue.main.async { completion?() }
+    }
+    func upload(_ request: URLRequest, file: URL, wifiOnly: Bool) async throws -> (Data, HTTPURLResponse) {
+        let cancellation = TransferCancellation()
+        return try await withTaskCancellationHandler(operation: {
+          try await withCheckedThrowingContinuation { continuation in
             var request = request
+            request.allowsCellularAccess = !wifiOnly
             if let cookies = HTTPCookieStorage.shared.cookies(for: request.url!) {
                 for (key, value) in HTTPCookie.requestHeaderFields(with: cookies) { request.setValue(value, forHTTPHeaderField: key) }
             }
+            let session = session(wifiOnly: wifiOnly)
             let task = session.uploadTask(with: request, fromFile: file)
             task.taskDescription = file.path
-            lock.lock(); pending[task.taskIdentifier] = continuation; buffers[task.taskIdentifier] = Data(); lock.unlock()
+            let id = key(session, task)
+            lock.lock(); pending[id] = continuation; buffers[id] = Data(); lock.unlock()
+            cancellation.bind(task)
             task.resume()
-        }
+          }
+        }, onCancel: { cancellation.cancel() })
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.lock(); defer { lock.unlock() }
-        if (buffers[dataTask.taskIdentifier]?.count ?? 0) < 1_048_576 { buffers[dataTask.taskIdentifier, default: Data()].append(data) }
+        let id = key(session, dataTask)
+        if (buffers[id]?.count ?? 0) < 1_048_576 { buffers[id, default: Data()].append(data) }
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        lock.lock(); let continuation = pending.removeValue(forKey: task.taskIdentifier); let data = buffers.removeValue(forKey: task.taskIdentifier) ?? Data(); lock.unlock()
+        let id = key(session, task)
+        lock.lock(); let continuation = pending.removeValue(forKey: id); let data = buffers.removeValue(forKey: id) ?? Data(); lock.unlock()
         if let error { continuation?.resume(throwing: error) }
         else if let response = task.response as? HTTPURLResponse { continuation?.resume(returning: (data, response)) }
         else { continuation?.resume(throwing: TransferError(message: "上传响应无效")) }
@@ -339,7 +1038,7 @@ final class BackgroundTransfer: NSObject, URLSessionDataDelegate, @unchecked Sen
 #if os(iOS)
 final class AuraAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
-        BackgroundTransfer.shared.eventsCompletion = completionHandler
+        BackgroundTransfer.shared.setCompletion(completionHandler, identifier: identifier)
         BackgroundTransfer.shared.reconnect()
     }
 }
@@ -353,15 +1052,18 @@ struct AuraContent: View {
             VStack(alignment: .leading, spacing: 26) {
                 HStack(spacing: 12) {
                     Image(systemName: "camera.aperture").font(.system(size: 32, weight: .light)).foregroundStyle(olive)
-                    Text("Aura").font(.system(size: 32, weight: .medium, design: .rounded))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Aura").font(.system(size: 32, weight: .medium, design: .rounded))
+                        Text("客户端 \(model.version)").font(.caption2).foregroundStyle(.secondary)
+                    }
                     Spacer()
                     if model.connected { Label("已连接", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(olive) }
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     Text("服务器").font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        TextField("https://服务器地址", text: $model.server).textFieldStyle(.roundedBorder).disabled(model.running)
-                        Button(model.connected ? "重新授权" : "连接") { model.connect() }.disabled(model.busy)
+                        TextField("https://服务器地址", text: $model.server).textFieldStyle(.roundedBorder).disabled(model.running || model.busy || model.verifying)
+                        Button(model.connected ? "重新授权" : "连接") { model.connect() }.disabled(model.busy || model.verifying)
                     }
                 }
                 Divider()
@@ -372,22 +1074,66 @@ struct AuraContent: View {
                     if !model.openEnd { DatePicker("结束", selection: $model.end, in: model.start..., displayedComponents: .date).disabled(model.running) }
                     if model.limited { Text("当前仅能读取系统允许的部分照片。若要自动发现所有新增照片，请在系统设置中允许完整访问。").font(.caption).foregroundStyle(.secondary) }
                 }
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("上传策略").font(.headline)
+                    Toggle("仅使用 Wi-Fi 或有线网络", isOn: $model.wifiOnly).disabled(model.busy || model.verifying)
+                    #if os(iOS)
+                    Toggle("仅在充电时上传", isOn: $model.chargingOnly).disabled(model.busy || model.verifying)
+                    #endif
+                    Toggle("导入 Apple 自建相册", isOn: $model.importAlbums).disabled(model.busy || model.verifying)
+                    if model.importAlbums {
+                        Text("仅添加已备份项目；保留 Aura 中修改的名称，不跟随 Apple 删除照片或相册。").font(.caption).foregroundStyle(.secondary)
+                        Button("更新相册关系") { model.refreshAlbums() }.disabled(!model.running || model.busy || model.verifying)
+                    }
+                    #if os(macOS)
+                    Toggle("登录时启动 Aura", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                    if !model.loginItemStatus.isEmpty {
+                        Text(model.loginItemStatus).font(.caption).foregroundStyle(.secondary)
+                        Button("打开登录项设置") { SMAppService.openSystemSettingsLoginItems() }
+                    }
+                    #endif
+                }
                 HStack(spacing: 30) {
                     counter(model.matched, "范围内项目")
-                    counter(model.uploaded, "已上传原件")
-                    counter(model.duplicates, "重复原件")
+                    counter(model.completedAssets, "已备份项目")
+                    counter(model.remainingAssets, "待备份项目")
                 }.padding(.vertical, 5)
+                if !model.summaryIsCurrent { Text("项目数量为上次扫描结果，开始上传或核对后刷新。").font(.caption2).foregroundStyle(.secondary) }
+                Text("累计新传 \(model.uploaded) 个原件 · 已存在 \(model.duplicates) 个原件 · \(model.processingAssets) 个项目等待服务器处理").font(.caption).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.subheadline); Spacer() }
                     if !model.current.isEmpty { Text(model.current).font(.caption).foregroundStyle(.secondary).lineLimit(1); ProgressView(value: model.progress).tint(olive) }
                     HStack {
                         Button { model.running ? model.pauseUpload() : model.startUpload() } label: {
                             Label(model.running ? "暂停" : "开始持续上传", systemImage: model.running ? "pause.fill" : "arrow.up.circle.fill").frame(maxWidth: .infinity).padding(.vertical, 7)
-                        }.buttonStyle(.borderedProminent).tint(olive).disabled(model.busy && !model.running)
+                        }.buttonStyle(.borderedProminent).tint(olive).disabled(model.verifying || (model.busy && !model.running))
                         if model.connected, let url = model.origin?.appendingPathComponent("aura/") { Link(destination: url) { Image(systemName: "arrow.up.right.square").padding(9) }.buttonStyle(.bordered) }
                     }
                 }
-                if !model.errors.isEmpty { VStack(alignment: .leading, spacing: 8) { ForEach(Array(model.errors.enumerated()), id: \.offset) { _, error in Text(error).font(.caption).foregroundStyle(.orange) }; Button("重试") { model.rescan() } } }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("服务器原件核对").font(.headline)
+                    Button(model.verifying ? "停止核对" : "重新核对服务器") { model.verifyServer() }.disabled(!model.connected || model.busy)
+                    if model.verifying { ProgressView(value: model.verificationProgress).tint(olive) }
+                    Text(model.verificationStatus).font(.caption).foregroundStyle(.secondary)
+                    if !model.lastVerified.isEmpty { Text("最近完成：\(displayDate(model.lastVerified))").font(.caption2).foregroundStyle(.secondary) }
+                    Text("检查原件文件是否存在、大小是否匹配。缺失且不在回收站的原件会按上传策略补传；不执行完整哈希扫描。").font(.caption).foregroundStyle(.secondary)
+                }
+                if !model.errors.isEmpty {
+                    DisclosureGroup("待处理记录 · \(model.errors.count)") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(model.errors) { error in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(error.name) · \(error.stage.rawValue)").font(.caption).fontWeight(.medium)
+                                    Text(error.message).font(.caption).foregroundStyle(.orange)
+                                    Text(displayDate(error.occurredAt)).font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                            Button("重试待上传项目") { model.running ? model.rescan() : model.startUpload() }.disabled(model.busy || model.verifying)
+                        }.padding(.top, 10)
+                    }
+                }
+                if !model.lastScan.isEmpty { Text("最近扫描：\(displayDate(model.lastScan))").font(.caption2).foregroundStyle(.secondary) }
+                Link("检查新版本与安装说明", destination: URL(string: "https://github.com/Crashmere/Aura/releases/latest")!).font(.caption)
                 Text("原件、实况视频与编辑资源均直接读取，不重新压缩。首次读取 iCloud 原件可能需要等待下载。").font(.caption).foregroundStyle(.secondary).lineSpacing(4)
                 #if os(iOS)
                 Text("后台上传由 iOS 调度。首次大量导入时请保持应用打开；强制退出后，重新打开应用以继续。").font(.caption).foregroundStyle(.secondary).lineSpacing(4)
@@ -407,6 +1153,10 @@ struct AuraContent: View {
         }
     }
     func counter(_ count: Int, _ label: String) -> some View { VStack(alignment: .leading, spacing: 6) { Text("\(count)").font(.system(size: 24, weight: .light, design: .rounded)).monospacedDigit(); Text(label).font(.caption2).foregroundStyle(.secondary) } }
+    func displayDate(_ value: String) -> String {
+        guard let date = ISO8601DateFormatter().date(from: value) else { return value }
+        return date.formatted(date: .numeric, time: .shortened)
+    }
 }
 
 final class PortalNavigation: NSObject, WKNavigationDelegate {
@@ -440,8 +1190,15 @@ struct AuraApplication: App {
     @UIApplicationDelegateAdaptor(AuraAppDelegate.self) private var delegate
     #endif
     @StateObject private var model = AuraModel()
+    @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup("Aura") { AuraContent(model: model)
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                if phase == .active { Task { await model.restoreAuthorization() } }
+                #if os(iOS)
+                if phase == .background { model.scheduleBackground() }
+                #endif
+            }
             #if os(macOS)
             .frame(minWidth: 450, idealWidth: 490, maxWidth: 600, minHeight: 620)
             #endif
