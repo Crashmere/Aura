@@ -1,6 +1,6 @@
 export const filterKeys = [
   "kind", "format", "orientation", "status", "location", "versions", "albumState",
-  "camera", "lens", "minSize", "maxSize", "minMP", "maxMP", "addedFrom", "addedTo",
+  "camera", "lens", "cameraMatch", "lensMatch", "minSize", "maxSize", "minMP", "maxMP", "addedFrom", "addedTo",
 ] as const;
 
 export type FilterKey = typeof filterKeys[number];
@@ -25,7 +25,7 @@ export function readFilters(params: URLSearchParams): PhotoFilters {
 }
 
 export function filterParams(filters: PhotoFilters): Record<string, string> {
-  return Object.fromEntries(filterKeys.filter(key => filters[key]).map(key => [key, filters[key]]));
+  return Object.fromEntries(filterKeys.filter(key => filters[key] && (key !== "cameraMatch" || filters.camera) && (key !== "lensMatch" || filters.lens)).map(key => [key, filters[key]]));
 }
 
 export function filterChips(filters: PhotoFilters): { keys: FilterKey[]; text: string }[] {
@@ -34,8 +34,8 @@ export function filterChips(filters: PhotoFilters): { keys: FilterKey[]; text: s
     const option = filterOptions[key].find(([value]) => value === filters[key]);
     if (filters[key]) result.push({ keys: [key], text: option?.[1] || filters[key] });
   }
-  for (const [key, label] of [["camera", "相机"], ["lens", "镜头"]] as const) {
-    if (filters[key]) result.push({ keys: [key], text: `${label} · ${filters[key]}` });
+  for (const [key, label] of [["camera", "设备"], ["lens", "镜头"]] as const) {
+    if (filters[key]) result.push({ keys: [key, `${key}Match`], text: `${label} · ${filters[key]}` });
   }
   for (const [low, high, label, unit, divisor] of [
     ["minSize", "maxSize", "原件", "MB", 1048576],

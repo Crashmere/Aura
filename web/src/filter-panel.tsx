@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { createPortal } from "react-dom";
 import { CalendarDays, Camera, Check, FileImage, SlidersHorizontal, X } from "lucide-react";
 import { emptyFilters, filterOptions, type FilterDraft } from "./library-filters";
-import { localDay } from "./api";
+import { api, localDay } from "./api";
 import "./filter-panel.css";
 
 export function FilterPanel({ value, anchor, apply, close }: {
@@ -16,6 +16,20 @@ export function FilterPanel({ value, anchor, apply, close }: {
     minSize: value.minSize ? String(Number((Number(value.minSize) / 1048576).toFixed(6))) : "",
     maxSize: value.maxSize ? String(Number((Number(value.maxSize) / 1048576).toFixed(6))) : "",
   });
+  const [equipment, setEquipment] = useState<{ cameras: string[]; lenses: string[] }>();
+  const [equipmentError, setEquipmentError] = useState("");
+  const [equipmentLoading, setEquipmentLoading] = useState(true);
+  const [equipmentRetry, setEquipmentRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setEquipmentLoading(true);
+    setEquipmentError("");
+    api<{ cameras: string[]; lenses: string[] }>("filter-options")
+      .then(options => { if (active) setEquipment(options); })
+      .catch(error => { if (active) setEquipmentError(error instanceof Error ? error.message : String(error)); })
+      .finally(() => { if (active) setEquipmentLoading(false); });
+    return () => { active = false; };
+  }, [equipmentRetry]);
   const [closing, setClosing] = useState(false);
   const [position, setPosition] = useState({ top: 100, right: 24, maxHeight: 640 });
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -59,6 +73,18 @@ export function FilterPanel({ value, anchor, apply, close }: {
     setDraft(previous => ({ ...previous, from: localDay(start), to: localDay(end) }));
   }
   const select = (key: keyof typeof filterOptions, label: string) => <label className="filter-field"><span>{label}</span><select aria-label={label} value={draft[key]} onChange={event => set(key, event.target.value)}><option value="">全部</option>{filterOptions[key].map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>;
+  const equipmentSelect = (key: "camera" | "lens", label: string, choices: string[] | undefined) => (
+    <label className="filter-field"><span>{label}</span>
+      <select aria-label={label} value={draft[key]} disabled={equipmentLoading && !equipment} onChange={event => {
+        const selected = event.target.value;
+        setDraft(previous => ({ ...previous, [key]: selected, [`${key}Match`]: selected ? "exact" : "" }));
+      }}>
+        <option value="">{equipmentLoading && !equipment ? "正在读取照片库…" : choices?.length === 0 && !draft[key] ? `暂无${label}信息` : `全部${label}`}</option>
+        {draft[key] && !choices?.includes(draft[key]) && <option value={draft[key]}>{draft[key]}</option>}
+        {choices?.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+      </select>
+    </label>
+  );
   const range = (low: "minSize" | "minMP", high: "maxSize" | "maxMP", label: string, unit: string, divisor: number) => <fieldset className="filter-range"><legend>{label} <small>{unit}</small></legend><div>
     <input aria-label={`最小${label}`} type="number" min="0" step="any" placeholder="最小" value={low === "minSize" ? sizeInputs.minSize : draft[low]} onChange={event => { const value = event.target.value; if (low === "minSize") setSizeInputs(previous => ({ ...previous, minSize: value })); set(low, value === "" || divisor === 1 ? value : String(Math.round(Number(value) * divisor))); }} />
     <span>—</span>
@@ -84,9 +110,9 @@ export function FilterPanel({ value, anchor, apply, close }: {
             {dates("from", "to", "拍摄日期")}{dates("addedFrom", "addedTo", "导入日期")}
           </section>
           <section className="filter-section"><h3><Camera size={15} />拍摄设备</h3><div className="filter-fields">
-            <label className="filter-field"><span>相机品牌或型号</span><input aria-label="相机品牌或型号" placeholder="如 Apple、iPhone、Canon" value={draft.camera} onChange={event => set("camera", event.target.value)} /></label>
-            <label className="filter-field"><span>镜头</span><input aria-label="镜头" placeholder="镜头型号或名称" value={draft.lens} onChange={event => set("lens", event.target.value)} /></label>
-          </div></section>
+            {equipmentSelect("camera", "设备", equipment?.cameras)}
+            {equipmentSelect("lens", "镜头", equipment?.lenses)}
+          </div>{equipmentError && <p className="equipment-error" role="alert"><span>{equipmentError}</span><button type="button" disabled={equipmentLoading} onClick={() => setEquipmentRetry(retry => retry + 1)}>{equipmentLoading ? "正在重试" : "重新加载"}</button></p>}</section>
           <section className="filter-section"><h3><SlidersHorizontal size={15} />文件与处理</h3><div className="filter-fields">
             {range("minMP", "maxMP", "像素数", "MP", 1)}{range("minSize", "maxSize", "原件大小", "MB", 1048576)}
             {select("status", "处理状态")}

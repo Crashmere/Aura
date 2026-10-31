@@ -112,6 +112,11 @@
       "description": "按相片集、类型、拍摄日期、关键词查询照片；游标分页"
     },
     {
+      "method": "GET",
+      "path": "/api/filter-options",
+      "description": "全库设备和镜头选项，包含最近删除和次要原件；去重排序，不受筛选或分页影响"
+    },
+    {
       "method": "PATCH",
       "path": "/api/assets",
       "description": "原子批量移入最近删除或恢复；失败不部分提交"

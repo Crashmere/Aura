@@ -46,3 +46,6 @@
 }
 @keyframes filter-sheet { from { opacity: .7; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .filter-scrim, .filter-panel { animation: none !important; } }
+
+.equipment-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; color: #a06347; font-size: 12px; line-height: 1.6; }
+.equipment-error button { color: var(--accent); white-space: nowrap; padding: 6px 0; }

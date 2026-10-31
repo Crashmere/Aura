@@ -10,8 +10,60 @@ import (
 	"time"
 )
 
+// Each entry is one priority tier; grouped variants in the same tier all qualify.
+var assetEquipmentFields = []struct {
+	name, option string
+	keys         []string
+}{
+	{"camera", "cameras", []string{"Model", "Make"}},
+	{"lens", "lenses", []string{"LensModel", "LensID", "Lens", "LensType", "LensInfo LensSpec LensSpecification", "LensMake"}},
+}
+
+// Match strings.TrimSpace for both dropdown values and exact comparisons.
+const assetMetadataText = `trim(CAST(m.value AS TEXT), char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288))`
+
+func (l *Library) filterOptions(w http.ResponseWriter, r *http.Request) {
+	queries := []string{}
+	options := map[string][]string{}
+	for _, field := range assetEquipmentFields {
+		options[field.option] = []string{}
+		priority := "CASE"
+		for i, keys := range field.keys {
+			priority += " WHEN " + assetMetadataKeys(keys) + " THEN " + strconv.Itoa(i)
+		}
+		priority += " END"
+		// Rank only nonempty scalar tags, retaining ties between EXIF groups.
+		queries = append(queries, `SELECT '`+field.option+`' AS dimension, `+assetMetadataText+` AS value,
+ DENSE_RANK() OVER (PARTITION BY r.hash ORDER BY `+priority+`) AS priority
+ FROM files r JOIN assets a ON a.id=r.asset_id, json_each(r.metadata) m
+ WHERE `+assetMetadataKeys(strings.Join(field.keys, " "))+`
+ AND m.type IN ('text','integer','real') AND `+assetMetadataText+`!=''`)
+	}
+	rows, e := l.DB.QueryContext(r.Context(), `WITH options AS (`+strings.Join(queries, " UNION ALL ")+`)
+ SELECT dimension, min(value) AS value FROM options WHERE priority=1
+ GROUP BY dimension, value COLLATE NOCASE ORDER BY dimension, value COLLATE NOCASE, value`)
+	if e != nil {
+		fail(w, 500, e)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var dimension, value string
+		if e = rows.Scan(&dimension, &value); e != nil {
+			fail(w, 500, e)
+			return
+		}
+		options[dimension] = append(options[dimension], value)
+	}
+	if e = rows.Err(); e != nil {
+		fail(w, 500, e)
+		return
+	}
+	writeJSON(w, 200, options)
+}
+
 func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []any, bool) {
-	for _, name := range strings.Fields("view album excludeAlbum excludeAlbums q from to kind format orientation status location versions albumState camera lens minSize maxSize minMP maxMP addedFrom addedTo") {
+	for _, name := range strings.Fields("view album excludeAlbum excludeAlbums q from to kind format orientation status location versions albumState camera cameraMatch lens lensMatch minSize maxSize minMP maxMP addedFrom addedTo") {
 		if len(q[name]) > 1 {
 			fail(w, 400, name+" 只能指定一个值")
 			return "", nil, false
@@ -26,6 +78,8 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		{"location", "with without"},
 		{"versions", "single multiple"},
 		{"albumState", "in none"},
+		{"cameraMatch", "exact contains"},
+		{"lensMatch", "exact contains"},
 	} {
 		if value := q.Get(enum.name); value != "" && !slices.Contains(strings.Fields(enum.values), value) {
 			fail(w, 400, enum.name+" 筛选值无效")
@@ -194,15 +248,18 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 	}
 	// Inspect metadata only for requested dimensions, after locating each asset's
 	// originals through files_asset. ExifTool -G1 stores group-prefixed keys.
-	for _, field := range []struct{ name, keys string }{
-		{"camera", "Make Model"},
-		{"lens", "LensMake LensModel LensID Lens LensType LensInfo LensSpec LensSpecification"},
-	} {
+	for _, field := range assetEquipmentFields {
 		if value := strings.TrimSpace(q.Get(field.name)); value != "" {
+			comparison := `CAST(m.value AS TEXT) LIKE ? ESCAPE '\'`
+			argument := assetTextPattern(value)
+			if q.Get(field.name+"Match") == "exact" {
+				comparison = assetMetadataText + " = ? COLLATE NOCASE"
+				argument = value
+			}
 			where += ` AND EXISTS (SELECT 1 FROM files r WHERE r.asset_id=a.id AND EXISTS
- (SELECT 1 FROM json_each(r.metadata) m WHERE ` + assetMetadataKeys(field.keys) + `
- AND m.type IN ('text','integer','real') AND CAST(m.value AS TEXT) LIKE ? ESCAPE '\'))`
-			args = append(args, assetTextPattern(value))
+ (SELECT 1 FROM json_each(r.metadata) m WHERE ` + assetMetadataKeys(strings.Join(field.keys, " ")) + `
+ AND m.type IN ('text','integer','real') AND ` + comparison + `))`
+			args = append(args, argument)
 		}
 	}
 	if location := q.Get("location"); location != "" {

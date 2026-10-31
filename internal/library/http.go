@@ -56,6 +56,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	})
 	r.Get("/api/info", l.info)
 	r.Get("/api/assets", l.list)
+	r.Get("/api/filter-options", l.filterOptions)
 	r.Patch("/api/assets", l.batchUpdateAssets)
 	r.Post("/api/assets/purge", l.purgeAssets)
 	r.Get("/api/deletions/{id}", l.getDeletion)
