@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import {
   Check,
   Image as ImageIcon,
@@ -14,18 +14,24 @@ export function Photo({
   asset,
   onClick,
   selected = false,
+  selecting = false,
   select,
   disabled = false,
 }: {
   asset: Asset;
-  onClick: () => void;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   selected?: boolean;
-  select?: () => void;
+  selecting?: boolean;
+  select?: (event: MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
 }) {
+  const image = useRef<HTMLImageElement>(null);
+  const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  useEffect(() => setBroken(false), [asset]);
+  const source = media(asset.primary) + (attempt ? `?retry=${attempt}` : "");
+  useEffect(() => { setBroken(false); }, [asset.primary, asset.status]);
+  useEffect(() => { setLoaded(!!image.current?.complete && !!image.current?.naturalWidth); }, [source]);
   useEffect(() => {
     if (!broken) return;
     const retry = () => { setAttempt(n => n + 1); setBroken(false); };
@@ -33,11 +39,15 @@ export function Photo({
     return () => window.removeEventListener("online", retry);
   }, [broken]);
   return (
-    <div className={`photo ${selected ? "selected" : ""}`}>
-      <button className="photo-open" disabled={disabled} onClick={onClick} aria-label={asset.name}>
+    <div className={`photo ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}>
+      <button className="photo-open" disabled={disabled} onClick={onClick} aria-label={selecting ? `${selected ? "取消选择" : "选择"} ${asset.name}` : `查看 ${asset.name}`}>
         {!broken ? (
           <img
-            src={media(asset.primary) + (attempt ? `?retry=${attempt}` : "")}
+            ref={image}
+            key={source}
+            src={source}
+            onLoad={() => setLoaded(true)}
+            className={loaded ? "is-loaded" : ""}
             alt={asset.name}
             loading="lazy"
             decoding="async"
@@ -85,7 +95,7 @@ export function Photo({
       {select && (
         <button
           className={`select-photo ${selected ? "checked" : ""}`}
-          aria-label={selected ? "取消选择" : "选择照片"}
+          aria-label={`${selected ? "取消选择" : "选择照片"} ${asset.name}`}
           aria-pressed={selected}
           disabled={disabled || !!asset.deletionPending}
           onClick={select}

@@ -77,7 +77,9 @@ Optional native album import uses a stable client-library and PhotoKit collectio
 
 ## Browsing and task state
 
-Library views, album selection, search, and date filters are represented in browser URLs so reload and browser navigation retain the browsing context. Month counts use the same catalog filters as the timeline; the month picker can query without date bounds to retain the other available months. The photo viewer supports touch navigation without taking over text input or modifier shortcuts.
+Library views, album selection, search, date filters, and the open photo are represented in browser URLs. Opening a photo adds a history entry; switching photos replaces that entry, so Back returns to the library. Switching library sections clears search and date filters. Month counts use the same catalog filters as the timeline; the month picker queries without date bounds to retain the other available months. Thumbnail density is a browser preference.
+
+Selection mode supports individual photos, Shift ranges, and reversible day-group selection. Select-all applies to loaded items and excludes pending permanent deletions. Background processing refreshes preserve the loaded range and reconcile selections; pagination failures pause automatic requests until retry. The viewer shows the loaded position and nearby thumbnails, loads another page near the current boundary, and preloads at most two adjacent previews. Touch gestures and arrow keys navigate photos while native media controls, text input, composition, and modifier shortcuts retain their own behavior.
 
 The task center reads durable file processing records and incomplete upload sessions, with cursor pagination and status filters. File status distinguishes accepted originals from pending, failed, and ready browsing resources. Retry queues metadata and derivative processing without changing original bytes; incomplete uploads require the client to reselect or recover the source bytes. Error messages remain available independently of the in-memory browser upload queue. A transient image-loading failure has a retry path instead of being presented indefinitely as server processing.
 

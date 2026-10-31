@@ -37,8 +37,8 @@ export function writeLocation(state: LibraryLocation, mode: "push" | "replace") 
   const search = params.toString();
   const url = `/aura/${search ? "?" + search : ""}`;
   if (location.pathname + location.search !== url) {
-    if (mode === "push") history.pushState(null, "", url);
-    else history.replaceState(null, "", url);
+    if (mode === "push") history.pushState(state.asset ? { auraViewer: true } : null, "", url);
+    else history.replaceState(state.asset ? history.state : null, "", url);
   }
 }
 

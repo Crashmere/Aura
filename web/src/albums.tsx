@@ -436,6 +436,8 @@ function PhotoPicker({
               key={asset.id}
               asset={asset}
               selected={selected.has(asset.id)}
+              selecting
+              disabled={busy}
               onClick={() => {
                 if (!busy) toggle(asset.id);
               }}
@@ -467,6 +469,7 @@ function PhotoPicker({
           <Check size={15} />
           已选 {selected.size} 项
           {selected.size === 1000 ? "，已达单次上限" : ""}
+          {selected.size > 0 && <button className="picker-clear" disabled={busy} onClick={() => setSelected(new Set())}>清空选择</button>}
         </span>
         <div className="album-footer-actions">
           <button className="button" disabled={busy} onClick={close}>
@@ -477,7 +480,7 @@ function PhotoPicker({
             disabled={busy || !selected.size}
             onClick={() => void add()}
           >
-            {busy ? "正在添加" : "添加"}
+            {busy ? "正在添加" : selected.size ? `添加 ${selected.size} 项` : "添加"}
           </button>
         </div>
       </footer>

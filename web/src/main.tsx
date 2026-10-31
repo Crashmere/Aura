@@ -9,12 +9,12 @@ import { createRoot } from "react-dom/client";
 import {
   ArrowDownToLine,
   ArrowLeft,
-  ArrowRight,
   ArrowUpRight,
   Check,
   CheckCheck,
+  CircleCheck,
+  SlidersHorizontal,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   CircleHelp,
   CloudUpload,
@@ -26,7 +26,6 @@ import {
   Pencil,
   Minus,
   Image as ImageIcon,
-  Info as InfoIcon,
   Layers3,
   LoaderCircle,
   Pause,
@@ -34,13 +33,10 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Settings2,
   Smartphone,
   Trash2,
   Video,
-  Wifi,
   X,
-  ScanLine,
   CalendarDays,
   Monitor,
   ExternalLink,
@@ -54,7 +50,6 @@ import {
   Original,
   Info,
   base,
-  media,
   bytes,
   displayDate,
   Page,
@@ -69,7 +64,8 @@ import { LivePhotoIcon } from "./live-photo-icon";
 import { AlbumDialog, AlbumDialogState, AlbumGrid } from "./albums";
 import { readLocation, writeLocation, monthRange } from "./library-location";
 import { TaskCenter } from "./task-center";
-import { useImageGestures } from "./image-gestures";
+import { Viewer } from "./viewer";
+import { Button, IconButton } from "./controls";
 import { DeletionProgress, PermanentDeleteDialog, useDeletionOperations } from "./permanent-delete";
 import "./style.css";
 
@@ -107,55 +103,6 @@ function Brand() {
     </a>
   );
 }
-function Button({
-  children,
-  onClick,
-  className = "",
-  title,
-  disabled = false,
-}: {
-  children: React.ReactNode;
-  onClick?: () => void;
-  className?: string;
-  title?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      className={`button ${className}`}
-      onClick={onClick}
-      title={title}
-      disabled={disabled}
-    >
-      {children}
-    </button>
-  );
-}
-function IconButton({
-  children,
-  onClick,
-  title,
-  className = "",
-  disabled = false,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  title: string;
-  className?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      className={`icon-button ${className}`}
-      onClick={onClick}
-      aria-label={title}
-      title={title}
-      disabled={disabled}
-    >
-      {children}
-    </button>
-  );
-}
 function App() {
   const [initial] = useState(readLocation);
   const urlMode = useRef<"push" | "replace">("replace");
@@ -179,7 +126,12 @@ function App() {
     [from, setFrom] = useState(initial.from),
     [to, setTo] = useState(initial.to),
     [filters, setFilters] = useState(false),
-    [density, setDensity] = useState(4);
+    [density, setDensity] = useState(() => {
+      try {
+        const saved = Number(localStorage.getItem("aura-grid-density"));
+        return saved >= 3 && saved <= 7 ? saved : 4;
+      } catch { return 4; }
+    });
   const [hideAlbumAssets, setHideAlbumAssets] = useState(() => {
     if (initial.hideAlbums !== undefined) return initial.hideAlbums;
     try {
@@ -204,6 +156,13 @@ function App() {
     [ignoring, setIgnoring] = useState(""),
     [similarAssets, setSimilarAssets] = useState<Record<string, Asset>>({});
   const [months, setMonths] = useState<Timeline["months"]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const selectionAnchor = useRef("");
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [composingSearch, setComposingSearch] = useState(false);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [deletionTargets, setDeletionTargets] = useState<Asset[] | null>(null);
@@ -211,6 +170,8 @@ function App() {
   const uploading = useSyncExternalStore(uploads.subscribe, uploads.snapshot);
   const refreshRef = useRef<(reconcile?: boolean) => Promise<void>>(() => Promise.resolve());
   const queryKey = useRef(0);
+  const queryLoading = useRef(false);
+  const failedLoad = useRef<"append" | "refresh">("refresh");
   const viewerKey = useRef(viewerId);
   viewerKey.current = viewerId;
   const more = useRef<HTMLDivElement>(null);
@@ -221,8 +182,13 @@ function App() {
     notify(`永久删除已完成${operation.ids.length ? ` · ${operation.ids.length} 项` : ""}`);
   }, info?.pendingDeletions);
   function setViewer(asset: Asset | null) {
+    if (asset && !viewerKey.current) urlMode.current = "push";
     setViewerState(asset);
     setViewerId(asset?.id || "");
+  }
+  function closeViewer() {
+    if (history.state?.auraViewer) history.back();
+    else setViewer(null);
   }
   useEffect(() => {
     writeLocation({ view, album: albumId, query, from, to, asset: viewerId, hideAlbums: hideAlbumAssets }, urlMode.current);
@@ -241,6 +207,8 @@ function App() {
       setViewerId(state.asset);
       if (state.hideAlbums !== undefined) setHideAlbumAssets(state.hideAlbums);
       setSelected(new Set());
+      setSelectionMode(false);
+      selectionAnchor.current = "";
       setUploadOpen(false);
       setAlbumDialog(null);
       setDeletionTargets(null);
@@ -256,7 +224,7 @@ function App() {
     api<Detail>(`assets/${viewerId}`).then(detail => {
       if (active) setViewerState(detail.asset);
     }).catch(e => {
-      if (active) { setViewerId(""); notify(e instanceof Error ? e.message : String(e)); }
+      if (active) { setViewerId(""); notify(e instanceof Error ? e.message : String(e), true); }
     });
     return () => { active = false; };
   }, [viewerId]);
@@ -268,13 +236,26 @@ function App() {
     }
   }, [hideAlbumAssets]);
   useEffect(() => {
+    if (composingSearch) return;
     const id = setTimeout(() => setQuery(search), 250);
     return () => clearTimeout(id);
-  }, [search]);
+  }, [search, composingSearch]);
+  const overlayOpen = !!viewer || uploadOpen || help || !!albumDialog || !!deletionTargets || mobileMenu;
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [overlayOpen]);
+  useEffect(() => {
+    try { localStorage.setItem("aura-grid-density", String(density)); } catch { /* Optional preference. */ }
+  }, [density]);
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
   const notify = (text: string, failed = false) => {
+    clearTimeout(toastTimer.current);
     setToast(text);
     setToastError(failed);
-    window.setTimeout(() => setToast(""), 4500);
+    toastTimer.current = setTimeout(() => setToast(""), 4500);
   };
   const params = (cursor = "") =>
     new URLSearchParams({
@@ -286,17 +267,30 @@ function App() {
       ...(excludeAlbums ? { excludeAlbums: "true" } : {}),
       ...(cursor ? { cursor } : {}),
     }).toString();
-  async function load(append = false, reconcile = false) {
+  async function load(append = false, reconcile = false, preserveRange = false) {
+    if (append && queryLoading.current) return;
     const key = ++queryKey.current;
+    queryLoading.current = true;
     setLoading(true);
     setError("");
     try {
+      const targetCount = preserveRange ? items.length : 0;
+      const readPage = async () => {
+        const data = await api<Page<Asset>>("assets?" + params(append ? next : ""));
+        // Refresh the visible range so processing updates do not discard later pages.
+        while (!append && data.next && data.items.length < targetCount) {
+          if (key !== queryKey.current) return data;
+          const page = await api<Page<Asset>>("assets?" + params(data.next));
+          data.items.push(...page.items.filter(a => !data.items.some(b => b.id === a.id)));
+          if (page.next === data.next) break;
+          data.next = page.next;
+        }
+        return data;
+      };
       const [data, stats, collections, timeline] = await Promise.all([
         albumGallery || view === "jobs"
           ? Promise.resolve({ items: [] as Asset[], next: "" })
-          : api<{ items: Asset[]; next: string }>(
-              "assets?" + params(append ? next : ""),
-            ),
+          : readPage(),
         api<Info>("info"),
         api<Album[]>("albums"),
         albumGallery || specialView ? Promise.resolve({ months: [] } as Timeline) : api<Timeline>("timeline?" + new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...(excludeAlbums ? { excludeAlbums: "true" } : {}) })),
@@ -316,14 +310,22 @@ function App() {
       setMonths(timeline.months);
       if (reconcile) setSelected(old => new Set([...old].filter(id => data.items.some(asset => asset.id === id && !asset.deletionPending))));
     } catch (e) {
-      if (key === queryKey.current)
+      if (key === queryKey.current) {
+        failedLoad.current = append ? "append" : "refresh";
         setError(String(e instanceof Error ? e.message : e));
+      }
     } finally {
-      if (key === queryKey.current) setLoading(false);
+      if (key === queryKey.current) { queryLoading.current = false; setLoading(false); }
     }
+  }
+  function retryLoad() {
+    if (view === "similar") void loadSimilar();
+    else if (failedLoad.current === "append") void load(true);
+    else void load(false, true, true);
   }
   async function loadSimilar(append = false) {
     const key = ++queryKey.current;
+    queryLoading.current = true;
     setLoading(true);
     setError("");
     setMonths([]);
@@ -354,7 +356,7 @@ function App() {
     } catch (e) {
       if (key === queryKey.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (key === queryKey.current) setLoading(false);
+      if (key === queryKey.current) { queryLoading.current = false; setLoading(false); }
     }
   }
   useEffect(() => {
@@ -362,13 +364,15 @@ function App() {
     setItems([]);
     setNext("");
     setSelected(new Set());
+    setSelectionMode(false);
+    selectionAnchor.current = "";
     setActionError("");
     if (view === "similar") { setSimilar([]); setSimilarNext(""); setIgnoredPair(null); void loadSimilar(); }
     else void load();
-  }, [view, albumId, query, from, to, excludeAlbums]);
+  }, [view, albumId, albumGallery ? "" : query, from, to, excludeAlbums]);
   refreshRef.current = async (reconcile = false) => {
     if (view === "similar") await loadSimilar();
-    else await load(false, reconcile);
+    else await load(false, true, true);
   };
   useEffect(() => {
     const fn = () => refreshRef.current();
@@ -376,12 +380,12 @@ function App() {
     return () => window.removeEventListener("aura-library-changed", fn);
   }, []);
   useEffect(() => {
-    if (!info?.queued && !info?.pendingDeletions && !uploading.running) return;
-    const timer = setInterval(() => refreshRef.current(), 4000);
+    if (error || (!info?.queued && !info?.pendingDeletions && !uploading.running)) return;
+    const timer = setInterval(() => { if (!queryLoading.current) void refreshRef.current(); }, 4000);
     return () => clearInterval(timer);
-  }, [info?.queued, info?.pendingDeletions, uploading.running]);
+  }, [info?.queued, info?.pendingDeletions, uploading.running, error]);
   useEffect(() => {
-    if (!next || loading || view === "similar") return;
+    if (!next || loading || error || view === "similar") return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) void load(true);
@@ -390,11 +394,28 @@ function App() {
     );
     if (more.current) observer.observe(more.current);
     return () => observer.disconnect();
-  }, [next, loading, view]);
+  }, [next, loading, view, error]);
+  useEffect(() => {
+    if (!viewerId || !next || loading || error || specialView) return;
+    const index = items.findIndex(a => a.id === viewerId);
+    if (index >= 0 && index >= items.length - 3) void load(true);
+  }, [viewerId, items.length, next, loading, error, specialView]);
   useEffect(() => {
     const fn = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      const editing = (e.target as HTMLElement).closest("input,textarea,select,[contenteditable=true]");
+      if (!overlayOpen && !editing && !e.altKey) {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && (selectionMode || selected.size > 0)) {
+          e.preventDefault();
+          if (!mutationLock.current) setSelected(new Set(items.filter(a => !a.deletionPending).map(a => a.id)));
+        }
+        if (!e.metaKey && !e.ctrlKey && e.key === "/") {
+          e.preventDefault();
+          searchInput.current?.focus();
+        }
+      }
       if (e.key === "Escape") {
-        if (albumDialog || deletionTargets || viewer) {
+        if (albumDialog || deletionTargets || viewer || mutationLock.current) {
           // Dialogs and viewers own Escape and their mutation locks.
           return;
         }
@@ -403,11 +424,15 @@ function App() {
         setHelp(false);
         setMobileMenu(false);
         setSelected(new Set());
+        setSelectionMode(false);
+        setFilters(false);
+        setDragging(false);
+        dragDepth.current = 0;
       }
     };
     window.addEventListener("keydown", fn);
     return () => window.removeEventListener("keydown", fn);
-  }, [albumDialog, deletionTargets, viewer]);
+  }, [albumDialog, deletionTargets, viewer, overlayOpen, selectionMode, selected.size, items]);
   const groups = useMemo(() => {
     const result: { date: string; items: Asset[] }[] = [];
     for (const asset of items) {
@@ -476,26 +501,58 @@ function App() {
       setActionBusy(false);
     }
   }
-  function toggle(id: string) {
+  const selecting = selectionMode || selected.size > 0;
+  function clearSelection() {
+    if (mutationLock.current) return;
+    setSelected(new Set());
+    setSelectionMode(false);
+    selectionAnchor.current = "";
+  }
+  function toggle(id: string, range = false) {
     if (mutationLock.current || items.find(asset => asset.id === id)?.deletionPending) return;
-    setSelected((s) => {
-      const n = new Set(s);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
+    const start = items.findIndex(a => a.id === selectionAnchor.current);
+    const end = items.findIndex(a => a.id === id);
+    setSelectionMode(true);
+    setSelected(current => {
+      const result = new Set(current);
+      if (range && start >= 0 && end >= 0) {
+        for (const asset of items.slice(Math.min(start, end), Math.max(start, end) + 1)) {
+          if (!asset.deletionPending) result.add(asset.id);
+        }
+      } else if (result.has(id)) result.delete(id);
+      else result.add(id);
+      return result;
+    });
+    selectionAnchor.current = id;
+  }
+  function toggleGroup(assets: Asset[]) {
+    if (mutationLock.current) return;
+    const ids = assets.filter(a => !a.deletionPending).map(a => a.id);
+    setSelectionMode(true);
+    setSelected(current => {
+      const result = new Set(current);
+      const all = ids.every(id => current.has(id));
+      for (const id of ids) { if (all) result.delete(id); else result.add(id); }
+      return result;
     });
   }
+  function clearFilters() { setSearch(""); setQuery(""); setFrom(""); setTo(""); }
   function navigate(id: string) {
     urlMode.current = "push";
     setViewer(null);
     setAlbumId("");
     setView(id);
+    clearFilters();
+    setFilters(false);
+    clearSelection();
+    window.scrollTo({ top: 0 });
   }
   function openAlbum(id: string) {
     urlMode.current = "push";
     setSearch(""); setQuery(""); setFrom(""); setTo("");
     setView("albums");
     setAlbumId(id);
+    window.scrollTo({ top: 0 });
   }
   async function locateAsset(id: string) {
     try {
@@ -506,7 +563,7 @@ function App() {
       setSearch(""); setQuery(""); setFrom(""); setTo("");
       setUploadOpen(false);
       setViewer(detail.asset);
-    } catch (e) { notify(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { notify(e instanceof Error ? e.message : String(e), true); }
   }
   async function ignore(pair: SimilarPair, undo = false) {
     if (ignoring) return;
@@ -515,7 +572,7 @@ function App() {
       await api("similar/ignore", { left: pair.left, right: pair.right }, undo ? "DELETE" : "POST");
       if (undo) { setIgnoredPair(null); await loadSimilar(); }
       else { setSimilar(old => old.filter(candidate => candidate.left !== pair.left || candidate.right !== pair.right)); setIgnoredPair(pair); }
-    } catch (e) { notify(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { notify(e instanceof Error ? e.message : String(e), true); }
     finally { setIgnoring(""); }
   }
   function addSelected() {
@@ -561,13 +618,28 @@ function App() {
   const selectedMonth = from === range.from && to === range.to ? month : from || to ? "custom" : "";
   return (
     <div
-      className="app"
+      className={`app ${selecting ? "is-selecting" : ""}`}
+      onDragEnter={e => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        dragDepth.current += 1;
+        if (!viewer && !albumDialog && !deletionTargets && !help) setDragging(true);
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (!dragDepth.current) setDragging(false);
+      }}
+      onDragEnd={() => { dragDepth.current = 0; setDragging(false); }}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) e.preventDefault();
       }}
       onDrop={(e) => {
+        dragDepth.current = 0;
+        setDragging(false);
         if (e.dataTransfer.files.length) {
           e.preventDefault();
+          if (viewer || albumDialog || deletionTargets || help) return;
+          setUploadTab("files");
           uploads.addFiles(Array.from(e.dataTransfer.files));
           setUploadOpen(true);
         }
@@ -575,7 +647,7 @@ function App() {
     >
       <aside className="sidebar">
         <Brand />
-        <nav className="navigation">
+        <nav className="navigation" aria-label="照片库导航">
           {(
             [
               ["all", Grid2X2, "total"],
@@ -586,6 +658,7 @@ function App() {
             <button
               key={id}
               className={view === id ? "active" : ""}
+              aria-current={view === id ? "page" : undefined}
               onClick={() => navigate(id)}
             >
               <Icon size={19} />
@@ -595,6 +668,7 @@ function App() {
           ))}
           <button
             className={view === "albums" ? "active" : ""}
+            aria-current={view === "albums" ? "page" : undefined}
             onClick={() => navigate("albums")}
           >
             <Images size={19} />
@@ -613,6 +687,7 @@ function App() {
             <button
               key={id}
               className={view === id ? "active" : ""}
+              aria-current={view === id ? "page" : undefined}
               onClick={() => navigate(id)}
             >
               <Icon size={18} />
@@ -685,10 +760,14 @@ function App() {
             {!specialView && <div className="search">
               <Search size={17} />
               <input
+                ref={searchInput}
+                type="search"
                 aria-label={albumGallery ? "搜索相片集" : "搜索照片"}
                 placeholder={albumGallery ? "搜索相片集…" : "搜索文件名、相机…"}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onCompositionStart={() => setComposingSearch(true)}
+                onCompositionEnd={() => setComposingSearch(false)}
               />
               {search && (
                 <button onClick={() => setSearch("")} aria-label="清空搜索">
@@ -711,24 +790,13 @@ function App() {
         </header>
         <div className="page">
           {view === "albums" && albumId && (
-            <button className="album-back" onClick={() => { urlMode.current = "push"; setAlbumId(""); }}>
+            <button className="album-back" onClick={() => { urlMode.current = "push"; clearFilters(); setAlbumId(""); clearSelection(); }}>
               <ArrowLeft size={16} />
               全部相片集
             </button>
           )}
           <div className="page-heading">
             <div>
-              <div className="eyebrow">
-                {view === "all"
-                  ? "LIBRARY"
-                  : view === "albums"
-                    ? "ALBUMS"
-                    : view === "live"
-                      ? "LIVE PHOTOS"
-                      : view === "videos"
-                        ? "VIDEOS"
-                        : "COLLECTION"}
-              </div>
               <h1>
                 {pageTitle}
                 {view === "albums" && (
@@ -737,26 +805,13 @@ function App() {
                   </span>
                 )}
                 {view === "all" && info ? (
-                  <span className="heading-count">
+                  <span className="heading-count" title="照片库总数">
                     {info.total.toLocaleString()}
                   </span>
                 ) : null}
               </h1>
             </div>
             <div className="heading-actions">
-              {view === "all" && (
-                <button
-                  className="album-filter-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={hideAlbumAssets}
-                  title="隐藏已加入任意相片集的照片"
-                  onClick={() => setHideAlbumAssets(!hideAlbumAssets)}
-                >
-                  <span>隐藏已入相片集</span>
-                  <span className="switch-track" aria-hidden="true" />
-                </button>
-              )}
               {view === "albums" &&
                 (albumGallery ? (
                   <Button
@@ -796,31 +851,16 @@ function App() {
                   )
                 ))}
               {!albumGallery && !specialView && (
-                <>
-                  <IconButton
-                    title="日期筛选"
-                    className={filters || from || to ? "is-active" : ""}
-                    onClick={() => setFilters(!filters)}
-                  >
-                    <CalendarDays size={19} />
-                  </IconButton>
-                  <div className="density-control">
-                    <Grid2X2 size={15} />
-                    <input
-                      type="range"
-                      aria-label="缩略图大小"
-                      min="3"
-                      max="7"
-                      value={density}
-                      onChange={(e) => setDensity(+e.target.value)}
-                    />
-                  </div>
-                </>
+                <Button className={selecting ? "selection-toggle is-active" : "selection-toggle"} disabled={actionBusy || !items.length} onClick={() => selecting ? clearSelection() : setSelectionMode(true)}>
+                  {selecting ? <Check size={16} /> : <CircleCheck size={16} />}
+                  {selecting ? "完成选择" : "选择"}
+                </Button>
               )}
             </div>
           </div>
           <DeletionProgress state={deletions} otherPending={!!info?.pendingDeletions} />
-          {!albumGallery && !specialView && (!!months.length || !!from || !!to) && (
+          {!albumGallery && !specialView && (
+            <div className="library-toolbar">
             <div className="timeline-jump">
               <CalendarDays size={16} />
               <label>按月浏览<select aria-label="按月浏览" value={selectedMonth} onChange={event => {
@@ -834,9 +874,37 @@ function App() {
                 {[...new Set(months.map(item => item.month.slice(0, 4)))].map(year => <optgroup label={`${year}年`} key={year}>{months.filter(item => item.month.startsWith(year)).map(item => <option value={item.month} key={item.month}>{Number(item.month.slice(5))}月 · {item.count}项</option>)}</optgroup>)}
               </select></label>
             </div>
+            <button className={`filter-toggle ${filters || from || to ? "is-active" : ""}`} aria-expanded={filters} aria-controls="date-filters" onClick={() => setFilters(!filters)}>
+              <SlidersHorizontal size={16} />筛选{(from || to) && <span className="filter-dot" />}
+            </button>
+              {view === "all" && (
+                <button
+                  className="album-filter-toggle"
+                  type="button"
+                  role="switch"
+                  aria-checked={hideAlbumAssets}
+                  title="隐藏已加入任意相片集的照片"
+                  onClick={() => setHideAlbumAssets(!hideAlbumAssets)}
+                >
+                  <span>隐藏已入相片集</span>
+                  <span className="switch-track" aria-hidden="true" />
+                </button>
+              )}
+            <div className="density-control">
+              <button className="icon-button density-cycle" title="切换缩略图大小" aria-label="切换缩略图大小" onClick={() => setDensity(density >= 5 ? 3 : density + 1)}><Grid2X2 size={17} /></button>
+              <input type="range" aria-label="缩略图大小" min="3" max="7" value={density} onChange={e => setDensity(+e.target.value)} />
+            </div>
+            </div>
+          )}
+          {(query || from || to) && !specialView && (
+            <div className="active-filters" aria-label="当前筛选条件">
+              {query && <button onClick={() => { setSearch(""); setQuery(""); }} aria-label="清除搜索条件"><Search size={13} /><span>{query}</span><X size={13} /></button>}
+              {(from || to) && !albumGallery && <button onClick={() => { setFrom(""); setTo(""); }} aria-label="清除日期条件"><CalendarDays size={13} /><span>{from || "不限"} — {to || "不限"}</span><X size={13} /></button>}
+              <button className="clear-filters" onClick={clearFilters}>清除筛选</button>
+            </div>
           )}
           {filters && !albumGallery && !specialView && (
-            <div className="date-filters">
+            <div className="date-filters" id="date-filters">
               <label>
                 拍摄日期
                 <input
@@ -877,14 +945,14 @@ function App() {
               项目在永久删除前可恢复。永久删除会清理全部原件与对应预览。
             </p>
           )}
-          {selected.size > 0 && (
-            <div className="selection-bar">
-              <button disabled={actionBusy} aria-label="取消选择" onClick={() => setSelected(new Set())}>
+          {selecting && !albumGallery && !specialView && (
+            <div className="selection-bar" role="region" aria-label="批量操作">
+              <button className="icon-button" disabled={actionBusy} aria-label="取消选择" onClick={clearSelection}>
                 <X size={16} />
               </button>
-              <strong>已选 {selected.size} 项</strong>
+              <strong aria-live="polite">{selected.size ? `已选 ${selected.size} 项` : "点击照片开始选择"}</strong>
               {view !== "trash" && (
-                <Button className="subtle" disabled={actionBusy} onClick={addSelected}>
+                <Button className="subtle" disabled={actionBusy || !selected.size} onClick={addSelected}>
                   <ImagePlus size={16} />
                   添加到相片集
                 </Button>
@@ -892,7 +960,7 @@ function App() {
               {view === "albums" && albumId && (
                 <Button
                   className="subtle"
-                  disabled={actionBusy}
+                  disabled={actionBusy || !selected.size}
                   onClick={() => void removeSelected()}
                 >
                   <Minus size={16} />
@@ -901,7 +969,7 @@ function App() {
               )}
               <Button
                 className="subtle"
-                disabled={actionBusy || items.some(asset => selected.has(asset.id) && asset.deletionPending)}
+                disabled={actionBusy || !selected.size || items.some(asset => selected.has(asset.id) && asset.deletionPending)}
                 onClick={() => void action(view !== "trash")}
               >
                 {view === "trash" ? (
@@ -911,13 +979,13 @@ function App() {
                 )}{" "}
                 {actionBusy ? "正在处理" : view === "trash" ? "恢复" : "移入最近删除"}
               </Button>
-              {view === "trash" && permanentDeleteEnabled && <Button className="danger" disabled={actionBusy || items.some(asset => selected.has(asset.id) && asset.deletionPending)} onClick={deleteSelected}><Trash2 size={16} />永久删除已选</Button>}
+              {view === "trash" && permanentDeleteEnabled && <Button className="danger" disabled={actionBusy || !selected.size || items.some(asset => selected.has(asset.id) && asset.deletionPending)} onClick={deleteSelected}><Trash2 size={16} />永久删除已选</Button>}
               <Button
                 className="subtle select-loaded"
                 disabled={actionBusy}
-                onClick={() => setSelected(new Set(items.filter(asset => !asset.deletionPending).map(asset => asset.id)))}
+                onClick={() => toggleGroup(items)}
               >
-                选择当前已加载项目
+                {items.filter(a => !a.deletionPending).every(a => selected.has(a.id)) ? "取消全选" : "全选已加载"}
               </Button>
             </div>
           )}
@@ -925,7 +993,7 @@ function App() {
           {error && (
             <div className="error-banner">
               {error}
-              <Button onClick={() => refreshRef.current()}>重试</Button>
+              <Button onClick={retryLoad}>重试</Button>
             </div>
           )}
           {view === "jobs" ? (
@@ -951,7 +1019,7 @@ function App() {
                   open={a => openAlbum(a.id)}
                 />
               ) : (
-                <Empty icon={<Search />} title="没有符合条件的相片集" />
+                <Empty icon={<Search />} title="没有符合条件的相片集"><Button onClick={clearFilters}>清除筛选</Button></Empty>
               )
             ) : (
               !error && (
@@ -967,7 +1035,7 @@ function App() {
               )
             )
           ) : loading && !items.length && view !== "similar" ? (
-            <div className="skeleton-grid">
+            <div className="skeleton-grid" aria-label="正在加载照片" style={{ "--columns": density, "--mobile-columns": density >= 5 ? 4 : density <= 3 ? 2 : 3 } as React.CSSProperties}>
               {Array.from({ length: 12 }, (_, i) => (
                 <div key={i} />
               ))}
@@ -1005,7 +1073,7 @@ function App() {
                               notify("已归并，所有原件均已保留");
                               void loadSimilar();
                             } catch (e) {
-                              notify(String(e));
+                              notify(String(e), true);
                             }
                           }}
                         >
@@ -1069,6 +1137,7 @@ function App() {
                   </button>
                 </>
               ) : null}
+              {(query || from || to) && <Button onClick={clearFilters}>清除筛选</Button>}
               {excludeAlbums && (
                 <Button onClick={() => setHideAlbumAssets(false)}>
                   显示全部照片
@@ -1087,7 +1156,7 @@ function App() {
           ) : (
             <div
               className="timeline"
-              style={{ "--columns": density } as React.CSSProperties}
+              style={{ "--columns": density, "--mobile-columns": density >= 5 ? 4 : density <= 3 ? 2 : 3 } as React.CSSProperties}
             >
               {groups.map((group) => (
                 <section className="day-group" key={group.date}>
@@ -1096,15 +1165,10 @@ function App() {
                       {displayDate(group.date + "T12:00:00")}
                       <span>{group.date.slice(0, 4)}</span>
                     </h2>
-                    <button
-                      onClick={() =>
-                        setSelected(
-                          (s) =>
-                            new Set([...s, ...group.items.map((a) => a.id)]),
-                        )
-                      }
-                    >
-                      {group.items.length} 项<ChevronDown size={13} />
+                    <button className="day-select" disabled={actionBusy || group.items.every(a => a.deletionPending)} aria-pressed={group.items.filter(a => !a.deletionPending).every(a => selected.has(a.id))} onClick={() => toggleGroup(group.items)} title="选择或取消选择当天照片">
+                      <span>{group.items.length} 项</span>
+                      <span className="day-select-label">{group.items.filter(a => !a.deletionPending).every(a => selected.has(a.id)) ? "取消选择" : "选择当天"}</span>
+                      <CircleCheck size={16} />
                     </button>
                   </div>
                   <div className="photo-grid">
@@ -1114,10 +1178,9 @@ function App() {
                         asset={a}
                         selected={selected.has(a.id)}
                         disabled={actionBusy}
-                        select={() => toggle(a.id)}
-                        onClick={() =>
-                          selected.size ? toggle(a.id) : setViewer(a)
-                        }
+                        select={event => toggle(a.id, event.shiftKey)}
+                        selecting={selecting}
+                        onClick={event => selecting || event.shiftKey ? toggle(a.id, event.shiftKey) : setViewer(a)}
                       />
                     ))}
                   </div>
@@ -1130,12 +1193,12 @@ function App() {
               (loading ? (
                 <LoaderCircle className="spin" size={20} />
               ) : (
-                <button onClick={() => void load(true)}>加载更多</button>
+                <button onClick={() => error ? retryLoad() : void load(true)}>{error ? "重试加载" : "加载更多"}</button>
               ))}
           </div>
         </div>
       </main>
-      <nav className="mobile-nav">
+      <nav className="mobile-nav" aria-label="照片库导航">
         {(
           [
             ["all", Grid2X2],
@@ -1146,6 +1209,7 @@ function App() {
           <button
             key={id}
             className={view === id ? "active" : ""}
+              aria-current={view === id ? "page" : undefined}
             onClick={() => navigate(id)}
           >
             <Icon size={21} />
@@ -1215,7 +1279,9 @@ function App() {
       {viewer && (
         <Viewer
           asset={viewer}
-          close={() => { if (viewerKey.current === viewer.id) setViewer(null); }}
+          items={items}
+          openAsset={setViewer}
+          close={() => { if (viewerKey.current === viewer.id) closeViewer(); }}
           previous={() => {
             const n = items.findIndex((i) => i.id === viewer.id);
             if (n > 0) setViewer(items[n - 1]);
@@ -1287,10 +1353,12 @@ function App() {
           </section>
         </div>
       )}
+      {dragging && <div className="file-drop-overlay" aria-hidden="true"><div><CloudUpload size={44} strokeWidth={1.4} /><strong>松开即可导入照片与视频</strong></div></div>}
       {toast && (
         <div className={`toast ${toastError ? "is-error" : ""}`} role={toastError ? "alert" : "status"}>
           {toastError ? <X size={17} /> : <Check size={17} />}
-          {toast}
+          <span>{toast}</span>
+          <button className="icon-button" aria-label="关闭提示" onClick={() => { clearTimeout(toastTimer.current); setToast(""); }}><X size={15} /></button>
         </div>
       )}
     </div>
@@ -1671,388 +1739,4 @@ function UploadDialog({
   );
 }
 
-function Viewer({
-  asset,
-  close,
-  previous,
-  next,
-  changed,
-  notify,
-  addToAlbum,
-  modalOpen,
-  permanentDeleteEnabled,
-  permanentlyDelete,
-}: {
-  asset: Asset;
-  close: () => void;
-  previous: () => void;
-  next: () => void;
-  changed: () => Promise<void>;
-  notify: (s: string, failed?: boolean) => void;
-  addToAlbum: () => void;
-  modalOpen: boolean;
-  permanentDeleteEnabled: boolean;
-  permanentlyDelete: (targets: Asset[]) => void;
-}) {
-  const [detail, setDetail] = useState<Detail>(),
-    [showInfo, setShowInfo] = useState(false),
-    [playing, setPlaying] = useState(false),
-    [error, setError] = useState(""),
-    [imageError, setImageError] = useState(false),
-    [previewAttempt, setPreviewAttempt] = useState(0),
-    [motionAttempt, setMotionAttempt] = useState(0),
-    [updating, setUpdating] = useState(false);
-  const video = useRef<HTMLVideoElement>(null);
-  const currentAsset = useRef(asset.id);
-  currentAsset.current = asset.id;
-  const request = useRef(0);
-  const updateLock = useRef(false);
-  function refresh() {
-    const key = ++request.current;
-    const id = asset.id;
-    return api<Detail>("assets/" + id)
-      .then(data => { if (currentAsset.current === id && request.current === key) setDetail(data); })
-      .catch(e => { if (currentAsset.current === id && request.current === key) setError(e instanceof Error ? e.message : String(e)); });
-  }
-  useEffect(() => {
-    setDetail(undefined);
-    setPlaying(false);
-    setImageError(false);
-    setError("");
-    setPreviewAttempt(0);
-    void refresh();
-    return () => { ++request.current; };
-  }, [asset.id]);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (modalOpen || updateLock.current || e.isComposing || e.ctrlKey || e.metaKey || e.altKey)
-        return;
-      if ((e.target as HTMLElement).matches("input,textarea")) return;
-      if (e.key === "Escape") close();
-      if (e.key === "ArrowLeft") previous();
-      if (e.key === "ArrowRight") next();
-      if (e.key === "i") setShowInfo((x) => !x);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [previous, next, modalOpen, close]);
-  const scopedDetail = detail?.asset.id === asset.id ? detail : undefined;
-  const a = scopedDetail?.asset || asset,
-    primary = scopedDetail?.files.find((f) => f.hash === a.primary);
-  const gestures = useImageGestures(a.primary, a.kind !== "video" && !playing && !modalOpen && !updating && !a.deletionPending, previous, next);
-  useEffect(() => { setImageError(false); }, [a.primary, a.status]);
-  useEffect(() => {
-    if (!imageError) return;
-    const retry = () => { setPreviewAttempt(n => n + 1); setImageError(false); void refresh(); };
-    window.addEventListener("online", retry);
-    return () => window.removeEventListener("online", retry);
-  }, [imageError]);
-  const meta = scopedDetail?.metadata || {};
-  const field = (...names: string[]) => {
-    for (const name of names) {
-      const key = Object.keys(meta).find(
-        (k) => k === name || k.endsWith(":" + name),
-      );
-      if (key && meta[key] !== undefined) return String(meta[key]);
-    }
-    return "";
-  };
-  async function mutate(path: string, p: unknown, method = "PATCH") {
-    if (updateLock.current || a.deletionPending) return false;
-    updateLock.current = true;
-    setUpdating(true);
-    setError("");
-    try {
-      await api(path, p, method);
-      await refresh();
-      return true;
-    } catch (e) {
-      notify(e instanceof Error ? e.message : String(e), true);
-      await refresh();
-      return false;
-    } finally {
-      await changed();
-      updateLock.current = false;
-      setUpdating(false);
-    }
-  }
-  const update = (p: unknown) => mutate("assets/" + a.id, p);
-  const start = () => {
-    setMotionAttempt(n => n + 1);
-    setPlaying(true);
-    setTimeout(() => {
-      if (video.current) {
-        video.current.currentTime = 0;
-        void video.current.play().catch(() => {});
-      }
-    }, 20);
-  };
-  return (
-    <div className={`viewer ${showInfo ? "with-info" : ""}`}>
-      <div className="viewer-main">
-        <header className="viewer-toolbar">
-          <IconButton title="关闭" disabled={updating} onClick={close}>
-            <X size={23} />
-          </IconButton>
-          <div className="viewer-date">
-            <strong>{displayDate(a.capturedAt, true)}</strong>
-            <small>{a.name}</small>
-          </div>
-          <div className="viewer-actions">
-            <IconButton title="添加到相片集" disabled={updating || !!a.trashedAt || !!a.deletionPending} onClick={addToAlbum}>
-              <ImagePlus size={20} />
-            </IconButton>
-            {!a.deletionPending && <a
-              className="icon-button"
-              title="下载全部原件"
-              href={`${base}api/assets/${a.id}/download`}
-            >
-              <ArrowDownToLine size={21} />
-            </a>}
-            <IconButton
-              title="照片信息"
-              className={showInfo ? "active" : ""}
-              onClick={() => setShowInfo(!showInfo)}
-            >
-              <InfoIcon size={21} />
-            </IconButton>
-            <IconButton
-              title={a.deletionPending ? "正在永久删除" : a.trashedAt ? "恢复" : "移入最近删除"}
-              disabled={updating || !!a.deletionPending}
-              onClick={async () => {
-                if (await update({ trash: !a.trashedAt })) {
-                  notify(a.trashedAt ? "已恢复" : "已移入最近删除");
-                  close();
-                }
-              }}
-            >
-              {a.deletionPending ? <LoaderCircle className="spin" size={20} /> : a.trashedAt ? <RefreshCw size={20} /> : <Trash2 size={20} />}
-            </IconButton>
-            {a.trashedAt && permanentDeleteEnabled && !a.deletionPending && <IconButton title="永久删除" className="permanent-delete-action" disabled={updating} onClick={() => permanentlyDelete([a])}><Trash2 size={20} /></IconButton>}
-          </div>
-        </header>
-        <div className="viewer-stage">
-          <button
-            className="viewer-prev"
-            onClick={previous}
-            disabled={updating || modalOpen}
-            aria-label="上一张"
-          >
-            <ChevronLeft />
-          </button>
-          <div className={`media-stage ${a.kind !== "video" && !playing ? "image-gesture-stage" : ""}`} {...gestures.handlers}>
-            {a.kind === "video" ? (
-              <video
-                key={a.primary + previewAttempt}
-                src={media(a.primary, "play") + (previewAttempt ? `?retry=${previewAttempt}` : "")}
-                controls
-                playsInline
-                poster={media(a.primary)}
-                onError={() => setImageError(true)}
-              />
-            ) : (
-              <>
-                <img
-                  key={a.primary}
-                  src={media(a.primary, "preview") + (previewAttempt ? `?retry=${previewAttempt}` : "")}
-                  alt={a.name}
-                  style={{ visibility: playing ? "hidden" : "visible", transform: `translate(${gestures.transform.x}px, ${gestures.transform.y}px) scale(${gestures.transform.scale})`, cursor: gestures.transform.scale > 1 ? "grab" : "zoom-in" }}
-                  draggable={false}
-                  onError={() => setImageError(true)}
-                />
-                {a.motion && playing && (
-                  <video
-                    ref={video}
-                    className="live-video"
-                    src={media(a.motion, "play") + `?retry=${motionAttempt}`}
-                    autoPlay
-                    playsInline
-                    controls
-                    onEnded={() => setPlaying(false)}
-                    onError={() => {
-                      setPlaying(false);
-                      notify("实况预览加载失败，请重试或下载视频原件");
-                    }}
-                  />
-                )}
-              </>
-            )}
-            {imageError && (
-              <div className="viewer-fallback">
-                <ImageIcon size={40} />
-                <p>{a.deletionPending ? "正在永久删除，预览暂不可用" : a.status === "error" ? "预览处理失败" : ["queued", "processing"].includes(a.status) ? "正在生成预览" : "预览加载失败"}</p>
-                <button className="button" disabled={!!a.deletionPending} onClick={() => { setPreviewAttempt(n => n + 1); setImageError(false); void refresh(); }}>重新加载预览</button>
-                {!a.deletionPending && <a className="button" href={media(a.primary, "original")}>
-                  下载原件
-                </a>}
-              </div>
-            )}
-          </div>
-          <button className="viewer-next" onClick={next} disabled={updating || modalOpen} aria-label="下一张">
-            <ChevronRight />
-          </button>
-        </div>
-        <footer className="viewer-footer">
-          {a.deletionPending && <span className="viewer-deletion-pending"><LoaderCircle className="spin" size={14} />正在永久删除，清理完成后会从图库移除</span>}
-          {gestures.transform.scale > 1 && <button className="live-control" onClick={gestures.reset}>还原大小</button>}
-          {a.kind === "live" && (
-            <button
-              className={`live-control ${playing ? "playing" : ""}`}
-              disabled={updating || !!a.deletionPending}
-              onClick={() => (playing ? setPlaying(false) : start())}
-            >
-              <LivePhotoIcon size={18} />
-              {playing ? "停止播放" : "播放实况"}
-            </button>
-          )}
-          <span>
-            {a.width} × {a.height}
-            {primary?.mime
-              ? " · " +
-                primary.mime
-                  .replace("image/", "")
-                  .replace("video/", "")
-                  .toUpperCase()
-              : ""}
-          </span>
-        </footer>
-      </div>
-      {showInfo && (
-        <aside className="info-panel">
-          <div className="info-title">
-            <h2>照片信息</h2>
-            <IconButton title="关闭信息" onClick={() => setShowInfo(false)}>
-              <X size={20} />
-            </IconButton>
-          </div>
-          {error && <div className="error-banner">{error}</div>}
-          <div className="metadata-summary">
-            <div>
-              <CalendarDays size={19} />
-              <span>
-                <strong>{displayDate(a.capturedAt, true)}</strong>
-                <small>
-                  {new Date(a.capturedAt).toLocaleTimeString("zh-CN")}
-                </small>
-              </span>
-            </div>
-            <div>
-              <ImageIcon size={19} />
-              <span>
-                <strong>{a.name}</strong>
-                <small>
-                  {a.width} × {a.height} · {bytes(a.size)}
-                </small>
-              </span>
-            </div>
-            {field("Model", "Make") && (
-              <div>
-                <ScanLine size={19} />
-                <span>
-                  <strong>{field("Model", "Make")}</strong>
-                  <small>
-                    {[
-                      field("LensModel"),
-                      field("FNumber") && "ƒ/" + field("FNumber"),
-                      field("ISO") && "ISO " + field("ISO"),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </small>
-                </span>
-              </div>
-            )}
-            {(field("GPSLatitude") ||
-              primary?.hints.latitude !== undefined) && (
-              <div>
-                <Wifi size={19} />
-                <span>
-                  <strong>定位已保留</strong>
-                  <small>
-                    {field("GPSLatitude") || String(primary?.hints.latitude)},{" "}
-                    {field("GPSLongitude") || String(primary?.hints.longitude)}
-                  </small>
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="originals">
-            <h3>
-              原始资源 <span>{scopedDetail?.files.length || a.variants}</span>
-            </h3>
-            {scopedDetail?.files.map((f) => (
-              <div className="original" key={f.hash}>
-                <div className="original-header">
-                  <span className="file-type">
-                    {f.mime.startsWith("video/") ? (
-                      <Video size={19} />
-                    ) : (
-                      <ImageIcon size={19} />
-                    )}
-                  </span>
-                  <div>
-                    <strong>{f.name}</strong>
-                    <small>
-                      {bytes(f.size)}
-                      {f.hash === a.primary
-                        ? " · 主版本"
-                        : f.hash === a.motion
-                          ? " · 实况视频"
-                          : ""}
-                    </small>
-                  </div>
-                  {!a.deletionPending && <a
-                    title="下载此原件"
-                    className="icon-button"
-                    href={media(f.hash, "original")}
-                  >
-                    <ArrowDownToLine size={16} />
-                  </a>}
-                </div>
-                <div className="original-actions">
-                  {f.hash !== a.primary && f.mime.startsWith("image/") && (
-                    <button disabled={updating || !!a.deletionPending} onClick={() => void update({ primary: f.hash })}>
-                      设为主版本
-                    </button>
-                  )}
-                  {scopedDetail.files.length > 1 && (
-                    <button
-                      disabled={updating || !!a.deletionPending}
-                      onClick={async () => {
-                        if (await mutate(`assets/${a.id}/split`, { hash: f.hash }, "POST")) notify("已分离为独立项目");
-                      }}
-                    >
-                      分离
-                    </button>
-                  )}
-                </div>
-                <details>
-                  <summary>SHA-256</summary>
-                  <code>{f.hash}</code>
-                </details>
-              </div>
-            ))}
-          </div>
-          <details className="all-metadata">
-            <summary>
-              全部元数据 <span>{Object.keys(meta).length}</span>
-            </summary>
-            <dl>
-              {Object.entries(meta).map(([key, value]) => (
-                <React.Fragment key={key}>
-                  <dt>{key}</dt>
-                  <dd>
-                    {typeof value === "object"
-                      ? JSON.stringify(value)
-                      : String(value)}
-                  </dd>
-                </React.Fragment>
-              ))}
-            </dl>
-          </details>
-        </aside>
-      )}
-    </div>
-  );
-}
 createRoot(document.getElementById("root")!).render(<App />);
