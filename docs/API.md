@@ -41,11 +41,11 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | --- | --- |
 | `GET /healthz` | Database connectivity; `{status:"ok",service:"Aura"}` |
 | `GET /api/info` | Version, capabilities, library counts, original byte count, processing/error counts |
-| `GET /api/assets` | `{items,next}` with `view`, `album`, `excludeAlbum`, `excludeAlbums`, `q`, `from`, `to`, `cursor`, and `limit` (default 120, maximum 240) |
+| `GET /api/assets` | `{items,next}` with the shared library filters below, `cursor`, and `limit` (default 120, maximum 240) |
 | `PATCH /api/assets` | `{ids:[assetId],trash:boolean}`; transactional batch removal or restore, 1–1000 IDs |
 | `POST /api/assets/purge` | `{ids:[assetId],confirmation:"永久删除"}`; persist confirmed permanent deletion of selected trash items |
 | `GET /api/deletions/{id}` | Durable cleanup request, pending/error state or completion |
-| `GET /api/timeline` | `{months:[{month,count}]}` using the same visibility, album, search, exclusion, and date filters |
+| `GET /api/timeline` | `{months:[{month,count}]}` using the same library filters before pagination |
 | `GET /api/assets/{id}` | Logical asset, all file records, and combined metadata |
 | `PATCH /api/assets/{id}` | Optional `favorite`, `trash`, or durable manual `primary` fields |
 | `POST /api/assets/{id}/merge` | `{other:"asset-id"}`; merge without discarding originals |
@@ -59,11 +59,38 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `POST /api/files/retry` | `{hashes:[sha256]}`; retry a bounded batch of failed resources |
 | `GET /api/uploads` | Paginated durable incomplete upload sessions with names, sizes, acknowledged offsets, and creation times |
 
-`view` accepts `all`, `favorites`, `live`, `videos`, `grouped`, or `trash`. Text search covers original filenames and retained metadata. Cursor pagination sorts by capture date and asset ID descending. A cursor is opaque to clients; pass back the returned string unchanged.
+### Shared library filters
 
-`album` restricts results to members of that album and returns 404 if it no longer exists. `excludeAlbum` omits existing members for the photo picker. `excludeAlbums=true` omits items belonging to any album. These filters run before cursor pagination and compose with search, date, and visibility filters. The web interface no longer exposes favorites; the legacy API field, filter, and native import hints remain compatible.
+`GET /api/assets` and `GET /api/timeline` accept the same optional scalar parameters. Empty values omit a filter; whitespace-only `q`, `camera`, and `lens` also omit it. All supplied filters combine with AND before cursor pagination. Both endpoints return 400 for repeated filter parameters, unknown enum values, malformed dates or numbers, negative or non-finite numeric bounds, and a lower bound greater than its upper bound. Enum values are case-sensitive. Contradictory valid filters return an empty result.
 
-The timeline endpoint returns calendar-month keys such as `2026-10`, newest first. A month picker can omit `from` and `to` while retaining the other filters, then set the selected month's inclusive date bounds. The browser retains view, album, query, and dates in its URL; API cursor values remain opaque and must not be synthesized from the display month. Library mutations refresh month counts along with items and ordinary counts.
+| Parameter | Values | Meaning |
+| --- | --- | --- |
+| `view` | `all`, `albums`, `favorites`, `live`, `videos`, `grouped`, `trash` | Default `all` excludes recently deleted items. `albums` uses the same visibility and combines with `album` to select a specific album. `trash` includes only deleted items; other views also exclude them. `grouped` requires more than one image original. |
+| `q` | Text | Literal substring of any original filename or retained metadata JSON. |
+| `from`, `to` | `YYYY-MM-DD` | Inclusive capture-date bounds, compared to the stored date portion of `asset.captured_at`. |
+| `album` | Album ID | Require membership; a nonexistent album returns 404. |
+| `excludeAlbum` | Album ID | Exclude members of that album. |
+| `excludeAlbums` | `true` | Exclude items belonging to any album; omitted, empty, or `false` leaves this filter off. |
+| `kind` | `photo`, `live`, `video` | Logical item kind; `photo` excludes Live Photos and videos. |
+| `format` | `jpeg`, `heic`, `png`, `gif`, `webp`, `tiff`, `raw`, `avif`, `mov`, `mp4` | Match any original resource, including secondary images and paired motion, using detected MIME and the filename fallbacks below. |
+| `orientation` | `landscape`, `portrait`, `square`, `panorama` | Primary dimensions only: width greater than height, less than height, equal to height, or width at least twice height. Panorama also qualifies as landscape. Unknown or nonpositive dimensions match none. |
+| `status` | `ready`, `queued`, `processing`, `error` | Primary file processing status. A secondary resource's status does not change this match. |
+| `location` | `with`, `without` | Presence or absence of location on any one original: both native latitude/longitude hints, both GPS latitude/longitude metadata tags, or a nonempty combined GPS position/coordinates tag. Zero coordinates are present. |
+| `versions` | `single`, `multiple` | Exactly one or more than one original with MIME `image/*`. Paired motion and adjustment resources do not count. A one-image Live Photo is `single`; pure videos and items with no identified image match neither. |
+| `albumState` | `in`, `none` | Belongs to at least one album, or to none. `none` has the same effect as `excludeAlbums=true`. |
+| `camera` | Text | Literal substring of a `Make` or `Model` metadata value on any original. |
+| `lens` | Text | Literal substring of `LensMake`, `LensModel`, `LensID`, `Lens`, `LensType`, `LensInfo`, `LensSpec`, or `LensSpecification` on any original. |
+| `minSize`, `maxSize` | Nonnegative integer bytes, at most 9223372036854775807 | Inclusive primary-file size bounds; secondary resource sizes are not summed. |
+| `minMP`, `maxMP` | Nonnegative finite floating-point megapixels | Inclusive primary resolution bounds, calculated as width × height / 1,000,000 without display rounding. Unknown or nonpositive dimensions are excluded even when a bound is zero. |
+| `addedFrom`, `addedTo` | `YYYY-MM-DD` | Inclusive import calendar dates in the service's local timezone (`Asia/Shanghai` on `nas`), applied to the UTC `asset.created_at` timestamp. Bounds run from local midnight on `addedFrom` through, but excluding, local midnight after `addedTo`; fractional seconds retain their exact boundary membership. This is the retained logical item's creation date, independent of capture date and the date a version or album membership was added. |
+
+Format matching uses JPEG, HEIC/HEIF (including sequence MIME types), PNG, GIF, WebP, TIFF, vendor RAW, AVIF, QuickTime, and MP4 MIME types. `heic` also matches `.heic`/`.heif`; `raw` also matches `.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.rw2`, `.orf`, `.pef`, and `.srw`, since these resources can have generic container MIME types. Other formats use their corresponding extensions only when MIME is empty or `application/octet-stream`; JPEG includes `.jpg`/`.jpeg`, TIFF includes `.tif`/`.tiff`, and MP4 includes `.mp4`/`.m4v`. MIME and extension comparisons ignore ASCII case. An item can match multiple format choices because it retains several originals, or because a RAW container also identifies as TIFF. File records represent originals; generated previews and playback files do not supply matches.
+
+Camera, lens, and GPS metadata recognize exact tag names and colon-prefixed group suffixes such as `IFD0:Make`, `ExifIFD:LensModel`, and `Composite:GPSLatitude`. Location requires a pair on the same original, or a complete `GPSPosition`/`GPSCoordinates` field; latitude/longitude references, altitude alone, nulls, and empty text do not establish location. Camera/lens values and `q` are trimmed and use SQLite's literal substring matching: `%`, `_`, and backslash are ordinary characters, ASCII case is ignored, and non-ASCII case folding is not supplied. Camera/lens matching does not search filenames or unrelated metadata tags. Different filters may match different resources of the same logical item.
+
+Cursor pagination sorts by capture date and asset ID descending. Pass the returned cursor unchanged with the same filters; reset it when filters change. The timeline returns calendar-month keys such as `2026-10`, newest first, counting matching logical items across all pages and ignoring `cursor` and `limit`. A month picker can omit `from` and `to` while retaining every other filter, including import dates, then set the selected month's inclusive capture-date bounds. Library mutations refresh month counts along with items and ordinary counts. The web interface no longer exposes favorites; the legacy API field, filter, and native import hints remain compatible.
+
+For example, `/api/assets?kind=live&format=heic&location=with&versions=single&minMP=12&addedFrom=2026-10-01&limit=24` lists matching Live Photos; `/api/timeline` with the same filter parameters counts them by capture month. These read-only filters use the existing catalog and resource/membership indexes, without a schema migration or materialized metadata writes.
 
 ## Deletion and restore
 

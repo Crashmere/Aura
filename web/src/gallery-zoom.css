@@ -1,0 +1,177 @@
+.gallery-zoom {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 180px;
+  gap: 2px;
+  min-inline-size: 140px;
+  max-inline-size: calc(100% - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  margin-inline-start: auto;
+  margin-inline-end: env(safe-area-inset-right, 0px);
+  color: var(--accent, #536449);
+}
+
+.gallery-zoom > button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  inline-size: 36px;
+  block-size: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  touch-action: manipulation;
+}
+
+.gallery-zoom > input[type="range"] {
+  display: block;
+  flex: 1 1 64px;
+  inline-size: 64px;
+  min-inline-size: 48px;
+  block-size: 36px;
+  padding: 0;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  direction: ltr;
+  background: transparent;
+  cursor: pointer;
+  accent-color: var(--accent, #536449);
+}
+
+.gallery-zoom > input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 3px;
+  background: #d4d9cd;
+}
+
+.gallery-zoom > input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent, #536449);
+}
+
+.gallery-zoom > input[type="range"]::-moz-range-track {
+  height: 3px;
+  border-radius: 3px;
+  background: #d4d9cd;
+}
+
+.gallery-zoom > input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent, #536449);
+}
+
+.gallery-zoom > :focus,
+.gallery-zoom > :focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.gallery-zoom > :disabled {
+  opacity: .4;
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .gallery-zoom > button:hover:not(:disabled) { background: #eaf0e1; }
+}
+
+.timeline.aura-gallery,
+.gallery-skeleton.skeleton-grid {
+  --gallery-columns: var(--columns, 7);
+  --gallery-gap: 3px;
+  min-width: 0;
+  overflow-anchor: none;
+}
+
+.timeline.aura-gallery > .day-group > .photo-grid,
+.gallery-skeleton.skeleton-grid {
+  grid-template-columns: repeat(var(--gallery-columns), minmax(0, 1fr));
+  gap: var(--gallery-gap);
+}
+
+.timeline.aura-gallery > .day-group {
+  margin-bottom: 22px;
+}
+
+.timeline.aura-gallery > .day-group[data-gallery-zoom-active] {
+  content-visibility: visible;
+  contain: none;
+}
+
+.timeline.aura-gallery > .day-group > .day-heading {
+  margin-bottom: 10px;
+}
+
+.timeline.aura-gallery .photo-grid > .photo,
+.gallery-skeleton.skeleton-grid > div {
+  border-radius: 3px;
+}
+
+.timeline.aura-gallery .photo-grid > .photo {
+  container-type: inline-size;
+}
+
+.timeline.aura-gallery .photo.selected img { border-radius: 3px; }
+.timeline.aura-gallery .photo-kind { left: 4px; bottom: 4px; border-radius: 3px; padding: 3px 4px; }
+.timeline.aura-gallery .photo-versions { right: 4px; top: 4px; }
+.timeline.aura-gallery .select-photo { left: 4px; top: 4px; width: 26px; height: 26px; }
+
+/* Card width also covers dense desktop layouts near the sidebar breakpoint. */
+@container (max-width: 72px) {
+  .timeline.aura-gallery .photo-kind { font-size: 0; gap: 0; padding: 2px; }
+  .timeline.aura-gallery .photo-versions,
+  .timeline.aura-gallery .photo-missing > span { display: none; }
+  .timeline.aura-gallery .photo-retry,
+  .timeline.aura-gallery .photo-deletion-pending { font-size: 0; gap: 0; padding: 3px; }
+  .timeline.aura-gallery .select-photo { width: 24px; height: 24px; }
+}
+
+@media (max-width: 720px) {
+  .gallery-zoom { flex-basis: 164px; }
+  .timeline.aura-gallery,
+  .gallery-skeleton.skeleton-grid {
+    --gallery-columns: var(--mobile-columns, 4);
+    --gallery-gap: 2px;
+  }
+  .timeline.aura-gallery .photo-grid > .photo,
+  .gallery-skeleton.skeleton-grid > div { border-radius: 2px; }
+}
+
+.timeline.aura-gallery .photo:not(.selecting):not(.selected) .select-photo { opacity: 0; pointer-events: none; }
+@media (hover: hover) and (pointer: fine) {
+  .timeline.aura-gallery .photo:not(.selecting):not(.selected):hover .select-photo { opacity: 1; pointer-events: auto; }
+}
+@media (min-width: 360px) and (max-width: 720px) {
+  .library-toolbar .timeline-jump > svg { display: none; }
+  .library-toolbar .timeline-jump select { width: 116px; min-width: 0; }
+  .library-toolbar .filter-toggle { margin-left: auto; padding-inline: 8px; }
+  .library-toolbar .gallery-zoom { flex: 0 1 142px; min-inline-size: 132px; margin-left: 0; }
+  .library-toolbar .gallery-zoom > button { flex-basis: 30px; inline-size: 30px; }
+}
+@media (max-width: 359px) {
+  .library-toolbar .gallery-zoom { flex: 1 0 100%; }
+}
+
+.library-toolbar {
+  position: sticky;
+  top: 76px;
+  z-index: 21;
+  background: #fafaf8ed;
+  backdrop-filter: blur(18px);
+  padding-top: 10px;
+  margin-top: -10px;
+}
+@media (max-width: 720px) {
+  .library-toolbar { top: calc(112px + env(safe-area-inset-top)); }
+}

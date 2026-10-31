@@ -64,6 +64,9 @@ import { LivePhotoIcon } from "./live-photo-icon";
 import { AlbumDialog, AlbumDialogState, AlbumGrid } from "./albums";
 import { readLocation, writeLocation, monthRange } from "./library-location";
 import { TaskCenter } from "./task-center";
+import { useGalleryZoom, GalleryZoomControls } from "./gallery-zoom";
+import { FilterPanel } from "./filter-panel";
+import { emptyFilters, filterChips, filterParams, type FilterDraft } from "./library-filters";
 import { Viewer } from "./viewer";
 import { Button, IconButton } from "./controls";
 import { DeletionProgress, PermanentDeleteDialog, useDeletionOperations } from "./permanent-delete";
@@ -125,22 +128,21 @@ function App() {
     [query, setQuery] = useState(initial.query),
     [from, setFrom] = useState(initial.from),
     [to, setTo] = useState(initial.to),
-    [filters, setFilters] = useState(false),
-    [density, setDensity] = useState(() => {
-      try {
-        const saved = Number(localStorage.getItem("aura-grid-density"));
-        return saved >= 3 && saved <= 7 ? saved : 4;
-      } catch { return 4; }
-    });
-  const [hideAlbumAssets, setHideAlbumAssets] = useState(() => {
-    if (initial.hideAlbums !== undefined) return initial.hideAlbums;
+    [filters, setFilters] = useState(false);
+  const galleryZoom = useGalleryZoom();
+  const [photoFilters, setPhotoFilters] = useState(() => {
+    const values = { ...initial.filters };
     try {
-      return localStorage.getItem("aura-hide-album-assets") === "true";
-    } catch {
-      return false;
-    }
+      if (!values.albumState && initial.hideAlbums === undefined && localStorage.getItem("aura-hide-album-assets") === "true") values.albumState = "none";
+    } catch { /* Optional preference migration. */ }
+    return values;
   });
-  const excludeAlbums = view === "all" && hideAlbumAssets;
+  const photoFilterKey = JSON.stringify(photoFilters);
+  const chips = filterChips(photoFilters);
+  const activeFilterCount = chips.length + (from || to ? 1 : 0);
+  const hasConditions = !!(query || activeFilterCount);
+  const excludeAlbums = photoFilters.albumState === "none";
+  const filterAnchor = useRef<HTMLButtonElement>(null);
   const [uploadOpen, setUploadOpen] = useState(false),
     [uploadTab, setUploadTab] = useState("files"),
     [viewer, setViewerState] = useState<Asset | null>(null),
@@ -191,9 +193,9 @@ function App() {
     else setViewer(null);
   }
   useEffect(() => {
-    writeLocation({ view, album: albumId, query, from, to, asset: viewerId, hideAlbums: hideAlbumAssets }, urlMode.current);
+    writeLocation({ view, album: albumId, query, from, to, asset: viewerId, filters: photoFilters }, urlMode.current);
     urlMode.current = "replace";
-  }, [view, albumId, query, from, to, viewerId, hideAlbumAssets]);
+  }, [view, albumId, query, from, to, viewerId, photoFilterKey]);
   useEffect(() => {
     const change = () => {
       const state = readLocation();
@@ -205,7 +207,8 @@ function App() {
       setTo(state.to);
       setViewerState(null);
       setViewerId(state.asset);
-      if (state.hideAlbums !== undefined) setHideAlbumAssets(state.hideAlbums);
+      setPhotoFilters(state.filters);
+      setFilters(false);
       setSelected(new Set());
       setSelectionMode(false);
       selectionAnchor.current = "";
@@ -229,27 +232,20 @@ function App() {
     return () => { active = false; };
   }, [viewerId]);
   useEffect(() => {
-    try {
-      localStorage.setItem("aura-hide-album-assets", String(hideAlbumAssets));
-    } catch {
-      // Browsing still works when storage is unavailable.
-    }
-  }, [hideAlbumAssets]);
+    try { localStorage.removeItem("aura-hide-album-assets"); } catch { /* Optional preference migration. */ }
+  }, []);
   useEffect(() => {
     if (composingSearch) return;
     const id = setTimeout(() => setQuery(search), 250);
     return () => clearTimeout(id);
   }, [search, composingSearch]);
-  const overlayOpen = !!viewer || uploadOpen || help || !!albumDialog || !!deletionTargets || mobileMenu;
+  const overlayOpen = !!viewer || uploadOpen || help || !!albumDialog || !!deletionTargets || mobileMenu || filters;
   useEffect(() => {
     if (!overlayOpen) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previous; };
   }, [overlayOpen]);
-  useEffect(() => {
-    try { localStorage.setItem("aura-grid-density", String(density)); } catch { /* Optional preference. */ }
-  }, [density]);
   useEffect(() => () => clearTimeout(toastTimer.current), []);
   const notify = (text: string, failed = false) => {
     clearTimeout(toastTimer.current);
@@ -264,7 +260,7 @@ function App() {
       from,
       to,
       ...(view === "albums" && albumId ? { album: albumId } : {}),
-      ...(excludeAlbums ? { excludeAlbums: "true" } : {}),
+      ...filterParams(photoFilters),
       ...(cursor ? { cursor } : {}),
     }).toString();
   async function load(append = false, reconcile = false, preserveRange = false) {
@@ -293,7 +289,7 @@ function App() {
           : readPage(),
         api<Info>("info"),
         api<Album[]>("albums"),
-        albumGallery || specialView ? Promise.resolve({ months: [] } as Timeline) : api<Timeline>("timeline?" + new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...(excludeAlbums ? { excludeAlbums: "true" } : {}) })),
+        albumGallery || specialView ? Promise.resolve({ months: [] } as Timeline) : api<Timeline>("timeline?" + new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...filterParams(photoFilters) })),
       ]);
       if (key !== queryKey.current) return;
       setItems((old) =>
@@ -369,7 +365,7 @@ function App() {
     setActionError("");
     if (view === "similar") { setSimilar([]); setSimilarNext(""); setIgnoredPair(null); void loadSimilar(); }
     else void load();
-  }, [view, albumId, albumGallery ? "" : query, from, to, excludeAlbums]);
+  }, [view, albumId, albumGallery ? "" : query, from, to, photoFilterKey]);
   refreshRef.current = async (reconcile = false) => {
     if (view === "similar") await loadSimilar();
     else await load(false, true, true);
@@ -415,7 +411,7 @@ function App() {
         }
       }
       if (e.key === "Escape") {
-        if (albumDialog || deletionTargets || viewer || mutationLock.current) {
+        if (albumDialog || deletionTargets || viewer || filters || mutationLock.current) {
           // Dialogs and viewers own Escape and their mutation locks.
           return;
         }
@@ -432,7 +428,7 @@ function App() {
     };
     window.addEventListener("keydown", fn);
     return () => window.removeEventListener("keydown", fn);
-  }, [albumDialog, deletionTargets, viewer, overlayOpen, selectionMode, selected.size, items]);
+  }, [albumDialog, deletionTargets, viewer, overlayOpen, selectionMode, selected.size, items, filters]);
   const groups = useMemo(() => {
     const result: { date: string; items: Asset[] }[] = [];
     for (const asset of items) {
@@ -536,7 +532,11 @@ function App() {
       return result;
     });
   }
-  function clearFilters() { setSearch(""); setQuery(""); setFrom(""); setTo(""); }
+  function clearFilters() { setSearch(""); setQuery(""); setFrom(""); setTo(""); setPhotoFilters(emptyFilters()); }
+  function applyFilters(draft: FilterDraft) {
+    const { from: start, to: end, ...values } = draft;
+    setFrom(start); setTo(end); setPhotoFilters(values);
+  }
   function navigate(id: string) {
     urlMode.current = "push";
     setViewer(null);
@@ -549,7 +549,7 @@ function App() {
   }
   function openAlbum(id: string) {
     urlMode.current = "push";
-    setSearch(""); setQuery(""); setFrom(""); setTo("");
+    clearFilters();
     setView("albums");
     setAlbumId(id);
     window.scrollTo({ top: 0 });
@@ -560,7 +560,7 @@ function App() {
       urlMode.current = "push";
       setView(detail.asset.trashedAt ? "trash" : "all");
       setAlbumId("");
-      setSearch(""); setQuery(""); setFrom(""); setTo("");
+      clearFilters();
       setUploadOpen(false);
       setViewer(detail.asset);
     } catch (e) { notify(e instanceof Error ? e.message : String(e), true); }
@@ -623,7 +623,7 @@ function App() {
         if (!e.dataTransfer.types.includes("Files")) return;
         e.preventDefault();
         dragDepth.current += 1;
-        if (!viewer && !albumDialog && !deletionTargets && !help) setDragging(true);
+        if (!viewer && !albumDialog && !deletionTargets && !help && !filters) setDragging(true);
       }}
       onDragLeave={() => {
         dragDepth.current = Math.max(0, dragDepth.current - 1);
@@ -638,7 +638,7 @@ function App() {
         setDragging(false);
         if (e.dataTransfer.files.length) {
           e.preventDefault();
-          if (viewer || albumDialog || deletionTargets || help) return;
+          if (viewer || albumDialog || deletionTargets || help || filters) return;
           setUploadTab("files");
           uploads.addFiles(Array.from(e.dataTransfer.files));
           setUploadOpen(true);
@@ -874,65 +874,18 @@ function App() {
                 {[...new Set(months.map(item => item.month.slice(0, 4)))].map(year => <optgroup label={`${year}年`} key={year}>{months.filter(item => item.month.startsWith(year)).map(item => <option value={item.month} key={item.month}>{Number(item.month.slice(5))}月 · {item.count}项</option>)}</optgroup>)}
               </select></label>
             </div>
-            <button className={`filter-toggle ${filters || from || to ? "is-active" : ""}`} aria-expanded={filters} aria-controls="date-filters" onClick={() => setFilters(!filters)}>
-              <SlidersHorizontal size={16} />筛选{(from || to) && <span className="filter-dot" />}
+            <button ref={filterAnchor} className={`filter-toggle ${filters || activeFilterCount ? "is-active" : ""}`} aria-expanded={filters} aria-controls="library-filters" onClick={() => setFilters(!filters)}>
+              <SlidersHorizontal size={16} />筛选{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}
             </button>
-              {view === "all" && (
-                <button
-                  className="album-filter-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={hideAlbumAssets}
-                  title="隐藏已加入任意相片集的照片"
-                  onClick={() => setHideAlbumAssets(!hideAlbumAssets)}
-                >
-                  <span>隐藏已入相片集</span>
-                  <span className="switch-track" aria-hidden="true" />
-                </button>
-              )}
-            <div className="density-control">
-              <button className="icon-button density-cycle" title="切换缩略图大小" aria-label="切换缩略图大小" onClick={() => setDensity(density >= 5 ? 3 : density + 1)}><Grid2X2 size={17} /></button>
-              <input type="range" aria-label="缩略图大小" min="3" max="7" value={density} onChange={e => setDensity(+e.target.value)} />
-            </div>
+            <GalleryZoomControls {...galleryZoom.controlsProps} />
             </div>
           )}
-          {(query || from || to) && !specialView && (
+          {hasConditions && !specialView && (
             <div className="active-filters" aria-label="当前筛选条件">
               {query && <button onClick={() => { setSearch(""); setQuery(""); }} aria-label="清除搜索条件"><Search size={13} /><span>{query}</span><X size={13} /></button>}
               {(from || to) && !albumGallery && <button onClick={() => { setFrom(""); setTo(""); }} aria-label="清除日期条件"><CalendarDays size={13} /><span>{from || "不限"} — {to || "不限"}</span><X size={13} /></button>}
+              {!albumGallery && chips.map(chip => <button key={chip.keys.join("-")} aria-label={`清除${chip.text}`} onClick={() => setPhotoFilters(previous => ({ ...previous, ...Object.fromEntries(chip.keys.map(key => [key, ""])) }))}><span>{chip.text}</span><X size={13} /></button>)}
               <button className="clear-filters" onClick={clearFilters}>清除筛选</button>
-            </div>
-          )}
-          {filters && !albumGallery && !specialView && (
-            <div className="date-filters" id="date-filters">
-              <label>
-                拍摄日期
-                <input
-                  type="date"
-                  value={from}
-                  max={to || undefined}
-                  onChange={(e) => setFrom(e.target.value)}
-                />
-              </label>
-              <span>至</span>
-              <input
-                aria-label="结束日期"
-                type="date"
-                min={from || undefined}
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              />
-              {(from || to) && (
-                <Button
-                  className="subtle"
-                  onClick={() => {
-                    setFrom("");
-                    setTo("");
-                  }}
-                >
-                  清除
-                </Button>
-              )}
             </div>
           )}
           {view === "grouped" && (
@@ -1035,7 +988,7 @@ function App() {
               )
             )
           ) : loading && !items.length && view !== "similar" ? (
-            <div className="skeleton-grid" aria-label="正在加载照片" style={{ "--columns": density, "--mobile-columns": density >= 5 ? 4 : density <= 3 ? 2 : 3 } as React.CSSProperties}>
+            <div {...galleryZoom.skeletonProps} aria-label="正在加载照片">
               {Array.from({ length: 12 }, (_, i) => (
                 <div key={i} />
               ))}
@@ -1091,7 +1044,7 @@ function App() {
           ) : !items.length && !error ? (
             <Empty
               icon={
-                view === "all" && !query && !from && !to && !excludeAlbums ? (
+                view === "all" && !hasConditions ? (
                   <ImageIcon />
                 ) : view === "albums" ? (
                   <Images />
@@ -1100,7 +1053,7 @@ function App() {
                 )
               }
               title={
-                query || from || to
+                hasConditions
                   ? "没有符合条件的照片"
                   : excludeAlbums
                     ? "没有未加入相片集的照片"
@@ -1113,7 +1066,7 @@ function App() {
                           : `还没有${titles[view]}`
               }
             >
-              {view === "all" && !query && !from && !to && !excludeAlbums ? (
+              {view === "all" && !hasConditions ? (
                 <>
                   <Button
                     className="primary"
@@ -1137,13 +1090,8 @@ function App() {
                   </button>
                 </>
               ) : null}
-              {(query || from || to) && <Button onClick={clearFilters}>清除筛选</Button>}
-              {excludeAlbums && (
-                <Button onClick={() => setHideAlbumAssets(false)}>
-                  显示全部照片
-                </Button>
-              )}
-              {view === "albums" && album && !query && !from && !to && (
+              {hasConditions && <Button onClick={clearFilters}>清除筛选</Button>}
+              {view === "albums" && album && !hasConditions && (
                 <Button
                   className="primary"
                   onClick={() => setAlbumDialog({ kind: "pick", album })}
@@ -1154,10 +1102,7 @@ function App() {
               )}
             </Empty>
           ) : (
-            <div
-              className="timeline"
-              style={{ "--columns": density, "--mobile-columns": density >= 5 ? 4 : density <= 3 ? 2 : 3 } as React.CSSProperties}
-            >
+            <div {...galleryZoom.timelineProps}>
               {groups.map((group) => (
                 <section className="day-group" key={group.date}>
                   <div className="day-heading">
@@ -1267,6 +1212,7 @@ function App() {
           </div>
         </div>
       )}
+      {filters && !albumGallery && !specialView && <FilterPanel value={{ ...photoFilters, from, to }} anchor={filterAnchor} apply={applyFilters} close={() => setFilters(false)} />}
       {uploadOpen && (
         <UploadDialog
           tab={uploadTab}

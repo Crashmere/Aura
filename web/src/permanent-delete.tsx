@@ -119,12 +119,15 @@ export function PermanentDeleteDialog({ targets, close, submit }: {
   close: () => void;
   submit: (ids: string[], confirmation: string) => Promise<void>;
 }) {
-  const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const lock = useRef(false);
-  const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { input.current?.focus(); }, []);
+  const dialog = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    dialog.current?.focus({ preventScroll: true });
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true }); };
+  }, []);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.isComposing && !lock.current) close(); };
     window.addEventListener("keydown", handler);
@@ -133,27 +136,26 @@ export function PermanentDeleteDialog({ targets, close, submit }: {
   const dismiss = () => { if (!lock.current) close(); };
   async function confirm(event: React.FormEvent) {
     event.preventDefault();
-    if (lock.current || confirmation.trim() !== confirmationText) return;
+    if (lock.current) return;
     lock.current = true;
     setBusy(true);
     setError("");
-    try { await submit(targets.map(asset => asset.id), confirmation.trim()); }
+    try { await submit(targets.map(asset => asset.id), confirmationText); }
     catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { lock.current = false; setBusy(false); }
   }
   return (
     <div className="modal-backdrop deletion-backdrop" onClick={dismiss}>
-      <section className="dialog permanent-delete-dialog" role="dialog" aria-modal="true" aria-label="确认永久删除" onClick={event => event.stopPropagation()}>
+      <section ref={dialog} tabIndex={-1} className="dialog permanent-delete-dialog" role="dialog" aria-modal="true" aria-label="确认永久删除" onClick={event => event.stopPropagation()}>
         <header className="dialog-title"><h2>永久删除 {targets.length} 项照片</h2><button className="icon-button" aria-label="关闭永久删除弹窗" disabled={busy} onClick={dismiss}><X size={20} /></button></header>
         <form onSubmit={event => void confirm(event)}>
           <div className="dialog-content">
             <p className="deletion-warning"><Trash2 size={20} />此操作无法在 Aura 内撤销。</p>
             <p className="deletion-note">会删除这些照片的全部原件、其他版本、实况视频及对应预览，不会删除设备上的 Apple 照片，也不会改动已有备份。</p>
             <ul className="deletion-targets">{targets.slice(0, 4).map(asset => <li key={asset.id}>{asset.name}<span>{asset.variants} 份资源</span></li>)}{targets.length > 4 && <li>以及另外 {targets.length - 4} 项</li>}</ul>
-            <label className="deletion-confirm-label">输入“永久删除”确认<input ref={input} aria-label="永久删除确认文字" placeholder="永久删除" value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} autoComplete="off" /></label>
             {error && <div className="error-banner" role="alert">{error}</div>}
           </div>
-          <footer className="dialog-footer"><button className="button" type="button" disabled={busy} onClick={dismiss}>取消</button><button className="button danger" type="submit" disabled={busy || confirmation.trim() !== confirmationText}>{busy ? "正在确认删除" : "确认永久删除"}</button></footer>
+          <footer className="dialog-footer"><button className="button" type="button" disabled={busy} onClick={dismiss}>取消</button><button className="button danger" type="submit" disabled={busy}>{busy ? "正在确认删除" : "确认永久删除"}</button></footer>
         </form>
       </section>
     </div>

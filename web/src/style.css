@@ -2180,6 +2180,7 @@ input {
 .deletion-backdrop {
   z-index: 110;
 }
+.permanent-delete-dialog:focus { outline: none; }
 .permanent-delete-dialog {
   width: min(100%, 520px);
 }
@@ -2229,20 +2230,6 @@ input {
   flex-shrink: 0;
   color: #8b9580;
   font-size: 11px;
-}
-.deletion-confirm-label {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  color: #748665;
-  font-size: 12px;
-}
-.deletion-confirm-label input {
-  padding: 12px;
-  border: 1px solid #dce3d2;
-  background: white;
-  border-radius: 8px;
-  font-size: 14px;
 }
 .permanent-delete-dialog .error-banner {
   margin-top: 16px;
