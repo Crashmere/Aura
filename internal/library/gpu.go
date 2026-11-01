@@ -77,6 +77,11 @@ func (l *Library) videoDerivative(ctx context.Context, input, output, step strin
 	modes := []string{"CPU"}
 	if l.nvidiaAvailable(ctx) {
 		modes = []string{"NVIDIA GPU", "NVIDIA GPU · 软件解码", "CPU"}
+		if thumbnail {
+			// CUDA frames retain the display matrix without applying it. JPEG
+			// cannot retain that matrix, so orient decoded pixels before upload.
+			modes = modes[1:]
+		}
 	}
 	var err error
 	for _, mode := range modes {
@@ -110,7 +115,7 @@ func (l *Library) videoDerivative(ctx context.Context, input, output, step strin
 		}
 		args = append(args, "-vf", filter)
 		if thumbnail {
-			args = append(args, "-frames:v", "1")
+			args = append(args, "-frames:v", "1", "-map_metadata", "-1")
 		} else {
 			args = append(args, "-map", "0:a?")
 			if gpu {
