@@ -2442,6 +2442,20 @@ input {
   gap: 24px;
   margin-bottom: 20px;
   border-bottom: 1px solid var(--line);
+  scroll-margin-top: 130px;
+}
+.similar-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  margin: 20px 0;
+}
+.similar-pagination span {
+  min-width: 64px;
+  text-align: center;
+  color: #89917f;
+  font-size: 12px;
 }
 .similar-tabs button {
   padding: 0 0 12px;

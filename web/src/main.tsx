@@ -158,6 +158,8 @@ function App() {
   const [similar, setSimilar] = useState<SimilarPair[]>([]),
     [similarSource, setSimilarSource] = useState<"dhash" | "dino">("dhash"),
     [similarNext, setSimilarNext] = useState(""),
+    [similarPage, setSimilarPage] = useState(0),
+    [similarCursors, setSimilarCursors] = useState<string[]>([""]),
     [ignoredPair, setIgnoredPair] = useState<SimilarPair | null>(null),
     [ignoring, setIgnoring] = useState(""),
     [similarAssets, setSimilarAssets] = useState<Record<string, Asset>>({});
@@ -337,18 +339,18 @@ function App() {
     else if (failedLoad.current === "append") void load(true);
     else void load(false, true, true);
   }
-  async function loadSimilar(append = false) {
+  async function loadSimilar(append = false, pageCursor?: string, pageIndex?: number) {
     const key = ++queryKey.current;
     queryLoading.current = true;
     setLoading(true);
     setError("");
     setMonths([]);
     try {
-      const data = await api<SimilarPage>("similar?" + new URLSearchParams({ source: similarSource, paged: "true", limit: "50", ...(append && similarNext ? { cursor: similarNext } : {}) }));
+      const currentPage = pageIndex ?? similarPage;
+      const cursor = similarSource === "dino" ? pageCursor ?? similarCursors[currentPage] ?? "" : append ? similarNext : "";
+      const data = await api<SimilarPage>("similar?" + new URLSearchParams({ source: similarSource, paged: "true", limit: similarSource === "dino" ? "20" : "50", ...(cursor ? { cursor } : {}) }));
       if (key !== queryKey.current) return;
       const pairs = data.items;
-      setSimilar(old => append ? [...old, ...pairs.filter(pair => !old.some(previous => previous.left === pair.left && previous.right === pair.right))] : pairs);
-      setSimilarNext(data.next);
       const ids = [...new Set(pairs.flatMap((p) => [p.left, p.right]))];
       const assets: Record<string, Asset> = {};
       for (let i = 0; i < ids.length; i += 8) {
@@ -364,7 +366,13 @@ function App() {
         );
       }
       if (key !== queryKey.current) return;
+      setSimilar(old => append ? [...old, ...pairs.filter(pair => !old.some(previous => previous.left === pair.left && previous.right === pair.right))] : pairs);
+      setSimilarNext(data.next);
       setSimilarAssets(old => append ? { ...old, ...assets } : assets);
+      if (similarSource === "dino") {
+        setSimilarPage(currentPage);
+        setSimilarCursors(old => [...old.slice(0, currentPage), cursor]);
+      }
       const stats = await api<Info>("info");
       if (key === queryKey.current) setInfo(stats);
     } catch (e) {
@@ -373,6 +381,21 @@ function App() {
       if (key === queryKey.current) { queryLoading.current = false; setLoading(false); }
     }
   }
+  function turnSimilarPage(direction: -1 | 1) {
+    if (loading) return;
+    const page = similarPage + direction;
+    const cursor = direction === 1 ? similarNext : similarCursors[page];
+    if (page < 0 || cursor === undefined || direction === 1 && !cursor) return;
+    void loadSimilar(false, cursor, page).then(() => {
+      if (queryLoading.current) return;
+      document.querySelector(".similar-tabs")?.scrollIntoView({ block: "start" });
+    });
+  }
+  const similarPagination = <nav className="similar-pagination" aria-label="智能推荐分页">
+    <Button disabled={loading || similarPage === 0} onClick={() => turnSimilarPage(-1)}>上一页</Button>
+    <span aria-live="polite">第 {similarPage + 1} 页</span>
+    <Button disabled={loading || !similarNext} onClick={() => turnSimilarPage(1)}>下一页</Button>
+  </nav>;
   useEffect(() => {
     ++queryKey.current;
     setItems([]);
@@ -381,7 +404,7 @@ function App() {
     setSelectionMode(false);
     selectionAnchor.current = "";
     setActionError("");
-    if (view === "similar") { setSimilar([]); setSimilarNext(""); setIgnoredPair(null); void loadSimilar(); }
+    if (view === "similar") { setSimilar([]); setSimilarNext(""); setSimilarPage(0); setSimilarCursors([""]); setIgnoredPair(null); void loadSimilar(false, "", 0); }
     else void load();
   }, [view, albumId, albumGallery ? "" : query, from, to, photoFilterKey, similarSource]);
   refreshRef.current = async (reconcile = false) => {
@@ -1022,6 +1045,7 @@ function App() {
                 <span>{info.similarityIndex.state === "unavailable" ? "智能分析暂不可用，稍后自动重试" : info.similarityIndex.state === "disabled" ? "智能分析已暂停" : info.similarityIndex.pending ? `${info.similarityIndex.state === "processing" ? "正在分析" : "等待批量分析"} · ${info.similarityIndex.ready} / ${info.similarityIndex.total}` : `已分析 ${info.similarityIndex.ready} 张照片`}</span>
                 {!!info.similarityIndex.errors && <span>{info.similarityIndex.errors} 张稍后重试</span>}
               </div>}
+              {similarSource === "dino" && (similar.length > 0 || similarNext || similarPage > 0) && similarPagination}
               {ignoredPair && <div className="similar-undo">已确认一组候选不同，后续不再提示。<button disabled={!!ignoring} onClick={() => void ignore(ignoredPair, true)}>撤销</button></div>}
               {loading && !similar.length ? (
                 <div className="loading-inline">
@@ -1029,7 +1053,7 @@ function App() {
                   正在查找相似照片
                 </div>
               ) : !similar.length && !similarNext ? (
-                <Empty icon={<Copy />} title={similarSource === "dino" && info?.similarityIndex?.pending ? "分析完成后会显示推荐照片" : similarSource === "dino" ? "暂无智能推荐" : "没有算法判定相似的照片"} />
+                <Empty icon={<Copy />} title={similarSource === "dino" && similarPage > 0 ? "当前页暂无推荐照片" : similarSource === "dino" && info?.similarityIndex?.pending ? "分析完成后会显示推荐照片" : similarSource === "dino" ? "暂无智能推荐" : "没有算法判定相似的照片"} />
               ) : (
                 similar.map((pair) => {
                   const a = similarAssets[pair.left],
@@ -1067,7 +1091,7 @@ function App() {
                   ) : null;
                 })
               )}
-              {similarNext && <Button className="similar-more" disabled={loading} onClick={() => void loadSimilar(true)}>{loading ? "正在加载" : "加载更多候选"}</Button>}
+              {similarSource === "dino" ? (similar.length > 0 || similarNext || similarPage > 0) && similarPagination : similarNext && <Button className="similar-more" disabled={loading} onClick={() => void loadSimilar(true)}>{loading ? "正在加载" : "加载更多候选"}</Button>}
             </div>
           ) : !items.length && !error ? (
             <Empty
