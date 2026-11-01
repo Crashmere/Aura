@@ -1,10 +1,10 @@
 .viewer.aura-viewer {
-  --viewer-bg: #111612;
-  --viewer-panel: #1a211b;
-  --viewer-text: #e3e9df;
-  --viewer-muted: #9ba996;
+  --viewer-bg: #08090a;
+  --viewer-panel: #1c1c1e;
+  --viewer-text: #f5f5f7;
+  --viewer-muted: #a1a1a6;
   --viewer-line: #ffffff12;
-  --viewer-sage: #c0d1ac;
+  --viewer-sage: #f5f5f7;
   height: 100dvh;
   overflow: hidden;
   overscroll-behavior: contain;
@@ -13,55 +13,30 @@
   color-scheme: dark;
   animation: aura-viewer-appear 160ms ease-out;
 }
-
 .aura-viewer :focus,
 .aura-viewer :focus-visible,
 .viewer.aura-viewer:focus {
   outline: none !important;
   box-shadow: none !important;
 }
-
 .aura-viewer .viewer-main {
   min-height: 0;
 }
-
 .aura-viewer .viewer-toolbar {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
   height: auto;
-  min-height: calc(80px + env(safe-area-inset-top));
   padding: calc(12px + env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 12px max(20px, env(safe-area-inset-left));
   gap: 16px;
 }
-
 .aura-viewer .viewer-date {
   overflow: hidden;
 }
-
-.aura-viewer .viewer-date strong,
-.aura-viewer .viewer-date small {
+.aura-viewer .viewer-date strong, .aura-viewer .viewer-date small {
   max-width: 100%;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
 }
-
-.aura-viewer .viewer-date strong {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--viewer-text);
-}
-
-.aura-viewer .viewer-date small {
-  font-size: 11px;
-  color: var(--viewer-muted);
-  margin-top: 5px;
-}
-
-.aura-viewer .viewer-actions {
-  gap: 4px;
-}
-
 .aura-viewer .icon-button {
   display: inline-flex;
   align-items: center;
@@ -69,253 +44,111 @@
   flex-shrink: 0;
   width: 44px;
   height: 44px;
-  border-radius: 12px;
-  color: var(--viewer-muted);
   transition: background-color 140ms ease, color 140ms ease;
 }
-
 .aura-viewer .viewer-toolbar .icon-button {
   width: 44px;
   height: 44px;
-  color: var(--viewer-muted);
 }
-
 .aura-viewer .viewer-toolbar .icon-button svg {
   width: 21px;
   height: 21px;
 }
-
 .viewer.aura-viewer button:not(:disabled):active {
   transform: none;
 }
-
-.viewer.aura-viewer .viewer-prev:not(:disabled):active,
-.viewer.aura-viewer .viewer-next:not(:disabled):active {
+.viewer.aura-viewer .viewer-prev:not(:disabled):active, .viewer.aura-viewer .viewer-next:not(:disabled):active {
   transform: translateY(-50%);
 }
-
-.aura-viewer .viewer-toolbar .icon-button.active {
-  background: #bdd1a91a;
-  color: var(--viewer-sage);
-}
-
-.aura-viewer .viewer-toolbar .permanent-delete-action {
-  color: #dba790;
-}
-
 .aura-viewer .viewer-stage {
-  padding: 8px max(76px, env(safe-area-inset-right)) 12px max(76px, env(safe-area-inset-left));
   min-height: 0;
   overflow: hidden;
 }
-
 .aura-viewer .media-stage {
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
 }
-
-.aura-viewer .media-stage > .viewer-media {
-  opacity: 0;
-  border-radius: 5px;
-  /* Gestures set transforms on every pointer move; only opacity is animated. */
-  transition: opacity 160ms ease-out;
-}
-
-.aura-viewer .media-stage > .viewer-media.is-ready {
-  opacity: 1;
-}
-
-.aura-viewer .media-stage .live-video {
-  background: var(--viewer-bg);
-}
-
-.aura-viewer .viewer-prev,
-.aura-viewer .viewer-next {
+.aura-viewer .viewer-prev, .aura-viewer .viewer-next {
   top: 50%;
   bottom: auto;
-  width: 48px;
-  height: 64px;
-  border: 1px solid var(--viewer-line);
-  border-radius: 16px;
-  background: #202920b3;
-  color: var(--viewer-sage);
   transform: translateY(-50%);
-  transition: background-color 140ms ease, color 140ms ease, opacity 140ms ease;
+  transition: background-color 140ms ease, opacity 140ms ease;
 }
-
 .aura-viewer .viewer-prev {
   left: max(16px, env(safe-area-inset-left));
 }
-
 .aura-viewer .viewer-next {
   right: max(16px, env(safe-area-inset-right));
 }
-
-.aura-viewer .viewer-prev:disabled,
-.aura-viewer .viewer-next:disabled {
-  opacity: 0.2;
-  background: transparent;
-  color: var(--viewer-muted);
-  cursor: default;
-}
-
-.aura-viewer .viewer-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--viewer-sage);
-  pointer-events: none;
-  font-size: 12px;
-  opacity: 0;
-  animation: aura-viewer-appear 160ms ease-out 180ms forwards;
-}
-
-.aura-viewer .viewer-fallback {
-  gap: 16px;
-  padding: 20px;
-  text-align: center;
-  background: var(--viewer-bg);
-  color: var(--viewer-muted);
-}
-
-.aura-viewer .viewer-retry-actions {
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.aura-viewer .viewer-fallback .button {
-  min-height: 44px;
-  background: #c0d1ac0d;
-  border-color: #c0d1ac30;
-  color: var(--viewer-sage);
-}
-
 .aura-viewer .viewer-footer {
   height: auto;
   min-height: 64px;
   flex-direction: column;
-  gap: 10px;
   padding: 4px max(18px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
   color: var(--viewer-muted);
 }
-
 .aura-viewer .viewer-status-row {
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  min-height: 36px;
-  gap: 8px 18px;
   max-width: 100%;
   font-size: 11px;
 }
-
 .aura-viewer .viewer-position {
   display: inline-flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-
 .aura-viewer .viewer-position strong {
-  color: var(--viewer-text);
   font-weight: 500;
 }
-
 .aura-viewer .viewer-position > [aria-hidden] {
-  opacity: 0.45;
+  opacity: .45;
 }
-
-.aura-viewer .viewer-dimensions {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
 .aura-viewer .viewer-deletion-pending {
   max-width: 100%;
   font-size: 11px;
   line-height: 1.6;
   color: #dbb99c;
 }
-
-.aura-viewer .live-control {
-  min-height: 44px;
-  border-color: #c0d1ac30;
-  color: var(--viewer-sage);
-  padding: 8px 14px;
-  transition: background-color 140ms ease;
-}
-
-.aura-viewer .live-control.playing {
-  background: #c0d1ac1a;
-}
-
 .aura-viewer .viewer-filmstrip {
   display: flex;
-  gap: 6px;
   max-width: 100%;
-  padding: 3px 0;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
-
 .aura-viewer .viewer-filmstrip::-webkit-scrollbar {
   display: none;
 }
-
 .aura-viewer .viewer-thumbnail {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 50px;
-  width: 50px;
-  height: 60px;
-  padding: 3px;
   overflow: hidden;
-  border: 2px solid transparent;
-  border-radius: 9px;
-  background: #c0d1ac0a;
-  color: var(--viewer-sage);
-  opacity: 0.6;
-  transition: opacity 140ms ease, border-color 140ms ease;
+  background: #ffffff0a;
+  color: white;
 }
-
 .aura-viewer .viewer-thumbnail img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 4px;
   user-select: none;
 }
-
-.aura-viewer .viewer-thumbnail.is-active {
-  border-color: var(--viewer-sage);
-  opacity: 1;
-}
-
 .aura-viewer .viewer-thumbnail:disabled {
-  opacity: 0.35;
+  opacity: .35;
 }
-
 .aura-viewer .viewer-thumbnail-kind {
   position: absolute;
-  right: 6px;
-  bottom: 6px;
+  right: 5px;
+  bottom: 5px;
   display: flex;
   color: #fff;
   filter: drop-shadow(0 1px 2px #000b);
 }
-
 .aura-viewer .info-panel {
   position: relative;
   top: auto;
@@ -426,148 +259,625 @@
   color: var(--viewer-muted);
 }
 
-@media (hover: hover) {
-  .aura-viewer .icon-button:not(:disabled):hover,
-  .aura-viewer .viewer-prev:not(:disabled):hover,
-  .aura-viewer .viewer-next:not(:disabled):hover,
-  .aura-viewer .live-control:not(:disabled):hover {
-    background: #c0d1ac1a;
-    color: var(--viewer-text);
-  }
+/* Media stays in place while the overlay controls appear and disappear. */
+.aura-viewer .viewer-main {
+  isolation: isolate;
+}
+.aura-viewer .viewer-toolbar {
+  position: absolute; inset: 0 0 auto; z-index: 5;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  min-height: calc(76px + env(safe-area-inset-top));
+  background: linear-gradient(#0009, #0004 70%, transparent);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.aura-viewer .viewer-actions {
+  position: relative;
+  gap: 4px;
+  grid-column: auto;
+}
+.aura-viewer .viewer-date {
+  text-align: center;
+  padding-left: 48px;
+  pointer-events: none;
+}
+.aura-viewer .viewer-date strong {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.aura-viewer .viewer-date small {
+  margin-top: 4px;
+  color: #ffffff80;
+  font-size: 11px;
+}
+.aura-viewer .icon-button {
+  color: #f5f5f7;
+  border-radius: 50%;
+}
+.aura-viewer .viewer-toolbar .icon-button {
+  color: #f5f5f7;
+}
+.aura-viewer .viewer-toolbar .icon-button.active {
+  background: #ffffff24;
+  color: white;
+}
+.aura-viewer .viewer-stage {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  flex: 1;
+}
+.aura-viewer .media-stage {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.aura-viewer .image-gesture-stage {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.aura-viewer .viewer-image-transform, .aura-viewer .viewer-image-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.aura-viewer .viewer-image-frame {
+  transform: var(--image-transform);
+  transition: transform 200ms cubic-bezier(.2,.7,.2,1);
+}
+.aura-viewer .is-dragging .viewer-image-frame {
+  transition: none;
+  will-change: transform;
+}
+.aura-viewer .viewer-image-frame img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 0;
+  -webkit-user-drag: none;
+}
+.aura-viewer .viewer-image-detail {
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.aura-viewer .viewer-image-detail.is-ready {
+  opacity: 1;
+}
+.aura-viewer .is-zoomed {
+  cursor: grab;
+}
+.aura-viewer .is-dragging.is-zoomed {
+  cursor: grabbing;
+}
+.aura-viewer .viewer-image-loading, .aura-viewer .viewer-quality-action {
+  position: absolute; right: max(20px, env(safe-area-inset-right)); bottom: calc(140px + env(safe-area-inset-bottom)); z-index: 2;
+  display: flex; align-items: center; gap: 7px; font-size: 11px;
+  color: #fff; padding: 8px 12px; border-radius: 20px; background: #252528b3; backdrop-filter: blur(16px);
+}
+.aura-viewer .viewer-image-loading {
+  pointer-events: none;
+  opacity: 0;
+  animation: aura-viewer-appear 180ms ease 650ms forwards;
+}
+.aura-viewer .viewer-quality-action {
+  padding: 0;
+}
+.aura-viewer .viewer-quality-action button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 14px;
+  color: #fff;
+}
+.aura-viewer .viewer-zoom-controls {
+  position: absolute;
+  left: max(20px, env(safe-area-inset-left));
+  bottom: calc(140px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 22px;
+  background: #252528b3;
+  backdrop-filter: blur(16px);
+  z-index: 2;
+  transition: opacity 180ms ease;
+}
+.aura-viewer .viewer-zoom-controls button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 42px;
+  color: white;
+  font-size: 11px;
+  padding: 0 8px;
+}
+.aura-viewer .viewer-prev, .aura-viewer .viewer-next {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: #25252880;
+  color: white;
+  backdrop-filter: blur(16px);
+  opacity: .65;
+}
+.aura-viewer .viewer-prev:disabled, .aura-viewer .viewer-next:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+.aura-viewer .viewer-footer {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 3;
+  padding-top: 24px;
+  gap: 7px;
+  background: linear-gradient(transparent, #0008 35%, #000b);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.aura-viewer .viewer-status-row {
+  min-height: 26px;
+  gap: 14px;
+}
+.aura-viewer .viewer-position {
+  font-size: 11px;
+  gap: 6px;
+  color: #ffffff85;
+}
+.aura-viewer .viewer-position strong {
+  color: white;
+}
+.aura-viewer .live-control {
+  min-height: 30px;
+  border: 0;
+  border-radius: 18px;
+  background: #ffffff17;
+  color: white;
+  padding: 5px 11px;
+  font-size: 11px;
+}
+.aura-viewer .live-control.playing {
+  background: #ffffff2e;
+}
+.aura-viewer .viewer-filmstrip {
+  gap: 3px;
+  padding: 3px 4px;
+  min-height: 60px;
+  align-items: center;
+}
+.aura-viewer .viewer-thumbnail {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 48px;
+  border: 0;
+  padding: 0;
+  border-radius: 5px;
+  opacity: .5;
+  transition: width 180ms ease, flex-basis 180ms ease, height 180ms ease, opacity 180ms ease;
+}
+.aura-viewer .viewer-thumbnail img {
+  border-radius: 4px;
+}
+.aura-viewer .viewer-thumbnail.is-active {
+  flex-basis: 52px;
+  width: 52px;
+  height: 58px;
+  opacity: 1;
+  margin: 0 4px;
+  box-shadow: 0 0 0 1.5px #ffffffb3;
+}
+.aura-viewer.controls-hidden .viewer-toolbar {
+  opacity: 0;
+  transform: translateY(-10px);
+  pointer-events: none;
+}
+.aura-viewer.controls-hidden .viewer-footer {
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+}
+.aura-viewer.controls-hidden .viewer-prev, .aura-viewer.controls-hidden .viewer-next,
+.aura-viewer.controls-hidden .viewer-zoom-controls, .aura-viewer.controls-hidden .player-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+.aura-viewer.controls-hidden .aura-player.is-playing {
+  cursor: none;
+}
+.aura-viewer .viewer-action-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 244px;
+  padding: 6px;
+  border: 1px solid #ffffff18;
+  border-radius: 16px;
+  background: #28282cec;
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  box-shadow: 0 12px 48px #0008;
+  text-align: left;
+  animation: aura-viewer-appear 120ms ease;
+}
+.aura-viewer .viewer-action-menu > button, .aura-viewer .viewer-action-menu > a {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #f5f5f7;
+  padding: 0 12px;
+  min-height: 46px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.aura-viewer .viewer-action-menu .viewer-menu-delete {
+  color: #ff817b;
+}
+.aura-viewer .viewer-network-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 5px 6px;
+  padding: 6px;
+  border-block: 1px solid #ffffff12;
+  min-height: 52px;
+  font-size: 12px;
+}
+.aura-viewer .viewer-network-mode select {
+  width: 108px;
+  min-height: 38px;
+  padding: 0 6px;
+  color: #eee;
+  border: 0;
+  border-radius: 8px;
+  background: #ffffff0a;
+  font-size: 12px;
+}
+.aura-viewer .viewer-network-mode option {
+  background: #28282c;
+}
+.aura-viewer .info-panel {
+  z-index: 6;
+  background: #1c1c1ef5;
+  backdrop-filter: blur(24px);
+}
+.aura-viewer .info-title {
+  background: #1c1c1e;
+}
 
-  .aura-viewer .viewer-thumbnail:not(:disabled):hover {
-    opacity: 1;
-  }
+.aura-player {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  color: white;
+  background: #08090a;
+}
+.aura-player .player-video {
+  touch-action: none;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.aura-player .player-big-play, .aura-player .player-waiting {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) !important;
+  width: 76px;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #24242880;
+  backdrop-filter: blur(20px);
+  color: #fff;
+}
+.aura-player .player-big-play svg {
+  margin-left: 5px;
+}
+.aura-player .player-waiting {
+  width: 52px;
+  height: 52px;
+  pointer-events: none;
+  animation: aura-viewer-appear 180ms ease 350ms both;
+}
+.aura-player .player-error {
+  position: absolute;
+  left: 50%;
+  top: 55%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-radius: 16px;
+  background: #242428e6;
+  padding: 8px 12px 8px 18px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.aura-player .player-error button {
+  min-height: 40px;
+  color: white;
+  padding: 0 10px;
+  background: #ffffff15;
+  border-radius: 10px;
+}
+.aura-player .player-controls {
+  position: absolute;
+  bottom: calc(134px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 40px));
+  padding: 8px 14px;
+  border-radius: 18px;
+  background: #28282bbd;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid #ffffff12;
+  transition: opacity 180ms ease;
+  z-index: 3;
+}
+.aura-player .player-seek-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+}
+.aura-player .player-time {
+  min-width: 36px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: #ffffffe0;
+  text-align: center;
+}
+.aura-player .player-seek {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  height: 30px;
+}
+.aura-player .player-buffered {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 13px;
+  height: 4px;
+  background: #ffffff24;
+  overflow: hidden;
+  border-radius: 5px;
+}
+.aura-player .player-buffered i {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: #ffffff3a;
+}
+.aura-player input[type=range] {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 4px;
+  width: 100%;
+  height: 4px;
+  cursor: pointer;
+}
+.aura-player .player-seek input[type=range] {
+  position: relative;
+  height: 30px;
+  background-size: 100% 4px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-image: linear-gradient(to right, #fff 0 var(--played), transparent var(--played) 100%);
+}
+.aura-player input[type=range]::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 5px #0005;
+}
+.aura-player input[type=range]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+}
+.aura-player .player-buttons {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 6px;
+}
+.aura-player .player-buttons button {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  border-radius: 50%;
+}
+.aura-player .player-volume, .aura-player .player-options, .aura-player .player-transport {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.aura-player .player-volume {
+  max-width: 116px;
+}
+.aura-player .player-volume input {
+  background: #ffffff60;
+}
+.aura-player .player-options {
+  justify-content: flex-end;
+}
+.aura-player .player-buttons .player-toggle {
+  width: 44px;
+}
+.aura-player .player-transport small {
+  font-size: 7px;
+  position: absolute;
+  top: 15px;
+  left: 14px;
+}
+.aura-player .player-forward {
+  transform: scaleX(-1);
+}
+.aura-player .player-buttons .player-speed {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.aura-player :disabled {
+  opacity: .35;
+}
+.aura-player:fullscreen {
+  background: #000;
+}
+.aura-player:fullscreen .player-controls {
+  bottom: max(24px, env(safe-area-inset-bottom));
+}
+@media (hover: hover) {
+  .aura-viewer .viewer-action-menu > button:not(:disabled):hover,
+  .aura-viewer .viewer-action-menu > a:hover,
+  .aura-viewer .viewer-zoom-controls button:hover,
+  .aura-player .player-buttons button:not(:disabled):hover {
+  background: #ffffff18;
+}
+  .aura-viewer .viewer-prev:not(:disabled):hover, .aura-viewer .viewer-next:not(:disabled):hover {
+  opacity: 1;
+  background: #ffffff25;
+}
+}
+@media (max-width: 600px) {
+  .aura-viewer .viewer-toolbar {
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  padding: calc(6px + env(safe-area-inset-top)) 8px 16px;
+  min-height: calc(68px + env(safe-area-inset-top));
+  gap: 4px;
+}
+  .aura-viewer .viewer-date {
+  padding-left: 44px;
+}
+  .aura-viewer .viewer-date strong {
+  font-size: 12px;
+}
+  .aura-viewer .viewer-date small {
+  font-size: 10px;
+}
+  .aura-viewer .viewer-actions {
+  grid-column: auto;
+  gap: 0;
+}
+  .aura-viewer .viewer-toolbar .icon-button {
+  width: 40px;
+  height: 40px;
+}
+  .aura-viewer .viewer-footer {
+  padding-top: 22px;
+  gap: 6px;
+}
+  .aura-viewer .viewer-prev, .aura-viewer .viewer-next {
+  width: 34px;
+  height: 44px;
+  opacity: .3;
+  background: #18181b40;
+}
+  .aura-viewer .viewer-zoom-controls {
+  left: 12px;
+  bottom: calc(132px + env(safe-area-inset-bottom));
+}
+  .aura-viewer .viewer-image-loading, .aura-viewer .viewer-quality-action {
+  right: 12px;
+  bottom: calc(132px + env(safe-area-inset-bottom));
+}
+  .aura-viewer .viewer-image-loading span {
+  display: none;
+}
+  .aura-viewer .viewer-action-menu {
+  right: 0;
+}
+  .aura-player .player-controls {
+  width: calc(100% - 24px);
+  padding: 6px 10px;
+  bottom: calc(130px + env(safe-area-inset-bottom));
+}
+  .aura-player .player-volume input {
+  display: none;
+}
+  .aura-player .player-options button {
+  width: 34px;
+}
+  .aura-player .player-buttons {
+  grid-template-columns: 1fr auto 1fr;
+}
+}
+@media (max-height: 500px) {
+  .aura-viewer .viewer-footer {
+  display: none;
+}
+  .aura-viewer .viewer-zoom-controls, .aura-viewer .viewer-image-loading, .aura-viewer .viewer-quality-action {
+  bottom: max(14px, env(safe-area-inset-bottom));
+}
+  .aura-player .player-controls {
+  bottom: max(12px, env(safe-area-inset-bottom));
+}
+}
+@media (prefers-reduced-motion: reduce) {
+  .aura-viewer .viewer-image-frame, .aura-viewer .viewer-image-detail {
+  transition: none;
+}
 }
 
 @media (max-width: 1060px) {
   .aura-viewer .info-panel {
-    position: absolute;
-    z-index: 4;
-    inset: 0 0 0 auto;
-    width: min(380px, 100%);
-    box-shadow: -20px 0 60px #0003;
-  }
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: min(380px, 100%);
+  box-shadow: -20px 0 60px #0003;
 }
-
+}
 @media (max-width: 600px) {
-  .aura-viewer .viewer-toolbar {
-    grid-template-columns: 44px minmax(0, 1fr);
-    min-height: 0;
-    padding: calc(6px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
-    gap: 2px 10px;
-  }
-
-  .aura-viewer .viewer-date strong {
-    font-size: 12px;
-  }
-
-  .aura-viewer .viewer-actions {
-    grid-column: 1 / -1;
-    justify-content: center;
-    gap: 6px;
-    margin: 0;
-  }
-
-  .aura-viewer .viewer-stage {
-    padding: 4px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left));
-  }
-
-  .aura-viewer .viewer-prev,
-  .aura-viewer .viewer-next {
-    width: 44px;
-    height: 52px;
-    border-radius: 14px;
-    background: #111612a8;
-  }
-
-  .aura-viewer .viewer-prev {
-    left: max(8px, env(safe-area-inset-left));
-  }
-
-  .aura-viewer .viewer-next {
-    right: max(8px, env(safe-area-inset-right));
-  }
-
-  .aura-viewer .viewer-footer {
-    gap: 6px;
-    padding: 2px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-  }
-
-  .aura-viewer .viewer-status-row {
-    gap: 6px 12px;
-    min-height: 32px;
-  }
-
-  .aura-viewer .viewer-deletion-pending {
-    flex-basis: 100%;
-    justify-content: center;
-    order: 1;
-  }
-
-  .aura-viewer .viewer-filmstrip {
-    gap: 4px;
-  }
-
-  .aura-viewer .viewer-thumbnail {
-    flex-basis: 44px;
-    width: 44px;
-    height: 52px;
-    padding: 2px;
-  }
-
   .aura-viewer .info-panel {
-    top: calc(56px + env(safe-area-inset-top));
-    width: 100%;
-    border: 1px solid var(--viewer-line);
-    border-bottom: 0;
-    border-radius: 20px 20px 0 0;
-  }
-
+  top: calc(56px + env(safe-area-inset-top));
+  width: 100%;
+  border: 1px solid var(--viewer-line);
+  border-bottom: 0;
+  border-radius: 20px 20px 0 0;
+}
   .aura-viewer .info-title {
-    height: 64px;
-    padding-top: 0;
-  }
+  height: 64px;
+  padding-top: 0;
 }
-
-@media (max-height: 500px) and (min-width: 601px) {
-  .aura-viewer .viewer-toolbar {
-    min-height: 56px;
-    padding-top: max(4px, env(safe-area-inset-top));
-    padding-bottom: 4px;
-  }
-
-  .aura-viewer .viewer-footer {
-    gap: 2px;
-    padding-bottom: max(6px, env(safe-area-inset-bottom));
-  }
-
-  .aura-viewer .viewer-thumbnail {
-    height: 44px;
-  }
 }
-
-@keyframes aura-viewer-appear {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes aura-viewer-info {
-  from { opacity: 0; transform: translateX(12px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
+@keyframes aura-viewer-appear { from { opacity: 0; } to { opacity: 1; } }
+@keyframes aura-viewer-info { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) {
-  .viewer.aura-viewer,
-  .aura-viewer *,
-  .aura-viewer *::before,
-  .aura-viewer *::after {
-    animation: none !important;
-    transition: none !important;
-    scroll-behavior: auto !important;
-  }
-
-  .aura-viewer .viewer-loading {
-    opacity: 1;
-  }
+  .viewer.aura-viewer, .aura-viewer *, .aura-viewer *::before, .aura-viewer *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+  .aura-viewer .viewer-image-loading {
+  opacity: 1;
+}
 }

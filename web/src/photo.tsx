@@ -8,6 +8,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { Asset, media } from "./api";
+import { preloadPreviews, cancelPreloads } from "./media-loading";
 import { LivePhotoIcon } from "./live-photo-icon";
 
 export function Photo({
@@ -40,7 +41,7 @@ export function Photo({
   }, [broken]);
   return (
     <div className={`photo ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}>
-      <button className="photo-open" disabled={disabled} onClick={onClick} aria-label={selecting ? `${selected ? "取消选择" : "选择"} ${asset.name}` : `查看 ${asset.name}`}>
+      <button className="photo-open" disabled={disabled} onPointerEnter={event => { if (event.pointerType === "mouse" && !selecting && !disabled) preloadPreviews([asset], 180); }} onPointerLeave={cancelPreloads} onPointerDown={() => { if (!selecting && !disabled) preloadPreviews([asset], 0); }} onClick={onClick} aria-label={selecting ? `${selected ? "取消选择" : "选择"} ${asset.name}` : `查看 ${asset.name}`}>
         {!broken ? (
           <img
             ref={image}

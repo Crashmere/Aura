@@ -127,10 +127,12 @@ export async function api<T>(
   path: string,
   body?: unknown,
   method?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
   const r = await fetch(base + "api/" + path, {
     method: method || (body === undefined ? "GET" : "POST"),
     credentials: "same-origin",
+    signal,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

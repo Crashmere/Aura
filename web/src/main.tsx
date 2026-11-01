@@ -59,6 +59,7 @@ import {
   PurgeResponse,
 } from "./api";
 import * as uploads from "./upload";
+import { useMediaPolicy } from "./media-loading";
 import { Photo } from "./photo";
 import { LivePhotoIcon } from "./live-photo-icon";
 import { AlbumDialog, AlbumDialogState, AlbumGrid } from "./albums";
@@ -130,6 +131,7 @@ function App() {
     [to, setTo] = useState(initial.to),
     [filters, setFilters] = useState(false);
   const galleryZoom = useGalleryZoom();
+  const mediaPolicy = useMediaPolicy();
   const [photoFilters, setPhotoFilters] = useState(() => {
     const values = { ...initial.filters };
     try {
@@ -377,25 +379,25 @@ function App() {
   }, []);
   useEffect(() => {
     if (error || (!info?.queued && !info?.pendingDeletions && !uploading.running)) return;
-    const timer = setInterval(() => { if (!queryLoading.current) void refreshRef.current(); }, 4000);
+    const timer = setInterval(() => { if (!document.hidden && !queryLoading.current) void refreshRef.current(); }, 4000);
     return () => clearInterval(timer);
   }, [info?.queued, info?.pendingDeletions, uploading.running, error]);
   useEffect(() => {
-    if (!next || loading || error || view === "similar") return;
+    if (!next || loading || error || viewerId || view === "similar") return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) void load(true);
       },
-      { rootMargin: "500px" },
+      { rootMargin: mediaPolicy.economy ? "180px" : "700px" },
     );
     if (more.current) observer.observe(more.current);
     return () => observer.disconnect();
-  }, [next, loading, view, error]);
+  }, [next, loading, view, error, viewerId, mediaPolicy.economy]);
   useEffect(() => {
     if (!viewerId || !next || loading || error || specialView) return;
     const index = items.findIndex(a => a.id === viewerId);
-    if (index >= 0 && index >= items.length - 3) void load(true);
-  }, [viewerId, items.length, next, loading, error, specialView]);
+    if (index >= 0 && index >= items.length - (mediaPolicy.economy ? 1 : 5)) void load(true);
+  }, [viewerId, items.length, next, loading, error, specialView, mediaPolicy.economy]);
   useEffect(() => {
     const fn = (e: KeyboardEvent) => {
       if (e.isComposing) return;

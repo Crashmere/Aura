@@ -529,6 +529,7 @@ func (l *Library) retry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]string{"status": "queued"})
 }
 func (l *Library) media(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	hash, kind := chi.URLParam(r, "hash"), chi.URLParam(r, "kind")
 	if !validHash.MatchString(hash) {
 		http.NotFound(w, r)
@@ -562,7 +563,8 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if _, e = os.Stat(path); e != nil {
+	file, e := os.Open(path)
+	if e != nil {
 		if e = originalDeletion(l.DB, hash, ""); e != nil {
 			originalFailure(w, e)
 			return
@@ -592,13 +594,25 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "预览尚未就绪，原件已保存")
 		return
 	}
+	defer file.Close()
 	if e = originalDeletion(l.DB, hash, ""); e != nil {
 		originalFailure(w, e)
 		return
 	}
+	stat, e := file.Stat()
+	if e != nil || !stat.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	w.Header().Set("ETag", `"`+hash+"-"+kind+`"`)
-	http.ServeFile(w, r, path)
+	// Derivatives can be rebuilt without changing the original's hash. Validate the
+	// opened representation so revalidation and If-Range never identify old bytes.
+	etag := `"` + hash + `"`
+	if kind != "original" {
+		etag = fmt.Sprintf(`"%s-%s-%x-%x"`, hash, kind, stat.Size(), stat.ModTime().UnixNano())
+	}
+	w.Header().Set("ETag", etag)
+	http.ServeContent(w, r, stat.Name(), stat.ModTime(), file)
 }
 func (l *Library) download(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

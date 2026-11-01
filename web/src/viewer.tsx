@@ -1,113 +1,34 @@
 import React, { useEffect, useId, useRef, useState } from "react";
-import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, Image as ImageIcon, ImagePlus, Info as InfoIcon, LoaderCircle, RefreshCw, ScanLine, Trash2, Video, Wifi, X } from "lucide-react";
+import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, Image as ImageIcon, ImagePlus, Info as InfoIcon, LoaderCircle, RefreshCw, ScanLine, Trash2, Video, Wifi, X, Ellipsis, ZoomIn, ZoomOut } from "lucide-react";
 import { api, Asset, Detail, base, media, bytes, displayDate } from "./api";
 import { LivePhotoIcon } from "./live-photo-icon";
 import { useImageGestures } from "./image-gestures";
 import { IconButton } from "./controls";
+import { ProgressiveImage } from "./progressive-image";
+import { VideoPlayer } from "./video-player";
+import { cancelPreloads, preloadPreviews, setMediaMode, useMediaPolicy, type MediaMode } from "./media-loading";
 import "./viewer.css";
 
-function ViewerMedia({ asset, attempt, motionAttempt, playing, transform, locked, retry, stopMotion, motionFailed }: {
-  asset: Asset;
-  attempt: number;
-  motionAttempt: number;
-  playing: boolean;
-  transform: { x: number; y: number; scale: number };
-  locked: boolean;
-  retry: () => void;
-  stopMotion: () => void;
-  motionFailed: () => void;
+function PhotoSurface({ asset, locked, previous, next, close, toggleChrome, hasPrevious, hasNext, onReady }: {
+  asset: Asset; locked: boolean; previous: () => void; next: () => void; close: () => void; toggleChrome: () => void; hasPrevious: boolean; hasNext: boolean; onReady: () => void;
 }) {
-  // The parent keys this component by asset, resource and retry, isolating late media events.
-  const [ready, setReady] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [motionReady, setMotionReady] = useState(false);
-  const image = useRef<HTMLImageElement>(null);
-  const motionVideo = useRef<HTMLVideoElement>(null);
-  const motionFailureReported = useRef(false);
-  const source = media(asset.primary, asset.kind === "video" ? "play" : "preview") + (attempt ? `?retry=${attempt}` : "");
-  useEffect(() => {
-    if (image.current?.complete && image.current.naturalWidth) setReady(true);
-  }, []);
-  useEffect(() => { setMotionReady(false); }, [playing, motionAttempt]);
-  function failMotion() {
-    if (motionFailureReported.current) return;
-    motionFailureReported.current = true;
-    motionFailed();
-  }
-  useEffect(() => {
-    let active = true;
-    motionFailureReported.current = false;
-    const element = motionVideo.current;
-    if (playing && element) {
-      void element.play().catch(() => { if (active) failMotion(); });
-    }
-    return () => { active = false; element?.pause(); };
-  }, [playing, motionAttempt, asset.motion]);
-  useEffect(() => {
-    if (!failed) return;
-    window.addEventListener("online", retry);
-    return () => window.removeEventListener("online", retry);
-  }, [failed, retry]);
-  const loading = !failed && (!ready || (playing && !motionReady));
-  return <>
-    {asset.kind === "video" ? <video
-      className={`viewer-media ${ready && !failed ? "is-ready" : ""}`}
-      src={source}
-      controls
-      playsInline
-      preload="metadata"
-      poster={media(asset.primary)}
-      aria-label={asset.name}
-      onLoadedMetadata={() => setReady(true)}
-      onError={() => setFailed(true)}
-    /> : <>
-      <img
-        ref={image}
-        className={`viewer-media ${ready && !failed ? "is-ready" : ""}`}
-        src={source}
-        alt={asset.name}
-        decoding="async"
-        draggable={false}
-        style={{
-          visibility: playing && motionReady ? "hidden" : "visible",
-          transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
-          cursor: transform.scale > 1 ? "grab" : "zoom-in",
-        }}
-        onLoad={() => setReady(true)}
-        onError={() => setFailed(true)}
-      />
-      {asset.motion && playing && <video
-        key={motionAttempt}
-        ref={motionVideo}
-        className={`live-video viewer-media ${motionReady ? "is-ready" : ""}`}
-        src={media(asset.motion, "play") + `?retry=${motionAttempt}`}
-        aria-label={`${asset.name} · 实况视频`}
-        playsInline
-        controls
-        onLoadedData={() => setMotionReady(true)}
-        onEnded={stopMotion}
-        onError={failMotion}
-      />}
-    </>}
-    {loading && <div className="viewer-loading" role="status" aria-live="polite">
-      <LoaderCircle className="spin" size={22} aria-hidden="true" />
-      <span>{playing ? "正在加载实况" : ["queued", "processing"].includes(asset.status) ? "正在生成预览" : "正在加载"}</span>
-    </div>}
-    {failed && <div className="viewer-fallback" role="status">
-      <ImageIcon size={36} strokeWidth={1.4} aria-hidden="true" />
-      <p>{asset.deletionPending ? "正在永久删除，预览暂不可用" : asset.status === "error" ? "预览处理失败" : ["queued", "processing"].includes(asset.status) ? "正在生成预览" : "预览加载失败"}</p>
-      <div className="viewer-retry-actions">
-        <button className="button" disabled={locked || !!asset.deletionPending} onClick={retry}>重新加载预览</button>
-        {!asset.deletionPending && <a className="button" href={media(asset.primary, "original")}>下载原件</a>}
-      </div>
-    </div>}
-  </>;
+  const gestures = useImageGestures(`${asset.id}:${asset.primary}`, !locked && !asset.deletionPending, previous, next, close, toggleChrome, hasPrevious, hasNext);
+  const { scale, x, y } = gestures.transform;
+  return <div ref={gestures.stage} className={`media-stage image-gesture-stage ${gestures.dragging ? "is-dragging" : ""} ${scale > 1 ? "is-zoomed" : ""}`} {...gestures.handlers}>
+    <div className="viewer-image-transform" style={{ "--image-transform": `translate3d(${x}px, ${y}px, 0) scale(${scale})` } as React.CSSProperties}>
+      <ProgressiveImage key={`${asset.primary}:${asset.status}`} asset={asset} zoomed={scale > 1} onReady={onReady} />
+    </div>
+    <div className="viewer-zoom-controls">
+      <button title={scale > 1 ? "适合屏幕" : "放大（双击照片）"} aria-label={scale > 1 ? "适合屏幕" : "放大照片"} disabled={locked} onClick={() => gestures.toggle()}>{scale > 1 ? <ZoomOut size={19} /> : <ZoomIn size={19} />}</button>
+      {scale > 1 && <button onClick={gestures.reset} disabled={locked}>{Math.round(scale * 100)}%</button>}
+    </div>
+  </div>;
 }
 
 function ViewerThumbnail({ asset }: { asset: Asset }) {
   const [failed, setFailed] = useState(false);
   return <>
-    {failed ? <ImageIcon size={18} aria-hidden="true" /> : <img src={media(asset.primary)} alt="" decoding="async" draggable={false} onError={() => setFailed(true)} />}
+    {failed ? <ImageIcon size={18} aria-hidden="true" /> : <img src={media(asset.primary)} alt="" decoding="async" loading="lazy" draggable={false} onError={() => setFailed(true)} />}
     {asset.kind === "video" && <Video className="viewer-thumbnail-kind" size={12} aria-hidden="true" />}
     {asset.kind === "live" && <span className="viewer-thumbnail-kind"><LivePhotoIcon size={12} /></span>}
   </>;
@@ -144,9 +65,14 @@ export function Viewer({
     [showInfo, setShowInfo] = useState(false),
     [playingAsset, setPlayingAsset] = useState<string>(),
     [error, setError] = useState(""),
-    [previewAttempt, setPreviewAttempt] = useState(0),
-    [motionAttempt, setMotionAttempt] = useState(0),
     [updating, setUpdating] = useState(false);
+  const [controlsHidden, setControlsHidden] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [readyAsset, setReadyAsset] = useState("");
+  const [activityTick, setActivityTick] = useState(0);
+  const policy = useMediaPolicy();
+  const detailAbort = useRef<AbortController | undefined>(undefined);
   const root = useRef<HTMLDivElement>(null);
   const filmstrip = useRef<HTMLElement>(null);
   const infoId = useId();
@@ -157,20 +83,40 @@ export function Viewer({
   function refresh() {
     const key = ++request.current;
     const id = asset.id;
-    return api<Detail>("assets/" + id)
+    detailAbort.current?.abort();
+    const controller = new AbortController();
+    detailAbort.current = controller;
+    return api<Detail>("assets/" + id, undefined, undefined, controller.signal)
       .then(data => { if (currentAsset.current === id && request.current === key) setDetail(data); })
-      .catch(e => { if (currentAsset.current === id && request.current === key) setError(e instanceof Error ? e.message : String(e)); });
+      .catch(e => { if (!controller.signal.aborted && currentAsset.current === id && request.current === key) setError(e instanceof Error ? e.message : String(e)); });
   }
   useEffect(() => {
     setDetail(undefined);
     setPlayingAsset(undefined);
     setError("");
-    setPreviewAttempt(0);
-    void refresh();
-    return () => { ++request.current; };
+    setShowActions(false);
+    setControlsHidden(false);
+    setVideoPlaying(false);
+    return () => { ++request.current; detailAbort.current?.abort(); };
   }, [asset.id]);
+  useEffect(() => {
+    if (showInfo) void refresh();
+    return () => detailAbort.current?.abort();
+  }, [asset.id, showInfo]);
+  function activity() { setControlsHidden(false); setActivityTick(value => value + 1); }
+  useEffect(() => {
+    if (!videoPlaying || showInfo || showActions || modalOpen) return;
+    const timer = setTimeout(() => setControlsHidden(true), 3200);
+    return () => clearTimeout(timer);
+  }, [videoPlaying, showInfo, showActions, modalOpen, activityTick]);
+  useEffect(() => {
+    if (!showActions) return;
+    const dismiss = (event: PointerEvent) => { if (!(event.target as HTMLElement).closest(".viewer-actions")) setShowActions(false); };
+    window.addEventListener("pointerdown", dismiss);
+    return () => window.removeEventListener("pointerdown", dismiss);
+  }, [showActions]);
   const scopedDetail = detail?.asset.id === asset.id ? detail : undefined;
-  const a = scopedDetail?.asset || asset,
+  const a = scopedDetail?.asset || items?.find(item => item.id === asset.id) || asset,
     primary = scopedDetail?.files.find((f) => f.hash === a.primary);
   const playing = playingAsset === a.id;
   const index = items?.findIndex(item => item.id === a.id) ?? -1;
@@ -189,19 +135,11 @@ export function Viewer({
     if (modalOpen || updateLock.current || !hasNext) return;
     if (after && openAsset) openAsset(after); else next();
   }
-  const gestures = useImageGestures(`${a.id}:${a.primary}`, a.kind !== "video" && !playing && !locked && !a.deletionPending, goPrevious, goNext);
-  const beforePreview = before && !before.deletionPending ? media(before.primary, before.kind === "video" ? "thumb" : "preview") : undefined;
-  const afterPreview = after && !after.deletionPending ? media(after.primary, after.kind === "video" ? "thumb" : "preview") : undefined;
   useEffect(() => {
-    const previews = [...new Set([beforePreview, afterPreview].filter((src): src is string => !!src))].map(src => {
-      const image = new Image();
-      image.decoding = "async";
-      image.fetchPriority = "low";
-      image.src = src;
-      return image;
-    });
-    return () => previews.forEach(image => image.removeAttribute("src"));
-  }, [beforePreview, afterPreview]);
+    if (videoPlaying || (a.kind !== "video" && readyAsset !== a.id)) return;
+    preloadPreviews([after, before].filter((item): item is Asset => !!item), 400);
+    return cancelPreloads;
+  }, [a.id, readyAsset, videoPlaying, before?.primary, after?.primary, policy.prefetch]);
   useEffect(() => {
     const strip = filmstrip.current;
     const selected = strip?.querySelector<HTMLElement>('[aria-current="true"]');
@@ -232,17 +170,24 @@ export function Viewer({
       if (e.key === "Tab") { e.preventDefault(); return; }
       const target = e.target instanceof HTMLElement ? e.target : null;
       if (e.shiftKey || target?.isContentEditable || target?.closest('input, textarea, select, video, audio, [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="menu"], [role="tree"]')) return;
-      if (!["Escape", "ArrowLeft", "ArrowRight", "i"].includes(e.key)) return;
+      if (!["Escape", "ArrowLeft", "ArrowRight", "i", " ", "f", "m", "j", "l"].includes(e.key)) return;
       e.preventDefault();
       if (updateLock.current) return;
       if (e.key === "ArrowLeft") goPrevious();
       if (e.key === "ArrowRight") goNext();
-      if (!e.repeat && e.key === "Escape") { if (showInfo) setShowInfo(false); else close(); }
-      if (!e.repeat && e.key === "i") setShowInfo(value => !value);
+      if (!e.repeat && e.key === "Escape") { if (showActions) setShowActions(false); else if (showInfo) setShowInfo(false); else close(); }
+      if (!e.repeat && e.key === "i") { setShowInfo(value => !value); activity(); }
+      const action = e.key === " " ? "toggle" : e.key === "f" ? "fullscreen" : e.key === "m" ? "mute" : "";
+      if (action && !e.repeat) root.current?.querySelector<HTMLButtonElement>(`[data-player-${action}]`)?.click();
+      if (e.key === "j" || e.key === "l") {
+        const video = root.current?.querySelector("video");
+        if (video && Number.isFinite(video.duration)) video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + (e.key === "j" ? -10 : 10)));
+        activity();
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [previous, next, openAsset, before, after, hasPrevious, hasNext, modalOpen, close, showInfo]);
+  }, [previous, next, openAsset, before, after, hasPrevious, hasNext, modalOpen, close, showInfo, showActions]);
   const meta = scopedDetail?.metadata || {};
   const field = (...names: string[]) => {
     for (const name of names) {
@@ -275,11 +220,10 @@ export function Viewer({
   const update = (p: unknown) => mutate("assets/" + a.id, p);
   const start = () => {
     if (modalOpen || updateLock.current || a.deletionPending || !a.motion) return;
-    setMotionAttempt(n => n + 1);
     setPlayingAsset(a.id);
   };
   return (
-    <div ref={root} className={`viewer aura-viewer ${showInfo ? "with-info" : ""}`} role="dialog" aria-modal={!modalOpen} aria-label={`照片查看器 · ${a.name}`} tabIndex={-1} inert={modalOpen}>
+    <div ref={root} className={`viewer aura-viewer ${showInfo ? "with-info" : ""} ${controlsHidden && !showInfo && !showActions ? "controls-hidden" : ""} ${a.kind === "video" || playing ? "has-video" : ""}`} onPointerMove={event => { if (event.pointerType === "mouse" && videoPlaying) activity(); }} role="dialog" aria-modal={!modalOpen} aria-label={`媒体查看器 · ${a.name}`} tabIndex={-1} inert={modalOpen}>
       <div className="viewer-main">
         <header className="viewer-toolbar">
           <IconButton title="关闭查看器（Esc）" disabled={locked} onClick={close}>
@@ -290,41 +234,17 @@ export function Viewer({
             <small>{a.name}</small>
           </div>
           <div className="viewer-actions">
-            <IconButton title="添加到相片集" disabled={locked || !!a.trashedAt || !!a.deletionPending} onClick={addToAlbum}>
-              <ImagePlus size={20} />
-            </IconButton>
-            {!a.deletionPending && <a
-              className="icon-button"
-              title="下载全部原件"
-              aria-label="下载全部原件"
-              href={`${base}api/assets/${a.id}/download`}
-            >
-              <ArrowDownToLine size={21} />
-            </a>}
-            <button
-              title="照片信息（I）"
-              aria-label="照片信息"
-              aria-expanded={showInfo}
-              aria-controls={infoId}
-              className={`icon-button ${showInfo ? "active" : ""}`}
-              disabled={locked}
-              onClick={() => setShowInfo(!showInfo)}
-            >
-              <InfoIcon size={21} />
-            </button>
-            <IconButton
-              title={a.deletionPending ? "正在永久删除" : a.trashedAt ? "恢复" : "移入最近删除"}
-              disabled={locked || !!a.deletionPending}
-              onClick={async () => {
-                if (await update({ trash: !a.trashedAt })) {
-                  notify(a.trashedAt ? "已恢复" : "已移入最近删除");
-                  close();
-                }
-              }}
-            >
-              {a.deletionPending ? <LoaderCircle className="spin" size={20} /> : a.trashedAt ? <RefreshCw size={20} /> : <Trash2 size={20} />}
-            </IconButton>
-            {a.trashedAt && permanentDeleteEnabled && !a.deletionPending && <IconButton title="永久删除" className="permanent-delete-action" disabled={locked} onClick={() => permanentlyDelete([a])}><Trash2 size={20} /></IconButton>}
+            <button title="照片信息（I）" aria-label="照片信息" aria-expanded={showInfo} aria-controls={infoId} className={`icon-button ${showInfo ? "active" : ""}`} disabled={locked} onClick={() => { setShowInfo(!showInfo); setShowActions(false); activity(); }}><InfoIcon size={21} /></button>
+            <button title="更多操作" aria-label="更多操作" aria-expanded={showActions} className={`icon-button ${showActions ? "active" : ""}`} disabled={locked} onClick={() => { setShowActions(!showActions); activity(); }}><Ellipsis size={23} /></button>
+            {showActions && <div className="viewer-action-menu">
+              <button disabled={locked || !!a.trashedAt || !!a.deletionPending} onClick={() => { setShowActions(false); addToAlbum(); }}><ImagePlus size={18} />添加到相片集</button>
+              {!a.deletionPending && <a href={`${base}api/assets/${a.id}/download`}><ArrowDownToLine size={18} />下载全部原件</a>}
+              <label className="viewer-network-mode"><span>画质与流量</span><select aria-label="画质与流量" value={policy.mode} onChange={event => setMediaMode(event.target.value as MediaMode)}><option value="auto">自动</option><option value="save">节省流量</option><option value="quality">优先清晰</option></select></label>
+              <button className="viewer-menu-delete" disabled={locked || !!a.deletionPending} onClick={async () => {
+                if (await update({ trash: !a.trashedAt })) { notify(a.trashedAt ? "已恢复" : "已移入最近删除"); close(); }
+              }}>{a.deletionPending ? <LoaderCircle className="spin" size={18} /> : a.trashedAt ? <RefreshCw size={18} /> : <Trash2 size={18} />}{a.deletionPending ? "正在永久删除" : a.trashedAt ? "恢复" : "移入最近删除"}</button>
+              {a.trashedAt && permanentDeleteEnabled && !a.deletionPending && <button className="viewer-menu-delete" disabled={locked} onClick={() => { setShowActions(false); permanentlyDelete([a]); }}><Trash2 size={18} />永久删除</button>}
+            </div>}
           </div>
         </header>
         <div className="viewer-stage">
@@ -337,28 +257,9 @@ export function Viewer({
           >
             <ChevronLeft />
           </button>
-          <div className={`media-stage ${a.kind !== "video" && !playing ? "image-gesture-stage" : ""}`} {...gestures.handlers}>
-            <ViewerMedia
-              key={`${a.id}:${a.primary}:${a.status}:${previewAttempt}`}
-              asset={a}
-              attempt={previewAttempt}
-              motionAttempt={motionAttempt}
-              playing={playing}
-              transform={gestures.transform}
-              locked={locked}
-              retry={() => {
-                if (modalOpen || updateLock.current || a.deletionPending) return;
-                setPreviewAttempt(n => n + 1);
-                void refresh();
-              }}
-              stopMotion={() => { if (currentAsset.current === a.id) setPlayingAsset(undefined); }}
-              motionFailed={() => {
-                if (currentAsset.current !== a.id) return;
-                setPlayingAsset(undefined);
-                notify("实况预览加载失败，请重试或下载视频原件", true);
-              }}
-            />
-          </div>
+          {a.kind === "video" || playing ? <div className="media-stage">
+            <VideoPlayer key={`${a.id}:${playing ? a.motion : a.primary}`} asset={a} live={playing} locked={locked} previous={goPrevious} next={goNext} close={close} toggleChrome={() => setControlsHidden(value => !value)} activity={activity} onPlayback={value => { setVideoPlaying(value); if (!value) setControlsHidden(false); }} onEnded={playing ? () => setPlayingAsset(undefined) : undefined} />
+          </div> : <PhotoSurface key={a.id} asset={a} locked={locked} previous={goPrevious} next={goNext} close={() => { if (showInfo) setShowInfo(false); else close(); }} toggleChrome={() => setControlsHidden(value => !value)} hasPrevious={hasPrevious} hasNext={hasNext} onReady={() => setReadyAsset(a.id)} />}
           <button className="viewer-next" onClick={goNext} disabled={locked || !hasNext} aria-label="下一张" title="下一张（→）">
             <ChevronRight />
           </button>
@@ -369,7 +270,6 @@ export function Viewer({
               <strong>{index + 1}</strong><span aria-hidden="true">/</span><span>{items.length}</span>
             </span>}
             {a.deletionPending && <span className="viewer-deletion-pending"><LoaderCircle className="spin" size={14} />正在永久删除，清理完成后会从图库移除</span>}
-            {gestures.transform.scale > 1 && <button className="live-control" disabled={locked} onClick={gestures.reset}>还原大小</button>}
             {a.kind === "live" && (
               <button
                 className={`live-control ${playing ? "playing" : ""}`}
@@ -381,12 +281,6 @@ export function Viewer({
                 {playing ? "停止播放" : "播放实况"}
               </button>
             )}
-            {a.width > 0 && a.height > 0 && <span className="viewer-dimensions">
-              {a.width} × {a.height}
-              {primary?.mime
-                ? " · " + primary.mime.replace("image/", "").replace("video/", "").toUpperCase()
-                : ""}
-            </span>}
           </div>
           {nearby.length > 1 && <nav ref={filmstrip} className="viewer-filmstrip" aria-label="附近照片">
             {nearby.map((item, offset) => <button
