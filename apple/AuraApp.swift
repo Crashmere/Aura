@@ -660,7 +660,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         }
         var offset = prepared["offset"] as? Int ?? 0
         let chunkSize = prepared["chunkSize"] as? Int ?? 8 * 1024 * 1024
-        guard offset >= 0 && offset <= size && chunkSize > 0 && chunkSize <= 32 * 1024 * 1024 else {
+        guard offset >= 0 && offset <= size && chunkSize > 0 && chunkSize <= 128 * 1024 * 1024 else {
             throw TransferError(message: "服务器返回了无效的续传参数")
         }
         transferStartedAt = Date()
@@ -683,7 +683,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             request.httpMethod = "PUT"
             request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
             request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
-            request.timeoutInterval = 180
+            request.timeoutInterval = 660
             do {
                 let chunkOffset = offset, progressID = resourceProgressID, chunkID = UUID()
                 transferChunkID = chunkID

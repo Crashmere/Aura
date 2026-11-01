@@ -20,7 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const chunkSize int64 = 32 << 20
+const chunkSize int64 = 128 << 20
 
 var validHash = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -373,7 +373,7 @@ func (l *Library) chunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	controller := http.NewResponseController(w)
-	_ = controller.SetReadDeadline(time.Now().Add(120 * time.Second))
+	_ = controller.SetReadDeadline(time.Now().Add(600 * time.Second))
 	defer controller.SetReadDeadline(time.Time{})
 	n, e := io.Copy(f, http.MaxBytesReader(w, r.Body, max))
 	if e != nil {
