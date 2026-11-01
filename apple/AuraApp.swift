@@ -86,8 +86,6 @@ struct ClientState: Codable {
     var duplicates: Int
     var errors: [ImportIssue]
     var lastScan: String
-    var lastVerified: String
-    var verificationStatus: String
     var albumSignatures: [String: String]
     var blockedAlbums: [String]
     var excluded: Int?
@@ -147,10 +145,6 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     @Published var duplicates = 0
     @Published var errors: [ImportIssue] = []
     @Published var limited = false
-    @Published var verifying = false
-    @Published var verificationProgress: Double = 0
-    @Published var verificationStatus = "尚未核对服务器原件"
-    @Published var lastVerified = ""
     @Published var lastScan = ""
     @Published var originalPresenceAvailable = false
     @Published var albumImportAvailable = false
@@ -174,7 +168,6 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
     private var timer: Timer?
     private var scanTask: Task<Void, Never>?
-    private var verificationTask: Task<Void, Never>?
     private var startupTask: Task<Void, Never>?
     private var receipts: [String: Receipt] = [:]
     private var receiptKeysByAsset: [String: Set<String>] = [:]
@@ -340,7 +333,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         UserDefaults.standard.set(start, forKey: "start")
         UserDefaults.standard.set(end, forKey: "end")
         UserDefaults.standard.set(openEnd, forKey: "openEnd")
-        guard scanTask == nil && !verifying else { return }
+        guard scanTask == nil else { return }
         scanTask = Task { [weak self] in
             guard let self else { return }
             defer { self.finishScanTask() }
@@ -366,7 +359,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         #endif
     }
     func rescan() {
-        guard running && !verifying else { return }
+        guard running else { return }
         guard scanTask == nil else { scanRequested = true; return }
         scanTask = Task { [weak self] in
             guard let self else { return }
@@ -431,7 +424,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     #endif
     func scan() async {
         await startupTask?.value
-        guard running && !busy && !verifying && connected && !Task.isCancelled else { return }
+        guard running && !busy && connected && !Task.isCancelled else { return }
         guard uploadPauseReason == nil else { status = uploadPauseReason!; return }
         busy = true
         #if os(macOS)
@@ -646,7 +639,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         if knownDeletedHash(hash) { return .deleted(DeletionNotice(scope: .hash, hash: hash)) }
         if knownTrashHash(hash) {
             let row = try await presence(hash)
-            let result = try applyServerState(hash: hash, row: row, checked: false, repairMissing: true)
+            let result = try applyServerState(hash: hash, row: row)
             if result == .deleted { return .deleted(DeletionNotice(scope: .hash, hash: hash)) }
             if result == .trash { return .trash(row) }
         }
@@ -877,23 +870,22 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         guard let data = try? Data(contentsOf: stateURL), let saved = try? JSONDecoder().decode(ClientState.self, from: data), saved.origin == origin?.absoluteString else {
             matched = 0; completedAssets = 0; processingAssets = 0; uploaded = 0; duplicates = 0
             excludedAssets = 0; deletedSources = []
-            errors = []; lastScan = ""; lastVerified = ""; verificationStatus = "尚未核对服务器原件"
+            errors = []; lastScan = ""
             albumSignatures = [:]; blockedAlbums = []
             return
         }
         matched = saved.matched; completedAssets = saved.completed; processingAssets = saved.processing
         excludedAssets = saved.excluded ?? 0; deletedSources = Set(saved.deletedSources ?? [])
         uploaded = saved.uploaded; duplicates = saved.duplicates; errors = saved.errors
-        lastScan = saved.lastScan; lastVerified = saved.lastVerified
-        verificationStatus = saved.verificationStatus.hasPrefix("正在核对") ? "上次核对未完成，已保留上传记录" : saved.verificationStatus
+        lastScan = saved.lastScan
         albumSignatures = saved.albumSignatures; blockedAlbums = Set(saved.blockedAlbums)
     }
     private func saveState(force: Bool = false) {
         guard let origin else { return }
         guard force || Date().timeIntervalSince(lastStateWrite) >= 1 else { return }
         let saved = ClientState(origin: origin.absoluteString, matched: matched, completed: completedAssets, processing: processingAssets,
-            uploaded: uploaded, duplicates: duplicates, errors: errors, lastScan: lastScan, lastVerified: lastVerified,
-            verificationStatus: verificationStatus, albumSignatures: albumSignatures, blockedAlbums: Array(blockedAlbums).sorted(),
+            uploaded: uploaded, duplicates: duplicates, errors: errors, lastScan: lastScan,
+            albumSignatures: albumSignatures, blockedAlbums: Array(blockedAlbums).sorted(),
             excluded: excludedAssets, deletedSources: Array(deletedSources).sorted())
         do {
             try JSONEncoder().encode(saved).write(to: stateURL, options: .atomic)
@@ -921,79 +913,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             try? FileManager.default.removeItem(at: file)
         }
     }
-    func verifyServer() {
-        if verifying { verificationTask?.cancel(); return }
-        guard connected && !busy && scanTask == nil else { return }
-        guard originalPresenceAvailable else { verificationStatus = "服务器需更新到支持原件存在检查的版本"; saveState(force: true); return }
-        verifying = true
-        verificationTask = Task { [weak self] in
-            guard let self else { return }
-            await self.verifyReceipts()
-            self.verifying = false; self.verificationTask = nil
-            if self.running { self.rescan() }
-        }
-    }
-    private func verifyReceipts() async {
-        guard let origin else { return }
-        await rebuildSummarySnapshot()
-        let prefix = origin.absoluteString + "|"
-        let hashes = Set(receipts.values.filter { $0.key.hasPrefix(prefix) && $0.deletedScope != "source" }.map(\.hash)).sorted()
-        var present = 0, missing = 0, retainedTrash = 0, permanentlyDeleted = 0, checked = 0, unresolved = 0
-        verificationProgress = 0
-        verificationStatus = "正在核对服务器原件 · 0 / \(hashes.count)"
-        saveState(force: true)
-        defer {
-            if Task.isCancelled { verificationStatus = "核对已停止：已确认 \(present) 个原件，剩余记录已保留" }
-            else {
-                verificationStatus = "已确认 \(present) 个原件，缺失 \(missing) 个，最近删除 \(retainedTrash) 个，永久删除 \(permanentlyDeleted) 个，未确认 \(unresolved + hashes.count - checked) 个"
-                if checked == hashes.count && unresolved == 0 { lastVerified = clock }
-            }
-            if missing > 0 && !running { verificationStatus += "；开始持续上传后补传可访问的缺失原件" }
-            let sources = deletedSources.filter { $0.hasPrefix(prefix) }.count
-            if sources > 0 { verificationStatus += "；已排除 \(sources) 个永久删除的来源" }
-            try? compactReceipts()
-            albumsDirty = true; albumSignatures = [:]
-            saveState(force: true)
-        }
-        for hash in hashes {
-            guard !Task.isCancelled && connected else { break }
-            do {
-                let row = try await presence(hash)
-                let result = try applyServerState(hash: hash, row: row, checked: true, repairMissing: true)
-                if result == .present { present += 1 }
-                else if result == .missing { missing += 1 }
-                else if result == .deleted { permanentlyDeleted += 1 }
-                else { retainedTrash += 1 }
-                removeIssues(resourceKey: "audit:" + hash, stage: .verification)
-                checked += 1
-            } catch {
-                if Task.isCancelled { break }
-                unresolved += 1; checked += 1
-                recordIssue(key: "audit:" + hash, name: String(hash.prefix(12)), stage: .verification, error: error)
-                if !(error is TransferError) || !connected { break }
-            }
-            verificationProgress = hashes.isEmpty ? 1 : Double(checked) / Double(hashes.count)
-            verificationStatus = "正在核对服务器原件 · \(checked) / \(hashes.count)"
-        }
-    }
     private enum PresenceResult { case present, missing, trash, deleted }
-    private func rebuildSummarySnapshot() async {
-        guard fetchedAssets == nil else { return }
-        let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        guard access == .authorized || access == .limited else { return }
-        limited = access == .limited
-        let assets = PHAsset.fetchAssets(with: fetchOptions())
-        fetchedAssets = assets
-        activeAssetIDs = Set((0..<assets.count).map { assets.object(at: $0).localIdentifier })
-        summaries = [:]; recountSummaries()
-        for index in 0..<assets.count {
-            if index.isMultiple(of: 64) { await Task.yield() }
-            guard !Task.isCancelled else { return }
-            let asset = assets.object(at: index)
-            let keys = PHAssetResource.assetResources(for: asset).map { receiptKey(asset: asset, resource: $0) }
-            updateSummary(assetID: asset.localIdentifier, keys: keys)
-        }
-    }
     private func presence(_ hash: String) async throws -> [String: Any] {
         do { return try await json("uploads/" + hash) }
         catch let error as TransferError where error.statusCode == 404 { return ["complete": false, "missing": true] }
@@ -1004,7 +924,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             throw error
         }
     }
-    private func applyServerState(hash: String, row: [String: Any], checked: Bool, repairMissing: Bool) throws -> PresenceResult {
+    private func applyServerState(hash: String, row: [String: Any]) throws -> PresenceResult {
         let prefix = (origin?.absoluteString ?? "") + "|"
         let keys = Array(receiptKeysByHash[hash, default: []].filter { $0.hasPrefix(prefix) })
         // JSON responses cannot manufacture this locally validated, typed deletion notice.
@@ -1027,7 +947,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             // An omitted state cannot let a legacy alias undo another receipt's deletion.
             let isTrash = row["trashed"] as? Bool ?? knownTrash
             trash = trash || isTrash
-            if missing && !isTrash && repairMissing {
+            if missing && !isTrash {
                 try invalidate(receipt)
                 recordIssue(key: "missing:" + hash, assetID: receipt.sourceAsset, name: String(hash.prefix(12)), stage: .verification,
                     error: TransferError(message: "服务器原件缺失，等待从系统照片补传；不会改动系统照片"))
@@ -1036,7 +956,6 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             if let value = row["assetId"] as? String { receipt.serverAssetID = value }
             if let value = row["status"] as? String { receipt.status = value }
             receipt.trashed = isTrash; receipt.present = confirmed
-            if checked && confirmed { receipt.verifiedAt = clock }
             receipts[key] = receipt; receiptsDirty = true
             if confirmed { removeIssues(resourceKey: key, stage: .verification) }
             if missing && isTrash {
@@ -1066,7 +985,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             let hash = hashes[(begin + index) % hashes.count]
             do {
                 let row = try await presence(hash)
-                if originalPresenceAvailable { _ = try applyServerState(hash: hash, row: row, checked: false, repairMissing: true) }
+                if originalPresenceAvailable { _ = try applyServerState(hash: hash, row: row) }
                 else {
                     for key in receiptKeysByHash[hash, default: []].filter({ $0.hasPrefix(prefix) }) {
                         receipts[key]?.status = row["status"] as? String
@@ -1084,7 +1003,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         processingCursor = (begin + count) % hashes.count
     }
     func refreshAlbums() {
-        guard importAlbums && !busy && !verifying else { return }
+        guard importAlbums && !busy else { return }
         albumSignatures = [:]; albumsDirty = true
         rescan()
     }
@@ -1125,7 +1044,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                     let row: [String: Any]
                     if let known = states[hash] { row = known }
                     else { row = try await presence(hash); states[hash] = row }
-                    let result = try applyServerState(hash: hash, row: row, checked: false, repairMissing: true)
+                    let result = try applyServerState(hash: hash, row: row)
                     if result == .trash || result == .deleted { continue }
                     if result != .present { unresolved = true; continue }
                     if row["trashed"] as? Bool == true { continue }
@@ -1409,8 +1328,8 @@ struct AuraContent: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("服务器").font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        TextField("https://服务器地址", text: $model.server).textFieldStyle(.roundedBorder).disabled(model.running || model.busy || model.verifying)
-                        Button(model.connected ? "重新授权" : "连接") { model.connect() }.disabled(model.busy || model.verifying)
+                        TextField("https://服务器地址", text: $model.server).textFieldStyle(.roundedBorder).disabled(model.running || model.busy)
+                        Button(model.connected ? "重新授权" : "连接") { model.connect() }.disabled(model.busy)
                     }
                 }
                 Divider()
@@ -1423,14 +1342,14 @@ struct AuraContent: View {
                 }
                 VStack(alignment: .leading, spacing: 12) {
                     Text("上传策略").font(.headline)
-                    Toggle("仅使用 Wi-Fi 或有线网络", isOn: $model.wifiOnly).disabled(model.busy || model.verifying)
+                    Toggle("仅使用 Wi-Fi 或有线网络", isOn: $model.wifiOnly).disabled(model.busy)
                     #if os(iOS)
-                    Toggle("仅在充电时上传", isOn: $model.chargingOnly).disabled(model.busy || model.verifying)
+                    Toggle("仅在充电时上传", isOn: $model.chargingOnly).disabled(model.busy)
                     #endif
-                    Toggle("导入 Apple 自建相册", isOn: $model.importAlbums).disabled(model.busy || model.verifying)
+                    Toggle("导入 Apple 自建相册", isOn: $model.importAlbums).disabled(model.busy)
                     if model.importAlbums {
                         Text("仅添加已备份项目；保留 Aura 中修改的名称，不跟随 Apple 删除照片或相册。").font(.caption).foregroundStyle(.secondary)
-                        Button("更新相册关系") { model.refreshAlbums() }.disabled(!model.running || model.busy || model.verifying)
+                        Button("更新相册关系") { model.refreshAlbums() }.disabled(!model.running || model.busy)
                     }
                     #if os(macOS)
                     Toggle("登录时启动 Aura", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
@@ -1445,7 +1364,7 @@ struct AuraContent: View {
                     counter(model.completedAssets, "已备份项目")
                     counter(model.remainingAssets, "待备份项目")
                 }.padding(.vertical, 5)
-                if !model.summaryIsCurrent { Text("项目数量为上次扫描结果，开始上传或核对后刷新。").font(.caption2).foregroundStyle(.secondary) }
+                if !model.summaryIsCurrent { Text("项目数量为上次扫描结果，开始上传后刷新。").font(.caption2).foregroundStyle(.secondary) }
                 Text("累计新传 \(model.uploaded) 个原件 · 已存在 \(model.duplicates) 个原件 · \(model.processingAssets) 个项目等待服务器处理").font(.caption).foregroundStyle(.secondary)
                 if model.excludedAssets > 0 {
                     Text("已排除 \(model.excludedAssets) 个已删除项目，不计入待备份；最近删除可在 Aura 恢复，永久删除不会重新上传。").font(.caption).foregroundStyle(.secondary)
@@ -1453,14 +1372,6 @@ struct AuraContent: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.subheadline); Spacer() }
                     if !model.current.isEmpty { UploadProgressView(current: model.current, steps: model.uploadSteps, tint: olive) }
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("服务器原件核对").font(.headline)
-                    Button(model.verifying ? "停止核对" : "重新核对服务器") { model.verifyServer() }.disabled(!model.connected || model.busy)
-                    if model.verifying { ProgressView(value: model.verificationProgress).tint(olive) }
-                    Text(model.verificationStatus).font(.caption).foregroundStyle(.secondary)
-                    if !model.lastVerified.isEmpty { Text("最近完成：\(displayDate(model.lastVerified))").font(.caption2).foregroundStyle(.secondary) }
-                    Text("检查原件文件是否存在、大小是否匹配。仅补传未删除的缺失原件；不会恢复最近删除或永久删除，不执行完整哈希扫描。").font(.caption).foregroundStyle(.secondary)
                 }
                 if !model.errors.isEmpty {
                     DisclosureGroup("待处理记录 · \(model.errors.count)") {
@@ -1472,7 +1383,7 @@ struct AuraContent: View {
                                     Text(displayDate(error.occurredAt)).font(.caption2).foregroundStyle(.secondary)
                                 }
                             }
-                            Button("重试待上传项目") { model.running ? model.rescan() : model.startUpload() }.disabled(model.busy || model.verifying)
+                            Button("重试待上传项目") { model.running ? model.rescan() : model.startUpload() }.disabled(model.busy)
                         }.padding(.top, 10)
                     }
                 }
@@ -1492,7 +1403,7 @@ struct AuraContent: View {
                     Label(model.running ? "暂停" : model.busy ? "正在暂停…" : "开始持续上传",
                           systemImage: model.running || model.busy ? "pause.fill" : "arrow.up.circle.fill")
                         .frame(maxWidth: .infinity).padding(.vertical, 7)
-                }.buttonStyle(.borderedProminent).tint(olive).disabled(model.verifying || (model.busy && !model.running))
+                }.buttonStyle(.borderedProminent).tint(olive).disabled(model.busy && !model.running)
                 if model.connected, let url = model.origin?.appendingPathComponent("aura/") { Link(destination: url) { Image(systemName: "arrow.up.right.square").padding(9) }.buttonStyle(.bordered) }
             }.padding(.horizontal, 30).padding(.vertical, 14).frame(maxWidth: 520)
                 .frame(maxWidth: .infinity).background(.regularMaterial)
