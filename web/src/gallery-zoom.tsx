@@ -41,7 +41,7 @@ function readLayout(): GalleryLayout {
 
 // The Photos aspect-ratio control uses a rectangle with inward vertical arrows.
 function AspectRatioIcon() {
-  return <svg width="22" height="27.5" viewBox="0 0 24 30" fill="currentColor" aria-hidden="true">
+  return <svg width="16" height="20" viewBox="0 0 24 30" fill="currentColor" aria-hidden="true">
     <path d="M8.3 0h7.4c.8 0 1.2.8.8 1.5l-3.7 5.2c-.4.6-1.2.6-1.6 0L7.5 1.5C7.1.8 7.5 0 8.3 0ZM8.3 30h7.4c.8 0 1.2-.8.8-1.5l-3.7-5.2c-.4-.6-1.2-.6-1.6 0l-3.7 5.2c-.4.7 0 1.5.8 1.5Z" />
     <rect x="1.5" y="8.5" width="21" height="13" rx="3" fill="none" stroke="currentColor" strokeWidth="3" />
   </svg>;
