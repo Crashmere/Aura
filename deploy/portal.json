@@ -80,7 +80,7 @@
       "id": "bin",
       "name": "服务程序",
       "path": "/opt/aura/bin",
-      "purpose": "服务程序、固定发布脚本、隔离的 NVIDIA 图像及 DINO 运行环境、模型权重；随 nas 全量备份和升级冷副本保留。",
+      "purpose": "服务程序、固定发布脚本、隔离的 NVIDIA 图像及 DINO 运行环境、模型权重；模型和可重建运行环境不纳入新保护副本及临时备份，现有安装保留。",
       "kind": "binaries",
       "browse": false,
       "cleanup": false
