@@ -256,7 +256,7 @@ func (l *Library) detail(w http.ResponseWriter, r *http.Request) {
 			merged[k] = v
 		}
 	}
-	writeJSON(w, 200, map[string]any{"asset": a, "files": files, "metadata": merged})
+	writeJSON(w, 200, map[string]any{"asset": a, "files": files, "metadata": merged, "edits": l.editRecords(files)})
 }
 func (l *Library) updateAsset(w http.ResponseWriter, r *http.Request) {
 	var p struct {

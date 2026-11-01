@@ -38,6 +38,18 @@ export type Detail = {
   asset: Asset;
   files: Original[];
   metadata: Record<string, unknown>;
+  edits: EditRecord[];
+};
+export type EditRecord = {
+  hash: string;
+  sourceKey?: string;
+  editor?: string;
+  format?: string;
+  version?: string;
+  timestamp?: string;
+  state: "parsed" | "unsupported" | "unavailable";
+  metadata?: Record<string, unknown>;
+  adjustments: { identifier?: string; enabled?: boolean; settings?: Record<string, unknown>; [key: string]: unknown }[];
 };
 export type Album = {
   id: string;

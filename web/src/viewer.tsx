@@ -7,6 +7,7 @@ import { IconButton } from "./controls";
 import { ProgressiveImage } from "./progressive-image";
 import { VideoPlayer, VIDEO_SKIP_SECONDS } from "./video-player";
 import { cancelPreloads, preloadPreviews, setMediaMode, useMediaPolicy, type MediaMode } from "./media-loading";
+import { PhotoEdits, VersionPicker, versionAsset } from "./photo-versions";
 import "./viewer.css";
 
 function PhotoSurface({ asset, locked, previous, next, close, toggleChrome, hasPrevious, hasNext, onReady }: {
@@ -68,6 +69,8 @@ export function Viewer({
     [updating, setUpdating] = useState(false);
   const [controlsHidden, setControlsHidden] = useState(false);
   const [showActions, setShowActions] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
+  const [selectedVersions, setSelectedVersions] = useState<Record<string, string>>({});
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [readyAsset, setReadyAsset] = useState("");
   const [activityTick, setActivityTick] = useState(0);
@@ -96,29 +99,40 @@ export function Viewer({
     setPlayingAsset(undefined);
     setError("");
     setShowActions(false);
+    setShowVersions(false);
     setControlsHidden(false);
     setVideoPlaying(false);
     return () => { ++request.current; detailAbort.current?.abort(); };
   }, [asset.id]);
   useEffect(() => {
-    if (showInfo) void refresh();
+    if (showInfo || asset.imageVersions > 1 || (asset.kind === "video" && asset.variants > 1)) void refresh();
     return () => detailAbort.current?.abort();
-  }, [asset.id, showInfo]);
+  }, [asset.id, asset.imageVersions, asset.kind, asset.variants, showInfo]);
   function activity() { setControlsHidden(false); setActivityTick(value => value + 1); }
   useEffect(() => {
-    if (!videoPlaying || showInfo || showActions || modalOpen) return;
+    if (!videoPlaying || showInfo || showActions || showVersions || modalOpen) return;
     const timer = setTimeout(() => setControlsHidden(true), 3200);
     return () => clearTimeout(timer);
-  }, [videoPlaying, showInfo, showActions, modalOpen, activityTick]);
+  }, [videoPlaying, showInfo, showActions, showVersions, modalOpen, activityTick]);
   useEffect(() => {
-    if (!showActions) return;
-    const dismiss = (event: PointerEvent) => { if (!(event.target as HTMLElement).closest(".viewer-actions")) setShowActions(false); };
+    if (!showActions && !showVersions) return;
+    const dismiss = (event: PointerEvent) => { if (!(event.target as HTMLElement).closest(".viewer-actions")) { setShowActions(false); setShowVersions(false); } };
     window.addEventListener("pointerdown", dismiss);
     return () => window.removeEventListener("pointerdown", dismiss);
-  }, [showActions]);
+  }, [showActions, showVersions]);
   const scopedDetail = detail?.asset.id === asset.id ? detail : undefined;
-  const a = scopedDetail?.asset || items?.find(item => item.id === asset.id) || asset,
-    primary = scopedDetail?.files.find((f) => f.hash === a.primary);
+  const catalog = scopedDetail?.asset || items?.find(item => item.id === asset.id) || asset;
+  const primary = scopedDetail?.files.find(file => file.hash === selectedVersions[asset.id]) || scopedDetail?.files.find(file => file.hash === catalog.primary);
+  const a = primary ? versionAsset(catalog, primary, scopedDetail!.files) : catalog;
+  const versions = scopedDetail?.files.filter(file => file.mime.startsWith(catalog.kind === "video" ? "video/" : "image/")) || [];
+  function selectVersion(hash: string) {
+    if (modalOpen || updateLock.current || catalog.deletionPending) return;
+    setSelectedVersions(previous => ({ ...previous, [catalog.id]: hash }));
+    setPlayingAsset(undefined);
+    setVideoPlaying(false);
+    setShowVersions(false);
+    activity();
+  }
   const playing = playingAsset === a.id;
   const index = items?.findIndex(item => item.id === a.id) ?? -1;
   const before = index > 0 ? items?.[index - 1] : undefined;
@@ -138,10 +152,10 @@ export function Viewer({
   }
   useWheelNavigation(root, !locked && !a.deletionPending, goPrevious, goNext);
   useEffect(() => {
-    if (videoPlaying || (a.kind !== "video" && readyAsset !== a.id)) return;
+    if (videoPlaying || (a.kind !== "video" && readyAsset !== `${a.id}:${a.primary}`)) return;
     preloadPreviews([after, before].filter((item): item is Asset => !!item), 400);
     return cancelPreloads;
-  }, [a.id, readyAsset, videoPlaying, before?.primary, after?.primary, policy.prefetch]);
+  }, [a.id, a.primary, readyAsset, videoPlaying, before?.primary, after?.primary, policy.prefetch]);
   useEffect(() => {
     const strip = filmstrip.current;
     const selected = strip?.querySelector<HTMLElement>('[aria-current="true"]');
@@ -178,7 +192,7 @@ export function Viewer({
       if (updateLock.current) return;
       if (e.key === "ArrowLeft") goPrevious();
       if (e.key === "ArrowRight") goNext();
-      if (!e.repeat && e.key === "Escape") { if (showActions) setShowActions(false); else if (showInfo) setShowInfo(false); else close(); }
+      if (!e.repeat && e.key === "Escape") { if (showVersions) setShowVersions(false); else if (showActions) setShowActions(false); else if (showInfo) setShowInfo(false); else close(); }
       if (!e.repeat && e.key === "i") { setShowInfo(value => !value); activity(); }
       const action = e.key === " " ? "toggle" : e.key === "f" ? "fullscreen" : e.key === "m" ? "mute" : "";
       if (action && !e.repeat) root.current?.querySelector<HTMLButtonElement>(`[data-player-${action}]`)?.click();
@@ -191,8 +205,8 @@ export function Viewer({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [previous, next, openAsset, before, after, hasPrevious, hasNext, modalOpen, close, showInfo, showActions]);
-  const meta = scopedDetail?.metadata || {};
+  }, [previous, next, openAsset, before, after, hasPrevious, hasNext, modalOpen, close, showInfo, showActions, showVersions]);
+  const meta = primary?.metadata || scopedDetail?.metadata || {};
   const field = (...names: string[]) => {
     for (const name of names) {
       const key = Object.keys(meta).find(
@@ -227,7 +241,7 @@ export function Viewer({
     setPlayingAsset(a.id);
   };
   return (
-    <div ref={root} className={`viewer aura-viewer ${showInfo ? "with-info" : ""} ${controlsHidden && !showInfo && !showActions ? "controls-hidden" : ""} ${a.kind === "video" || playing ? "has-video" : ""}`} onPointerMove={event => { if (event.pointerType === "mouse" && videoPlaying) activity(); }} role="dialog" aria-modal={!modalOpen} aria-label={`媒体查看器 · ${a.name}`} tabIndex={-1} inert={modalOpen}>
+    <div ref={root} className={`viewer aura-viewer ${showInfo ? "with-info" : ""} ${controlsHidden && !showInfo && !showActions && !showVersions ? "controls-hidden" : ""} ${a.kind === "video" || playing ? "has-video" : ""}`} onPointerMove={event => { if (event.pointerType === "mouse" && videoPlaying) activity(); }} role="dialog" aria-modal={!modalOpen} aria-label={`媒体查看器 · ${a.name}`} tabIndex={-1} inert={modalOpen}>
       <div className="viewer-main">
         <header className="viewer-toolbar">
           <IconButton title="关闭查看器（Esc）" disabled={locked} onClick={close}>
@@ -238,8 +252,12 @@ export function Viewer({
             <small>{a.name}</small>
           </div>
           <div className="viewer-actions">
+            {(catalog.imageVersions > 1 || versions.length > 1) && <button title="切换版本" aria-label="切换版本" aria-expanded={showVersions} className={`icon-button version-toggle ${showVersions ? "active" : ""}`} disabled={locked || !!a.deletionPending} onClick={() => { setShowVersions(!showVersions); setShowActions(false); if (!scopedDetail) void refresh(); activity(); }}>
+              <Layers3 size={20} /><small>{versions.length && !versions.some(file => file.hash === a.primary) ? "视频" : `${Math.max(0, versions.findIndex(file => file.hash === a.primary)) + 1}/${versions.length || catalog.imageVersions}`}</small>
+            </button>}
+            {showVersions && (versions.length ? <VersionPicker files={versions} selected={a.primary} primary={catalog.primary} select={selectVersion} locked={locked} /> : <div className="viewer-version-menu version-pending">{error ? <><p>{error}</p><button onClick={() => void refresh()}>重新加载版本</button></> : <p><LoaderCircle size={16} className="spin" />正在读取版本</p>}</div>)}
             <button title="照片信息（I）" aria-label="照片信息" aria-expanded={showInfo} aria-controls={infoId} className={`icon-button ${showInfo ? "active" : ""}`} disabled={locked} onClick={() => { setShowInfo(!showInfo); setShowActions(false); activity(); }}><InfoIcon size={21} /></button>
-            <button title="更多操作" aria-label="更多操作" aria-expanded={showActions} className={`icon-button ${showActions ? "active" : ""}`} disabled={locked} onClick={() => { setShowActions(!showActions); activity(); }}><Ellipsis size={23} /></button>
+            <button title="更多操作" aria-label="更多操作" aria-expanded={showActions} className={`icon-button ${showActions ? "active" : ""}`} disabled={locked} onClick={() => { setShowActions(!showActions); setShowVersions(false); activity(); }}><Ellipsis size={23} /></button>
             {showActions && <div className="viewer-action-menu">
               <button disabled={locked || !!a.trashedAt || !!a.deletionPending} onClick={() => { setShowActions(false); addToAlbum(); }}><ImagePlus size={18} />添加到相片集</button>
               {!a.deletionPending && <a href={`${base}api/assets/${a.id}/download`}><ArrowDownToLine size={18} />下载全部原件</a>}
@@ -263,7 +281,7 @@ export function Viewer({
           </button>
           {a.kind === "video" || playing ? <div className="media-stage">
             <VideoPlayer key={`${a.id}:${playing ? a.motion : a.primary}`} asset={a} live={playing} locked={locked} previous={goPrevious} next={goNext} close={close} toggleChrome={() => setControlsHidden(value => !value)} activity={activity} onPlayback={value => { setVideoPlaying(value); if (!value) setControlsHidden(false); }} onEnded={playing ? () => setPlayingAsset(undefined) : undefined} />
-          </div> : <PhotoSurface key={a.id} asset={a} locked={locked} previous={goPrevious} next={goNext} close={() => { if (showInfo) setShowInfo(false); else close(); }} toggleChrome={() => setControlsHidden(value => !value)} hasPrevious={hasPrevious} hasNext={hasNext} onReady={() => setReadyAsset(a.id)} />}
+          </div> : <PhotoSurface key={`${a.id}:${a.primary}`} asset={a} locked={locked} previous={goPrevious} next={goNext} close={() => { if (showInfo) setShowInfo(false); else close(); }} toggleChrome={() => setControlsHidden(value => !value)} hasPrevious={hasPrevious} hasNext={hasNext} onReady={() => setReadyAsset(`${a.id}:${a.primary}`)} />}
           <button className="viewer-next" onClick={goNext} disabled={locked || !hasNext} aria-label="下一张" title="下一张（→）">
             <ChevronRight />
           </button>
@@ -366,6 +384,7 @@ export function Viewer({
               <small>{a.imageVersions} 个照片版本</small>
             </span></div>
           </div>}
+          <PhotoEdits records={scopedDetail?.edits || []} file={primary} />
           <div className="originals">
             <h3>
               原始资源 <span>{scopedDetail?.files.length || a.variants}</span>
@@ -386,7 +405,8 @@ export function Viewer({
                     <strong>{f.name}</strong>
                     <small>
                       {resourceLabel(f)} · {bytes(f.size)}
-                      {f.hash === a.primary
+                      {f.hash === a.primary ? " · 当前查看" : ""}
+                      {f.hash === catalog.primary
                         ? " · 主版本"
                         : f.hash === a.motion
                           ? " · 实况视频"
@@ -403,7 +423,8 @@ export function Viewer({
                   </a>}
                 </div>
                 <div className="original-actions">
-                  {f.hash !== a.primary && f.mime.startsWith("image/") && (
+                  {(f.mime.startsWith("image/") || f.mime.startsWith("video/")) && f.hash !== a.primary && <button disabled={locked || !!a.deletionPending} onClick={() => selectVersion(f.hash)}>查看此版本</button>}
+                  {f.hash !== catalog.primary && f.mime.startsWith("image/") && (
                     <button disabled={locked || !!a.deletionPending} onClick={() => void update({ primary: f.hash })}>
                       设为主版本
                     </button>
