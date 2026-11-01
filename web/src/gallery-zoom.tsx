@@ -6,10 +6,12 @@ export const GALLERY_ZOOM_COLUMNS = [12, 10, 8, 7, 6, 5, 4] as const;
 export const GALLERY_ZOOM_MOBILE_COLUMNS = [7, 6, 5, 4, 3, 2, 1] as const;
 export const DEFAULT_GALLERY_ZOOM = 3;
 const STORAGE_KEY = "aura-grid-zoom-v2";
+const LAYOUT_STORAGE_KEY = "aura-grid-layout-v1";
 const MAX_ANIMATED_CARDS = 300;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 
 type GridStyle = CSSProperties & { "--columns": number; "--mobile-columns": number };
+type GalleryLayout = "square" | "original";
 type Snapshot = {
   root: HTMLDivElement;
   cards: Map<HTMLElement, DOMRect>;
@@ -28,6 +30,21 @@ function readZoom() {
     if (saved !== null && /^[0-6]$/.test(saved)) return Number(saved);
   } catch { /* Storage is optional. */ }
   return DEFAULT_GALLERY_ZOOM;
+}
+
+function readLayout(): GalleryLayout {
+  try {
+    if (localStorage.getItem(LAYOUT_STORAGE_KEY) === "original") return "original";
+  } catch { /* Storage is optional. */ }
+  return "square";
+}
+
+// The Photos aspect-ratio control uses a rectangle with inward vertical arrows.
+function AspectRatioIcon() {
+  return <svg width="22" height="27.5" viewBox="0 0 24 30" fill="currentColor" aria-hidden="true">
+    <path d="M8.3 0h7.4c.8 0 1.2.8.8 1.5l-3.7 5.2c-.4.6-1.2.6-1.6 0L7.5 1.5C7.1.8 7.5 0 8.3 0ZM8.3 30h7.4c.8 0 1.2-.8.8-1.5l-3.7-5.2c-.4-.6-1.2-.6-1.6 0l-3.7 5.2c-.4.7 0 1.5.8 1.5Z" />
+    <rect x="1.5" y="8.5" width="21" height="13" rx="3" fill="none" stroke="currentColor" strokeWidth="3" />
+  </svg>;
 }
 
 function nearby(rect: DOMRect, margin: number) {
@@ -85,6 +102,7 @@ function capture(root: HTMLDivElement): Snapshot {
  */
 export function useGalleryZoom() {
   const [zoom, setZoomState] = useState(readZoom);
+  const [layout, setLayout] = useState(readLayout);
   const root = useRef<HTMLDivElement | null>(null);
   const requested = useRef(zoom);
   const committed = useRef(zoom);
@@ -129,6 +147,10 @@ export function useGalleryZoom() {
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, String(zoom)); } catch { /* Optional preference. */ }
   }, [zoom]);
+
+  useEffect(() => {
+    try { localStorage.setItem(LAYOUT_STORAGE_KEY, layout); } catch { /* Optional preference. */ }
+  }, [layout]);
 
   useLayoutEffect(() => {
     committed.current = zoom;
@@ -207,22 +229,28 @@ export function useGalleryZoom() {
   const gridStyle: GridStyle = { "--columns": columns, "--mobile-columns": mobileColumns };
   return {
     zoom, setZoom, columns, mobileColumns, gridStyle, timelineRef,
-    timelineProps: { className: "timeline aura-gallery", ref: timelineRef, style: gridStyle, "data-gallery-zoom": zoom },
+    timelineProps: { className: "timeline aura-gallery", ref: timelineRef, style: gridStyle, "data-gallery-zoom": zoom, "data-gallery-layout": layout },
     skeletonProps: { className: "skeleton-grid gallery-skeleton", style: gridStyle },
-    controlsProps: { zoom, onZoomChange: setZoom },
+    controlsProps: { zoom, onZoomChange: setZoom, layout, onLayoutChange: setLayout },
   };
 }
 
 export type GalleryZoomControlsProps = {
   zoom: number;
   onZoomChange: (zoom: number) => void;
+  layout: GalleryLayout;
+  onLayoutChange: (layout: GalleryLayout) => void;
   disabled?: boolean;
 };
 
-export function GalleryZoomControls({ zoom, onZoomChange, disabled = false }: GalleryZoomControlsProps) {
+export function GalleryZoomControls({ zoom, onZoomChange, layout, onLayoutChange, disabled = false }: GalleryZoomControlsProps) {
   const value = normalizeZoom(zoom);
+  const layoutAction = layout === "square" ? "原始比例网格" : "正方形照片网格";
   return (
-    <div className="gallery-zoom" role="group" aria-label="缩略图大小">
+    <div className="gallery-zoom" role="group" aria-label="照片网格显示">
+      <button type="button" className="gallery-layout-toggle" aria-label={layoutAction} title={layoutAction} aria-pressed={layout === "original"} disabled={disabled} onClick={() => onLayoutChange(layout === "square" ? "original" : "square")}>
+        <AspectRatioIcon />
+      </button>
       <button type="button" aria-label="缩小缩略图" title="缩小缩略图" disabled={disabled || value === 0} onClick={() => onZoomChange(value - 1)}>
         <ImageIcon size={14} aria-hidden="true" />
       </button>
