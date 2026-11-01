@@ -60,7 +60,7 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `POST /api/files/retry` | `{hashes:[sha256]}`; retry a bounded batch of failed resources |
 | `GET /api/uploads` | Paginated durable incomplete upload sessions with names, sizes, acknowledged offsets, and creation times |
 
-Video assets include an optional `duration` in seconds from the primary original's stored `Duration` metadata, including group-prefixed tags such as `QuickTime:Duration`. It is omitted until a positive finite duration is available. Photo and Live Photo assets omit this field. Listing and detail responses use the same asset representation.
+Video assets include optional `duration` in seconds and `frameRate` in frames per second from the primary original's stored `Duration` and `VideoFrameRate` metadata, including group-prefixed tags. Each field is omitted until its positive finite value is available. Photo and Live Photo assets omit these fields. Listing and detail responses use the same asset representation. The viewer displays the catalog duration before playback, then uses the loaded video's duration. Frame stepping pauses playback and uses the catalog frame rate, the observed frame interval when unavailable, or 30 fps before either is known; variable-rate sources use this interval estimate.
 
 ### Shared library filters
 

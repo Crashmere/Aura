@@ -177,6 +177,7 @@ function App() {
   const queryLoading = useRef(false);
   const failedLoad = useRef<"append" | "refresh">("refresh");
   const viewerKey = useRef(viewerId);
+  const galleryAnchor = useRef("");
   viewerKey.current = viewerId;
   const more = useRef<HTMLDivElement>(null);
   const permanentDeleteEnabled = info?.capabilities?.permanentDelete === true;
@@ -248,6 +249,19 @@ function App() {
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previous; };
   }, [overlayOpen]);
+  useEffect(() => {
+    const id = viewer?.id || galleryAnchor.current;
+    galleryAnchor.current = viewer?.id || "";
+    if (!id) return;
+    const center = () => document.querySelector<HTMLElement>(`.photo[data-asset-id="${CSS.escape(id)}"]`)
+      ?.scrollIntoView({ behavior: "instant", block: "center", inline: "nearest" });
+    let frame = requestAnimationFrame(() => {
+      center();
+      // Browser back can restore the pre-viewer scroll after popstate.
+      if (!viewer) frame = requestAnimationFrame(center);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [viewer?.id, items.length]);
   useEffect(() => () => clearTimeout(toastTimer.current), []);
   const notify = (text: string, failed = false) => {
     clearTimeout(toastTimer.current);

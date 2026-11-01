@@ -48,7 +48,7 @@ export function Photo({
     return () => window.removeEventListener("online", retry);
   }, [broken]);
   return (
-    <div style={geometry} className={`photo ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}>
+    <div data-asset-id={asset.id} style={geometry} className={`photo ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}>
       <button className="photo-open" disabled={disabled} onPointerEnter={event => { if (event.pointerType === "mouse" && !selecting && !disabled) preloadPreviews([asset], 180); }} onPointerLeave={cancelPreloads} onPointerDown={() => { if (!selecting && !disabled) preloadPreviews([asset], 0); }} onClick={onClick} aria-label={selecting ? `${selected ? "取消选择" : "选择"} ${asset.name}` : `查看 ${asset.name}`}>
         <div className="photo-frame">
           {!broken ? (

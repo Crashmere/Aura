@@ -130,6 +130,7 @@ type Asset struct {
 	Status          string  `json:"status"`
 	Variants        int     `json:"variants"`
 	Duration        float64 `json:"duration,omitempty"`
+	FrameRate       float64 `json:"frameRate,omitempty"`
 	DeletionPending bool    `json:"deletionPending,omitempty"`
 }
 
@@ -261,6 +262,10 @@ func scanAsset(row scanner) (a Asset, err error) {
 			duration, _ := strconv.ParseFloat(tag(metadata, "Duration"), 64)
 			if duration > 0 && !math.IsInf(duration, 0) {
 				a.Duration = duration
+			}
+			frameRate, _ := strconv.ParseFloat(tag(metadata, "VideoFrameRate"), 64)
+			if frameRate > 0 && !math.IsInf(frameRate, 0) {
+				a.FrameRate = frameRate
 			}
 		}
 	}

@@ -14,6 +14,7 @@ export type Asset = {
   status: string;
   variants: number;
   duration?: number;
+  frameRate?: number;
 };
 export type Original = {
   hash: string;

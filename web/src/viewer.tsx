@@ -2,10 +2,10 @@ import React, { useEffect, useId, useRef, useState } from "react";
 import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, Image as ImageIcon, ImagePlus, Info as InfoIcon, LoaderCircle, RefreshCw, ScanLine, Trash2, Video, Wifi, X, Ellipsis, ZoomIn, ZoomOut } from "lucide-react";
 import { api, Asset, Detail, base, media, bytes, displayDate } from "./api";
 import { LivePhotoIcon } from "./live-photo-icon";
-import { useImageGestures } from "./image-gestures";
+import { useImageGestures, useWheelNavigation } from "./image-gestures";
 import { IconButton } from "./controls";
 import { ProgressiveImage } from "./progressive-image";
-import { VideoPlayer } from "./video-player";
+import { VideoPlayer, VIDEO_SKIP_SECONDS } from "./video-player";
 import { cancelPreloads, preloadPreviews, setMediaMode, useMediaPolicy, type MediaMode } from "./media-loading";
 import "./viewer.css";
 
@@ -75,6 +75,7 @@ export function Viewer({
   const detailAbort = useRef<AbortController | undefined>(undefined);
   const root = useRef<HTMLDivElement>(null);
   const filmstrip = useRef<HTMLElement>(null);
+  const [stripCount, setStripCount] = useState(15);
   const infoId = useId();
   const currentAsset = useRef(asset.id);
   currentAsset.current = asset.id;
@@ -125,8 +126,8 @@ export function Viewer({
   const hasPrevious = items === undefined || !!before;
   const hasNext = items === undefined || !!after;
   const locked = updating || modalOpen;
-  const stripStart = Math.max(0, Math.min(index - 3, (items?.length ?? 0) - 7));
-  const nearby = index >= 0 && openAsset ? items?.slice(stripStart, stripStart + 7) ?? [] : [];
+  const stripStart = Math.max(0, Math.min(index - Math.floor(stripCount / 2), (items?.length ?? 0) - stripCount));
+  const nearby = index >= 0 && openAsset ? items?.slice(stripStart, stripStart + stripCount) ?? [] : [];
   function goPrevious() {
     if (modalOpen || updateLock.current || !hasPrevious) return;
     if (before && openAsset) openAsset(before); else previous();
@@ -135,6 +136,7 @@ export function Viewer({
     if (modalOpen || updateLock.current || !hasNext) return;
     if (after && openAsset) openAsset(after); else next();
   }
+  useWheelNavigation(root, !locked && !a.deletionPending, goPrevious, goNext);
   useEffect(() => {
     if (videoPlaying || (a.kind !== "video" && readyAsset !== a.id)) return;
     preloadPreviews([after, before].filter((item): item is Asset => !!item), 400);
@@ -145,6 +147,7 @@ export function Viewer({
     const selected = strip?.querySelector<HTMLElement>('[aria-current="true"]');
     if (!strip || !selected) return;
     const center = () => {
+      setStripCount(Math.max(9, Math.floor((strip.clientWidth - 28) / 43)));
       const offset = selected.getBoundingClientRect().left - strip.getBoundingClientRect().left;
       strip.scrollLeft += offset - (strip.clientWidth - selected.offsetWidth) / 2;
     };
@@ -170,7 +173,7 @@ export function Viewer({
       if (e.key === "Tab") { e.preventDefault(); return; }
       const target = e.target instanceof HTMLElement ? e.target : null;
       if (e.shiftKey || target?.isContentEditable || target?.closest('input, textarea, select, video, audio, [role="textbox"], [role="combobox"], [role="slider"], [role="spinbutton"], [role="listbox"], [role="menu"], [role="tree"]')) return;
-      if (!["Escape", "ArrowLeft", "ArrowRight", "i", " ", "f", "m", "j", "l"].includes(e.key)) return;
+      if (!["Escape", "ArrowLeft", "ArrowRight", "i", " ", "f", "m", "j", "l", ",", "."].includes(e.key)) return;
       e.preventDefault();
       if (updateLock.current) return;
       if (e.key === "ArrowLeft") goPrevious();
@@ -179,9 +182,10 @@ export function Viewer({
       if (!e.repeat && e.key === "i") { setShowInfo(value => !value); activity(); }
       const action = e.key === " " ? "toggle" : e.key === "f" ? "fullscreen" : e.key === "m" ? "mute" : "";
       if (action && !e.repeat) root.current?.querySelector<HTMLButtonElement>(`[data-player-${action}]`)?.click();
+      if (e.key === "," || e.key === ".") root.current?.querySelector<HTMLButtonElement>(`[data-player-${e.key === "," ? "previous" : "next"}-frame]`)?.click();
       if (e.key === "j" || e.key === "l") {
         const video = root.current?.querySelector("video");
-        if (video && Number.isFinite(video.duration)) video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + (e.key === "j" ? -10 : 10)));
+        if (video && Number.isFinite(video.duration)) video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + (e.key === "j" ? -VIDEO_SKIP_SECONDS : VIDEO_SKIP_SECONDS)));
         activity();
       }
     };

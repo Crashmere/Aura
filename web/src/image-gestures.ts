@@ -1,10 +1,40 @@
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type RefObject } from "react";
 
 type Point = { x: number; y: number };
 type Transform = Point & { scale: number };
 const fit: Transform = { scale: 1, x: 0, y: 0 };
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 const middle = (a: Point, b: Point) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+export function useWheelNavigation(root: RefObject<HTMLDivElement | null>, enabled: boolean, previous: () => void, next: () => void) {
+  const callbacks = useRef({ enabled, previous, next });
+  callbacks.current = { enabled, previous, next };
+  useEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    // Keep the gesture on the viewer so momentum survives photo remounts.
+    let last = 0, distance = 0, committed = false;
+    const wheel = (event: WheelEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!callbacks.current.enabled || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+        !target?.closest(".image-gesture-stage") || target.closest("button,a,input")) return;
+      const now = performance.now();
+      if (now - last > 180) { distance = 0; committed = false; }
+      last = now;
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? element.clientWidth : 1;
+      const dx = event.deltaX * unit, dy = event.deltaY * unit;
+      if (Math.abs(dx) <= Math.abs(dy) * 1.3) return;
+      event.preventDefault();
+      if (committed) return;
+      distance += dx;
+      if (Math.abs(distance) < 60) return;
+      committed = true;
+      if (distance > 0) callbacks.current.next(); else callbacks.current.previous();
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+  }, [root]);
+}
 
 export function useImageGestures(id: string, enabled: boolean, previous: () => void, next: () => void, close: () => void, tap: () => void, hasPrevious = true, hasNext = true) {
   const stage = useRef<HTMLDivElement>(null);

@@ -1,9 +1,20 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { LoaderCircle, Maximize, Pause, PictureInPicture2, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
+import { LoaderCircle, Maximize, Pause, PictureInPicture2, Play, StepBack, StepForward, Volume2, VolumeX } from "lucide-react";
 import { media, timestamp, type Asset } from "./api";
 let volumePreference = 1;
 let mutePreference = false;
 type SafariVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+export const VIDEO_SKIP_SECONDS = 5;
+
+function SkipIcon({ forward = false }: { forward?: boolean }) {
+  return <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <g transform={forward ? "translate(24 0) scale(-1 1)" : undefined}>
+      <path d="M3.3 7.8a9.5 9.5 0 1 1-.7 7.2" />
+      <path d="M3 3.5V8h4.5" />
+    </g>
+    <path d="M14.2 8.2h-4.1l-.4 3.6c.6-.5 1.2-.7 2-.7 1.6 0 2.7.9 2.7 2.4s-1.1 2.5-2.6 2.5c-1 0-1.8-.4-2.2-1.1" strokeWidth="1.5" />
+  </svg>;
+}
 
 export function VideoPlayer({ asset, live = false, locked, toggleChrome, activity, onPlayback, onEnded, previous, next, close }: {
   asset: Asset; live?: boolean; locked: boolean; toggleChrome: () => void; activity: () => void;
@@ -25,9 +36,13 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
   const [pip, setPip] = useState(false);
   const resumeAfterSeek = useRef(false);
   const seekingValue = useRef<number | null>(null);
+  const previewSeek = useRef<number | null>(null);
+  const seekFrame = useRef(0);
   const swipe = useRef<{ x: number; y: number } | undefined>(undefined);
   const suppressClick = useRef(false);
   const mounted = useRef(true);
+  const frameTime = useRef<number | undefined>(undefined);
+  const observedFrameDuration = useRef<number | undefined>(undefined);
   const callbacks = useRef({ onPlayback, onEnded });
   callbacks.current = { onPlayback, onEnded };
   const source = media(live ? asset.motion! : asset.primary, "play");
@@ -35,12 +50,24 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
     const element = video.current;
     mounted.current = true;
     if (element) { element.volume = volumePreference; element.muted = mutePreference; }
+    let frameCallback = 0;
+    const observeFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+      if (frameTime.current !== undefined && !element?.paused && !element?.seeking) {
+        const delta = metadata.mediaTime - frameTime.current;
+        if (delta > 0 && delta < .2) observedFrameDuration.current = delta;
+      }
+      frameTime.current = metadata.mediaTime;
+      frameCallback = element?.requestVideoFrameCallback(observeFrame) || 0;
+    };
+    if (element?.requestVideoFrameCallback) frameCallback = element.requestVideoFrameCallback(observeFrame);
     const visibility = () => { if (document.hidden && document.pictureInPictureElement !== element) element?.pause(); };
     document.addEventListener("visibilitychange", visibility);
     if (live) void play();
     return () => {
       mounted.current = false;
       document.removeEventListener("visibilitychange", visibility);
+      if (frameCallback) element?.cancelVideoFrameCallback(frameCallback);
+      cancelAnimationFrame(seekFrame.current);
       if (document.pictureInPictureElement === element) void document.exitPictureInPicture().catch(() => {});
       if (element) { element.pause(); element.removeAttribute("src"); element.load(); }
       callbacks.current.onPlayback(false);
@@ -67,10 +94,41 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
     const value = seekingValue.current;
     const element = video.current;
     if (value === null || !element) return;
+    cancelAnimationFrame(seekFrame.current); seekFrame.current = 0; previewSeek.current = null;
     element.currentTime = value;
     setTime(value); setSeeking(null); seekingValue.current = null;
     if (resumeAfterSeek.current) void play();
     resumeAfterSeek.current = false;
+    activity();
+  }
+  function queuePreviewSeek() {
+    if (seekFrame.current || video.current?.seeking) return;
+    seekFrame.current = requestAnimationFrame(() => {
+      seekFrame.current = 0;
+      const element = video.current;
+      const value = previewSeek.current;
+      if (!element || element.seeking || value === null) return;
+      previewSeek.current = null;
+      element.currentTime = value;
+    });
+  }
+  function stepFrame(direction: -1 | 1) {
+    const element = video.current;
+    if (!element || locked || !duration) return;
+    element.pause();
+    resumeAfterSeek.current = false;
+    seekingValue.current = null;
+    previewSeek.current = null;
+    cancelAnimationFrame(seekFrame.current); seekFrame.current = 0;
+    setSeeking(null);
+    const rate = !live && Number.isFinite(asset.frameRate) && asset.frameRate && asset.frameRate > 0 ? asset.frameRate : 0;
+    const interval = rate ? 1 / rate : observedFrameDuration.current || 1 / 30;
+    const current = rate ? Math.floor((element.currentTime + interval * .01) / interval) * interval :
+      !element.seeking && frameTime.current !== undefined && Math.abs(frameTime.current - element.currentTime) < interval ? frameTime.current : element.currentTime;
+    // Seek inside the target frame; exact boundary rounding can show its predecessor.
+    const target = Math.max(0, Math.min(Math.max(0, duration - interval / 2), current + (direction + .1) * interval));
+    element.currentTime = target;
+    setTime(target);
     activity();
   }
   async function fullscreen() {
@@ -90,7 +148,8 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
     } catch { setFailed("暂时无法开启画中画"); }
   }
   const shownTime = seeking ?? time;
-  const progress = duration ? Math.min(100, shownTime / duration * 100) : 0;
+  const shownDuration = duration || (!live && Number.isFinite(asset.duration) ? Math.max(0, asset.duration || 0) : 0);
+  const progress = shownDuration ? Math.min(100, shownTime / shownDuration * 100) : 0;
   return <div ref={container} className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""}`}>
     <video ref={video} className="player-video" playsInline preload="none" poster={media(asset.primary)} aria-label={live ? `${asset.name} · 实况` : asset.name}
       onPointerDown={event => { if (event.pointerType === "touch" && !locked) { swipe.current = { x: event.clientX, y: event.clientY }; suppressClick.current = false; } }}
@@ -109,7 +168,7 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
       onProgress={event => { const element = event.currentTarget; const ranges = []; for (let i = 0; i < element.buffered.length; i++) ranges.push({ start: element.buffered.start(i), end: element.buffered.end(i) }); setBuffered(ranges); }}
       onPlay={() => { setPlaying(true); callbacks.current.onPlayback(true); }}
       onPause={() => { if (mounted.current) { setPlaying(false); setWaiting(false); callbacks.current.onPlayback(false); } }}
-      onPlaying={() => setWaiting(false)} onWaiting={() => setWaiting(true)} onSeeking={() => setWaiting(true)} onSeeked={() => setWaiting(false)}
+      onPlaying={() => setWaiting(false)} onWaiting={() => setWaiting(true)} onSeeking={() => setWaiting(true)} onSeeked={() => { setWaiting(false); queuePreviewSeek(); }}
       onEnded={() => { setPlaying(false); callbacks.current.onPlayback(false); callbacks.current.onEnded?.(); }}
       onVolumeChange={event => { volumePreference = event.currentTarget.volume; mutePreference = event.currentTarget.muted; setVolume(volumePreference); setMuted(mutePreference); }}
       onError={() => { if (mounted.current) { setFailed("视频加载失败，请重试"); setWaiting(false); setPlaying(false); callbacks.current.onPlayback(false); } }} />
@@ -121,12 +180,12 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
         <span className="player-time">{timestamp(shownTime)}</span>
         <div className="player-seek" style={{ "--played": `${progress}%` } as CSSProperties}>
           <div className="player-buffered" aria-hidden="true">{duration > 0 && buffered.map((range, index) => <i key={index} style={{ left: `${range.start / duration * 100}%`, width: `${(range.end - range.start) / duration * 100}%` }} />)}</div>
-          <input type="range" aria-label="播放进度" aria-valuetext={`${timestamp(shownTime)} / ${timestamp(duration)}`} min="0" max={duration || 1} step="0.1" value={shownTime} disabled={locked || !duration}
+          <input type="range" aria-label="播放进度" aria-valuetext={`${timestamp(shownTime)} / ${timestamp(shownDuration)}`} min="0" max={shownDuration || 1} step="0.1" value={shownTime} disabled={locked || !duration}
             onPointerDown={() => { resumeAfterSeek.current = !!video.current && !video.current.paused; video.current?.pause(); }}
-            onChange={event => { const value = Number(event.target.value); seekingValue.current = value; setSeeking(value); }}
+            onChange={event => { const value = Number(event.target.value); seekingValue.current = value; setSeeking(value); previewSeek.current = value; queuePreviewSeek(); }}
             onPointerUp={commitSeek} onPointerCancel={commitSeek} onKeyUp={commitSeek} onBlur={commitSeek} />
         </div>
-        <span className="player-time">−{timestamp(duration - shownTime)}</span>
+        <span className="player-time" title={started ? "剩余时长" : "视频时长"}>{started ? "−" : ""}{timestamp(started ? shownDuration - shownTime : shownDuration)}</span>
       </div>
       <div className="player-buttons">
         <div className="player-volume">
@@ -134,9 +193,11 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
           <input aria-label="音量" type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume} disabled={locked} onChange={event => { if (video.current) { video.current.volume = Number(event.target.value); video.current.muted = false; } }} />
         </div>
         <div className="player-transport">
-          <button title="后退 10 秒" aria-label="后退 10 秒" disabled={locked || !duration} onClick={() => { if (video.current) video.current.currentTime = Math.max(0, video.current.currentTime - 10); }}><RotateCcw size={19} /><small>10</small></button>
+          <button className="player-frame-step" data-player-previous-frame title="上一帧（,）" aria-label="上一帧" disabled={locked || !duration} onClick={() => stepFrame(-1)}><StepBack size={17} /></button>
+          <button title={`后退 ${VIDEO_SKIP_SECONDS} 秒`} aria-label={`后退 ${VIDEO_SKIP_SECONDS} 秒`} disabled={locked || !duration} onClick={() => { if (video.current) video.current.currentTime = Math.max(0, video.current.currentTime - VIDEO_SKIP_SECONDS); }}><SkipIcon /></button>
           <button className="player-toggle" data-player-toggle aria-label={playing ? "暂停" : "播放"} title="播放 / 暂停（空格）" disabled={locked} onClick={togglePlay}>{playing ? <Pause size={23} fill="currentColor" /> : <Play size={23} fill="currentColor" />}</button>
-          <button title="前进 10 秒" aria-label="前进 10 秒" disabled={locked || !duration} onClick={() => { if (video.current) video.current.currentTime = Math.min(duration, video.current.currentTime + 10); }}><RotateCcw className="player-forward" size={19} /><small>10</small></button>
+          <button title={`前进 ${VIDEO_SKIP_SECONDS} 秒`} aria-label={`前进 ${VIDEO_SKIP_SECONDS} 秒`} disabled={locked || !duration} onClick={() => { if (video.current) video.current.currentTime = Math.min(duration, video.current.currentTime + VIDEO_SKIP_SECONDS); }}><SkipIcon forward /></button>
+          <button className="player-frame-step" data-player-next-frame title="下一帧（.）" aria-label="下一帧" disabled={locked || !duration} onClick={() => stepFrame(1)}><StepForward size={17} /></button>
         </div>
         <div className="player-options">
           <button className="player-speed" aria-label={`播放速度 ${speed} 倍`} title="切换播放速度" disabled={locked} onClick={() => { const values = [.5, 1, 1.5, 2]; const value = values[(values.indexOf(speed) + 1) % values.length]; setSpeed(value); if (video.current) video.current.playbackRate = value; }}>{speed}×</button>

@@ -115,6 +115,7 @@
 }
 .aura-viewer .viewer-filmstrip {
   display: flex;
+  width: min(100%, 1040px);
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -734,14 +735,8 @@
 .aura-player .player-buttons .player-toggle {
   width: 44px;
 }
-.aura-player .player-transport small {
-  font-size: 7px;
-  position: absolute;
-  top: 15px;
-  left: 14px;
-}
-.aura-player .player-forward {
-  transform: scaleX(-1);
+.aura-player .player-buttons .player-frame-step {
+  width: 30px;
 }
 .aura-player .player-buttons .player-speed {
   font-size: 12px;
