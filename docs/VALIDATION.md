@@ -39,3 +39,9 @@ The maintenance computer lacks full Xcode and an iOS signing identity. iPhone in
 ## GPU still-image compatibility
 
 A synthetic 12-megapixel fixture set covers EXIF-rotated JPEG, HEIC, PNG, grayscale, alpha, Display P3 and CMYK inputs on NAS's RTX 3070. GPU and CPU runs retained identical original SHA-256 and canonical pixel hashes across the set. Preview/thumbnail dimensions and orientation matched. Decoded RGB mean absolute differences were below 1.25 out of 255 for these fixtures, reflecting different resizing/JPEG encoders rather than byte-identical derivatives. This is a bounded compatibility check, not a guarantee for every camera profile or RAW decoder. GPU work remains limited to derivatives; exact grouping uses the established libvips path.
+
+## Parallel processing and interruption
+
+Isolated synthetic checks with Go's race detector verified a four-job bound, separate image-worker event streams, two shared GPU slots, cancellation of active and waiting GPU requests, and continued processing after a selected hash is permanently deleted. Eight queued originals included an interrupted attempt; shutdown requeued every unfinished job, restart completed them, and concurrent source matches published into one logical item. Original SHA-256 checks and catalog integrity passed.
+
+On NAS's Ryzen 9 5900HX, 64 GB RAM and 8 GiB RTX 3070, the same four 24-megapixel JPEG variants and four 10-second 1080p videos took 56.25 seconds with one job/one GPU slot and 32.83 seconds with four jobs/two GPU slots. All 16 preview/thumbnail/playback steps reported NVIDIA GPU execution. The parallel service reached four processing jobs and 51 threads/processes against `TasksMax=128`. Both runs preserved the original bytes, canonical pixel hashes and identical photo/video grouping. This single mixed-media comparison supports the selected limits; it does not predict throughput for every RAW format or video duration.

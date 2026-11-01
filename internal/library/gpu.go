@@ -17,9 +17,14 @@ func (l *Library) nvidiaAvailable(ctx context.Context) bool {
 		if os.Getenv("AURA_GPU") == "cpu" {
 			return
 		}
+		release, err := l.acquireGPU(ctx)
+		if err != nil {
+			return
+		}
+		defer release()
 		probe, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		_, err := command(probe, "ffmpeg", "-nostdin", "-v", "error", "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu", "-f", "lavfi", "-i", "color=size=640x480:rate=1", "-vf", "format=nv12,hwupload,scale_cuda=320:240", "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-")
+		_, err = command(probe, "ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-threads", "2", "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu", "-f", "lavfi", "-i", "color=size=640x480:rate=1", "-vf", "format=nv12,hwupload,scale_cuda=320:240", "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-")
 		l.gpuAvailable = err == nil
 		if err != nil {
 			slog.Info("NVIDIA acceleration unavailable; using CPU", "error", err)
@@ -72,7 +77,7 @@ func (l *Library) videoDerivative(ctx context.Context, input, output, step strin
 			return ctx.Err()
 		}
 		p.encoding(step, mode, 0)
-		args := []string{"-protocol_whitelist", "file,pipe"}
+		args := []string{"-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-filter_complex_threads", "1"}
 		gpu := mode != "CPU"
 		if gpu {
 			args = append(args, "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu")
@@ -109,7 +114,17 @@ func (l *Library) videoDerivative(ctx context.Context, input, output, step strin
 			args = append(args, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart")
 		}
 		args = append(args, "-threads", "2", "-y", output)
+		var release func()
+		if gpu {
+			release, err = l.acquireGPU(ctx)
+			if err != nil {
+				return err
+			}
+		}
 		err = ffmpegProgress(ctx, args, duration, func(percent float64) { p.encoding(step, mode, percent) })
+		if release != nil {
+			release()
+		}
 		if err == nil {
 			return nil
 		}

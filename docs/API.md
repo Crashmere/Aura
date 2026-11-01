@@ -40,7 +40,7 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | Method and path | Behavior |
 | --- | --- |
 | `GET /healthz` | Database connectivity; `{status:"ok",service:"Aura"}` |
-| `GET /api/info` | Version, capabilities, library counts, original byte count, processing/error counts |
+| `GET /api/info` | Version, capabilities, library counts, original byte count, processing/error counts, effective `processingConcurrency:{workers,gpuOperations}` |
 | `GET /api/assets` | `{items,next}` with the shared library filters below, `cursor`, and `limit` (default 120, maximum 240) |
 | `GET /api/filter-options` | `{cameras:string[],lenses:string[]}`; global equipment choices from all retained catalog assets, including trash and secondary originals |
 | `PATCH /api/assets` | `{ids:[assetId],trash:boolean}`; transactional batch removal or restore, 1–1000 IDs |

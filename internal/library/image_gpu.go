@@ -43,15 +43,15 @@ func (w *imageGPUWorker) stop() {
 func (l *Library) closeImageGPU() {
 	l.imageGPUMu.Lock()
 	defer l.imageGPUMu.Unlock()
-	if l.imageGPU != nil {
-		l.imageGPU.stop()
-		l.imageGPU = nil
+	for _, worker := range l.imageGPUIdle {
+		worker.stop()
 	}
+	l.imageGPUIdle = nil
 }
 
 func startImageGPU(python string) (*imageGPUWorker, error) {
 	cmd := exec.Command(python, "-B", "-u", "-c", imageGPUScript)
-	cmd.Env = append(os.Environ(), "PYTHONNOUSERSITE=1", "OPENBLAS_NUM_THREADS=1")
+	cmd.Env = append(os.Environ(), "PYTHONNOUSERSITE=1", "OPENBLAS_NUM_THREADS=1", "OMP_NUM_THREADS=2")
 	stderr := &limitedBuffer{max: 4096}
 	cmd.Stderr = stderr
 	input, err := cmd.StdinPipe()
@@ -96,39 +96,60 @@ func imagePython() string {
 }
 
 func (l *Library) runImageGPU(ctx context.Context, request map[string]string, p *jobTracker) error {
+	release, err := l.acquireGPU(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	var w *imageGPUWorker
 	l.imageGPUMu.Lock()
-	defer l.imageGPUMu.Unlock()
-	if l.imageGPU != nil {
+	for len(l.imageGPUIdle) > 0 {
+		last := len(l.imageGPUIdle) - 1
+		candidate := l.imageGPUIdle[last]
+		l.imageGPUIdle = l.imageGPUIdle[:last]
 		select {
-		case <-l.imageGPU.done:
-			l.imageGPU = nil
+		case <-candidate.done:
+			_ = candidate.input.Close()
 		default:
+			w = candidate
+		}
+		if w != nil {
+			break
 		}
 	}
-	if l.imageGPU == nil {
-		worker, err := startImageGPU(imagePython())
+	l.imageGPUMu.Unlock()
+	if w == nil {
+		w, err = startImageGPU(imagePython())
 		if err != nil {
 			return err
 		}
-		l.imageGPU = worker
 	}
-	w := l.imageGPU
+	// A worker has one request/event stream and belongs exclusively to this operation.
+	defer func() {
+		if w != nil {
+			l.imageGPUMu.Lock()
+			l.imageGPUIdle = append(l.imageGPUIdle, w)
+			l.imageGPUMu.Unlock()
+		}
+	}()
 	if err := json.NewEncoder(w.input).Encode(request); err != nil {
 		w.stop()
-		l.imageGPU = nil
+		w = nil
 		return err
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			w.stop()
-			l.imageGPU = nil
+			w = nil
 			return ctx.Err()
 		case event, ok := <-w.events:
 			if !ok {
 				<-w.done
-				l.imageGPU = nil
-				return fmt.Errorf("GPU worker stopped: %v", w.error)
+				err := fmt.Errorf("GPU worker stopped: %v", w.error)
+				_ = w.input.Close()
+				w = nil
+				return err
 			}
 			if event.Done {
 				if event.Error != "" {

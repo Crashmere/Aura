@@ -34,6 +34,9 @@ func run() error {
 	out := flags.String("out", "", "snapshot or restore destination")
 	source := flags.String("source", "", "snapshot source")
 	full := flags.Bool("full", false, "verify every original checksum")
+	limits := library.DefaultProcessingLimits()
+	workers := flags.Int("workers", limits.Workers, "parallel media jobs (default uses available CPU capacity, up to 4)")
+	gpuOperations := flags.Int("gpu-slots", limits.GPUOperations, "simultaneous GPU image/video operations")
 	if e := flags.Parse(os.Args[2:]); e != nil {
 		return e
 	}
@@ -80,11 +83,18 @@ func run() error {
 		}
 		return l.Daily(ctx, *out)
 	case "serve":
+		if e = l.ConfigureProcessing(*workers, min(*gpuOperations, *workers)); e != nil {
+			return e
+		}
 		assets, e := fs.Sub(web.Files, "dist")
 		if e != nil {
 			return e
 		}
-		go l.Worker(ctx)
+		workerStopped := make(chan struct{})
+		go func() {
+			defer close(workerStopped)
+			l.Worker(ctx)
+		}()
 		srv := &http.Server{Addr: *addr, Handler: l.Handler(assets), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
 		stopped := make(chan struct{})
 		go func() {
@@ -98,8 +108,12 @@ func run() error {
 		e = srv.ListenAndServe()
 		if e == http.ErrServerClosed {
 			<-stopped
+			<-workerStopped
 			return nil
 		}
+		stop()
+		<-stopped
+		<-workerStopped
 		return e
 	default:
 		return fmt.Errorf("unknown command: %s", cmd)

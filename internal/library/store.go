@@ -31,7 +31,9 @@ type Library struct {
 	gpuOnce          sync.Once
 	gpuAvailable     bool
 	imageGPUMu       sync.Mutex
-	imageGPU         *imageGPUWorker
+	imageGPUIdle     []*imageGPUWorker
+	ProcessingLimits ProcessingLimits
+	gpuSlots         chan struct{}
 }
 
 type uploadLock struct {
@@ -184,7 +186,10 @@ func Open(root string) (*Library, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Library{DB: db, Root: root, Wake: make(chan struct{}, 1)}, nil
+	l := &Library{DB: db, Root: root, Wake: make(chan struct{}, 1)}
+	limits := DefaultProcessingLimits()
+	_ = l.ConfigureProcessing(limits.Workers, limits.GPUOperations)
+	return l, nil
 }
 func ID() string {
 	var b [16]byte

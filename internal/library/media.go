@@ -90,58 +90,6 @@ func captureDate(m map[string]any, h Hints) string {
 	}
 	return now()
 }
-func (l *Library) Worker(ctx context.Context) {
-	defer l.closeImageGPU()
-	if e := l.RecoverDeletions(ctx); e != nil && ctx.Err() == nil {
-		slog.Error("recover permanent deletion", "error", e)
-	}
-	if _, e := l.DB.Exec("UPDATE files SET status='queued' WHERE status='processing'"); e != nil {
-		slog.Error("recover processing jobs", "error", e)
-		return
-	}
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		_ = l.recoverDeletions(ctx, false)
-		f, e := scanFile(l.DB.QueryRow("SELECT " + fileColumns + ` FROM files WHERE status='queued' AND NOT EXISTS
- (SELECT 1 FROM decisions d,json_each(d.detail,'$.hashes') h WHERE d.action='purge-request' AND h.value=files.hash)
- ORDER BY created_at LIMIT 1`))
-		if e == sql.ErrNoRows {
-			select {
-			case <-ctx.Done():
-				return
-			case <-l.Wake:
-			case <-ticker.C:
-			}
-			continue
-		}
-		if e != nil {
-			slog.Error("job lookup", "error", e)
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-			continue
-		}
-		if e = l.processQueued(ctx, f.Hash); e != nil {
-			var deleted *deletedOriginal
-			if errors.As(e, &deleted) || errors.Is(e, sql.ErrNoRows) {
-				continue
-			}
-			if ctx.Err() != nil {
-				_, _ = l.DB.Exec("UPDATE files SET status='queued' WHERE hash=? AND status='processing'", f.Hash)
-				return
-			}
-			slog.Error("media processing", "hash", f.Hash, "error", e)
-			_, _ = l.DB.Exec("UPDATE files SET status='error',error=? WHERE hash=? AND status='processing'", e.Error(), f.Hash)
-		}
-	}
-}
-
 func (l *Library) processQueued(parent context.Context, hash string) error {
 	unlock := l.lockUpload(hash)
 	locked := true
@@ -221,6 +169,9 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 	}
 	meta := map[string]any{}
 	raw, extractErr := command(ctx, "exiftool", "-j", "-G1", "-n", "-struct", "-api", "LargeFileSupport=1", "-api", "QuickTimeUTC=1", input)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if extractErr == nil {
 		var list []map[string]any
 		if e = json.Unmarshal(raw, &list); e == nil && len(list) > 0 {
@@ -392,6 +343,9 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 	if extractErr != nil {
 		f.Status = "error"
 		f.Error = extractErr.Error()
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	progress.step("catalog", "processing", nil)
 	result = l.publish(f)
