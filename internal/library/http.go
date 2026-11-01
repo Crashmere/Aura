@@ -78,6 +78,8 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Post("/api/assets/{id}/split", l.split)
 	r.Get("/api/assets/{id}/download", l.download)
 	r.Get("/api/similar", l.similar)
+	r.Get("/api/review-history", l.reviewHistory)
+	r.Post("/api/splits/{id}/restore", l.restoreSplit)
 	r.Post("/api/similar/ignore", l.ignoreSimilar)
 	r.Delete("/api/similar/ignore", l.ignoreSimilar)
 	r.Get("/api/jobs", l.jobs)
@@ -482,6 +484,11 @@ func (l *Library) split(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	var anchor string
+	if e = tx.QueryRow("SELECT hash FROM files WHERE asset_id=? AND hash!=? ORDER BY score DESC,created_at LIMIT 1", id, f.Hash).Scan(&anchor); e != nil {
+		fail(w, 500, e)
+		return
+	}
 	newID := ID()
 	_, e = tx.Exec("INSERT INTO assets(id,captured_at,favorite,trashed_at,created_at) VALUES(?,?,?,?,?)", newID, f.CapturedAt, favorite, trashed, now())
 	if e == nil {
@@ -501,7 +508,7 @@ func (l *Library) split(w http.ResponseWriter, r *http.Request) {
 		e = refreshTx(tx, newID)
 	}
 	if e == nil {
-		_, e = tx.Exec("INSERT INTO decisions VALUES(?,?,?,?)", ID(), "split", marshal(map[string]string{"from": id, "to": newID, "hash": f.Hash}), now())
+		_, e = tx.Exec("INSERT INTO decisions VALUES(?,?,?,?)", ID(), "split", marshal(splitRecord{From: id, To: newID, Hash: f.Hash, Anchor: anchor, Name: f.Name}), now())
 	}
 	if e == nil {
 		e = tx.Commit()

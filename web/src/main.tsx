@@ -43,6 +43,7 @@ import {
   ExternalLink,
   ListChecks,
   Columns2,
+  History,
 } from "lucide-react";
 import {
   api,
@@ -73,6 +74,7 @@ import { FilterPanel } from "./filter-panel";
 import { emptyFilters, filterChips, filterParams, type FilterDraft } from "./library-filters";
 import { Viewer } from "./viewer";
 import { PhotoCompare } from "./photo-compare";
+import { ReviewHistory, type HistoryKind } from "./review-history";
 import { Button, IconButton } from "./controls";
 import { DeletionProgress, PermanentDeleteDialog, useDeletionOperations } from "./permanent-delete";
 import "./style.css";
@@ -170,6 +172,7 @@ function App() {
     [similarAssets, setSimilarAssets] = useState<Record<string, Asset>>({});
   const [similarCounts, setSimilarCounts] = useState<SimilarPage["counts"]>();
   const [comparison, setComparison] = useState<{ left: Asset; right: Asset } | null>(null);
+  const [historyKind, setHistoryKind] = useState<HistoryKind | null>(null);
   const [months, setMonths] = useState<Timeline["months"]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -253,7 +256,7 @@ function App() {
     const id = setTimeout(() => setQuery(search), 250);
     return () => clearTimeout(id);
   }, [search, composingSearch]);
-  const overlayOpen = !!viewer || !!comparison || uploadOpen || help || !!albumDialog || !!deletionTargets || mobileMenu || filters;
+  const overlayOpen = !!viewer || !!comparison || !!historyKind || uploadOpen || help || !!albumDialog || !!deletionTargets || mobileMenu || filters;
   useEffect(() => {
     if (!overlayOpen) return;
     const previous = document.body.style.overflow;
@@ -676,7 +679,7 @@ function App() {
         setDragging(false);
         if (e.dataTransfer.files.length) {
           e.preventDefault();
-          if (viewer || albumDialog || deletionTargets || help || filters) return;
+          if (viewer || comparison || historyKind || albumDialog || deletionTargets || help || filters) return;
           setUploadTab("files");
           uploads.addFiles(Array.from(e.dataTransfer.files));
           setUploadOpen(true);
@@ -737,6 +740,7 @@ function App() {
               {id === "jobs" && !!(info?.queued || info?.errors) && <small>{(info?.queued || 0) + (info?.errors || 0)}</small>}
             </button>
           ))}
+          <button onClick={() => setHistoryKind("split")}><History size={18} /><span>整理记录</span></button>
         </nav>
         <div className="sidebar-bottom">
           {uploading.items.length > 0 || info?.queued ? (
@@ -933,6 +937,7 @@ function App() {
             </p>
           )}
           {view === "merged" && <p className="view-note">这里显示你手动归并的照片，所有原件均可在详情中查看或分离。</p>}
+          {(view === "automatic" || view === "merged" || view === "grouped") && <Button className="subtle" onClick={() => setHistoryKind("split")}><History size={15} />分离记录</Button>}
           {view === "trash" && (
             <p className="view-note">
               项目在永久删除前可恢复。永久删除会清理全部原件与对应预览。
@@ -1038,6 +1043,7 @@ function App() {
               <div className="similar-tabs" aria-label="相似类型">
                 <button className={similarSource === "dhash" ? "active" : ""} aria-pressed={similarSource === "dhash"} onClick={() => setSimilarSource("dhash")}>算法判定{similarCounts && <small className="similar-count" title="候选总数">{similarCounts.dhash.toLocaleString("zh-CN")}</small>}</button>
                 <button className={similarSource === "dino" ? "active" : ""} aria-pressed={similarSource === "dino"} onClick={() => setSimilarSource("dino")}>智能推荐{similarCounts && <small className="similar-count" title="候选总数">{similarCounts.dino.toLocaleString("zh-CN")}</small>}</button>
+                <button className="review-history-link" onClick={() => setHistoryKind("similar")}><History size={14} />已确认不同</button>
               </div>
               {similarSource === "dino" && info?.similarityIndex && <div className="similar-index">
                 {info.similarityIndex.state === "processing" ? <LoaderCircle size={14} className="spin" /> : null}
@@ -1240,6 +1246,7 @@ function App() {
                 <ChevronRight size={15} />
               </button>
             ))}
+            <button onClick={() => { setHistoryKind("split"); setMobileMenu(false); }}><History size={19} /><span>整理记录</span><ChevronRight size={15} /></button>
             <a href="/portal/">
               <ArrowLeft size={19} />
               <span>返回门户</span>
@@ -1281,6 +1288,7 @@ function App() {
           permanentlyDelete={openPermanentDelete}
         />
       )}
+      {historyKind && <ReviewHistory initialKind={historyKind} close={() => setHistoryKind(null)} changed={() => refreshRef.current(true)} open={asset => { setHistoryKind(null); setViewer(asset); }} compare={(left, right) => setComparison({ left, right })} notify={notify} covered={!!comparison} />}
       {comparison && <PhotoCompare left={comparison.left} right={comparison.right} close={() => setComparison(null)} />}
       {deletionTargets && <PermanentDeleteDialog targets={deletionTargets} close={() => setDeletionTargets(null)} submit={permanentDelete} />}
       {albumDialog && (

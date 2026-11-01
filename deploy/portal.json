@@ -218,6 +218,16 @@
     },
     {
       "method": "GET",
+      "path": "/api/review-history",
+      "description": "分页查看已确认不同的候选与待恢复的分离记录"
+    },
+    {
+      "method": "POST",
+      "path": "/api/splits/{id}/restore",
+      "description": "按分离记录将指定原件重新组合，保留其他原件与删除状态"
+    },
+    {
+      "method": "GET",
       "path": "/api/jobs",
       "description": "按活动时间索引分页查询持久处理记录、状态数量与失败原因"
     },

@@ -55,6 +55,8 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `GET /api/similar` | `source=dhash` (default) or `source=dino`; legacy array up to 100 pairs, or `paged=true` returns `{items,next}` with DINO `index` progress |
 | `POST /api/similar/ignore` | `{left,right}`; persist a dismissal without merging or deleting originals |
 | `DELETE /api/similar/ignore` | `{left,right}`; undo a dismissal |
+| `GET /api/review-history` | `kind=similar|split`, `limit` (default 20, maximum 100), and opaque `cursor`; retained dismissal or split records with current cards and restoration availability |
+| `POST /api/splits/{id}/restore` | Restore the exact original identified by a split decision to its retained item; response `{id:assetId}` |
 | `GET /api/jobs` | Legacy array of the latest 100 pending/error files; `paged=true` returns durable processing history |
 | `POST /api/files/{hash}/retry` | Queue metadata and derivative regeneration |
 | `POST /api/files/retry` | `{hashes:[sha256]}`; retry a bounded batch of failed resources |
@@ -130,6 +132,10 @@ Similar review supports `source=dhash` (default), `source=dino`, `paged=true`, `
 `/api/info.similarityIndex` and paged DINO results' `index` report `{state,total,ready,pending,errors,engine?,batchSize,waitSeconds}`. States are `starting`, `idle`, `waiting`, `processing`, `unavailable`, or `disabled`. Counts cover ready primary images with available thumbnails; `pending` includes failed images waiting to retry. DINO works asynchronously in batches of at most 16, after ten seconds for a partial batch. It never changes upload or media-job status. Candidate pages may change while background analysis adds records; refresh starts from the latest result set.
 
 Paged similar responses include `total` for the selected source and `counts:{dhash,dino}` for both sources across every page. Each candidate is one distinct photo pair after current visibility, grouping and dismissal rules. Counts reuse the fingerprint index and DINO candidate snapshot and remain cached until the review revision changes. The two tab badges show these totals, including zero, and update after dismissal, undo, merging or refreshed analysis.
+
+The history response is `{items,assets,next}`. Items contain `id`, `createdAt`, `left`, `right`, `canRestore` and optional `reason`, `hash`, and `name`. Similar history returns the latest effective `similar-ignore` decision for each pair across both recommendation sources; undo uses the existing `DELETE /api/similar/ignore` and remains available after refresh. Missing current cards are omitted from `assets`; undoing a dismissal does not recreate a removed or merged photo.
+
+Split history returns decisions without a `split-restore` record. New split decisions preserve a remaining original's hash as an anchor and the separated filename; old `{from,to,hash}` records remain readable. Restoration resolves the retained item by its ID, follows recorded merge destinations if its ID changed, and can use an unsplit anchor if neither ID is retained. It moves only the recorded hash. Other originals in the separated item remain there. Album memberships are added to the target, favorites are retained, and both items must have compatible trash state and no pending permanent deletion. A removed original/target, a newer split of the same hash, or a changed separated-item identity returns 409 `split_restore_conflict`. A successful restore appends `split-restore`, removes an empty logical item, refreshes primary/motion projections and returns the retained item's ID. Repeating it is idempotent. It does not unlink or rewrite originals, restore trashed items, or create a user-merge decision. Media processing no longer treats that restored split as an active grouping exclusion.
 
 ## Albums
 

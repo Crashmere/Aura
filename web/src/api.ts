@@ -127,6 +127,8 @@ export type PendingUpload = {
   missing?: boolean;
 };
 export type SimilarPair = { left: string; right: string; distance: number; source?: "dhash" | "dino"; score?: number };
+export type ReviewHistoryItem = { id: string; createdAt: string; left: string; right: string; hash?: string; name?: string; canRestore: boolean; reason?: string };
+export type ReviewHistoryPage = Page<ReviewHistoryItem> & { assets: Record<string, Asset> };
 export type SimilarityIndex = {
   state: "starting" | "idle" | "waiting" | "processing" | "unavailable" | "disabled";
   total: number;

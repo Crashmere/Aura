@@ -407,6 +407,7 @@ func (l *Library) publish(f File) error {
 	}
 	var split bool
 	if e = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM decisions d WHERE d.action='split'
+ AND NOT EXISTS(SELECT 1 FROM decisions u WHERE u.action='split-restore' AND json_extract(u.detail,'$.splitId')=d.id)
  AND (json_extract(d.detail,'$.from')=? OR json_extract(d.detail,'$.to')=? OR json_extract(d.detail,'$.hash')=?)
  AND d.created_at>COALESCE((SELECT max(created_at) FROM observations WHERE hash=?),''))`, current.AssetID, current.AssetID, f.Hash, f.Hash).Scan(&split); e != nil {
 		return e
