@@ -34,18 +34,49 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
-func command(ctx context.Context, bin string, args ...string) ([]byte, error) {
+func mediaCommand(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = append(os.Environ(), "VIPS_CONCURRENCY=2", "VIPS_DISC_THRESHOLD=64m")
-	out := &limitedBuffer{max: 8 << 20}
-	stderr := &limitedBuffer{max: 4096}
-	cmd.Stdout = out
-	cmd.Stderr = stderr
-	e := cmd.Run()
-	if e != nil {
-		return nil, fmt.Errorf("%s: %w: %s", bin, e, strings.TrimSpace(stderr.String()))
+	// Serial RAW delegates avoid the observed nondeterministic pixels; libvips
+	// retains its own two-worker limit and independent jobs can run concurrently.
+	cmd.Env = append(os.Environ(), "VIPS_CONCURRENCY=2", "VIPS_DISC_THRESHOLD=64m", "OMP_NUM_THREADS=1", "OPENBLAS_NUM_THREADS=1", "MAGICK_THREAD_LIMIT=1")
+	// A decoder descendant must not keep output pipes open after cancellation.
+	cmd.WaitDelay = 5 * time.Second
+	return cmd
+}
+
+func (l *Library) commandOutput(ctx context.Context, bin string, output io.Writer, args ...string) error {
+	if strings.HasPrefix(bin, "vips") || bin == "exiftool" {
+		release, err := l.acquireCPU(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
-	return out.Bytes(), nil
+	timeout := 2 * time.Minute
+	if bin == "vips" {
+		timeout = 5 * time.Minute
+	} else if bin == "ffmpeg" {
+		timeout = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := mediaCommand(ctx, bin, args...)
+	stderr := &limitedBuffer{max: 4096}
+	cmd.Stdout = output
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return fmt.Errorf("%s: %w: %s", bin, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+func (l *Library) command(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	out := &limitedBuffer{max: 8 << 20}
+	err := l.commandOutput(ctx, bin, out, args...)
+	return out.Bytes(), err
 }
 func tag(m map[string]any, names ...string) string {
 	for _, name := range names {
@@ -168,7 +199,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 		return e
 	}
 	meta := map[string]any{}
-	raw, extractErr := command(ctx, "exiftool", "-j", "-G1", "-n", "-struct", "-api", "LargeFileSupport=1", "-api", "QuickTimeUTC=1", input)
+	raw, extractErr := l.command(ctx, "exiftool", "-j", "-G1", "-n", "-struct", "-api", "LargeFileSupport=1", "-api", "QuickTimeUTC=1", input)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -213,7 +244,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 		upright := filepath.Join(work, "upright.v")
 		progress.step("decode", "processing", nil)
 		progress.encoding("decode", "CPU · 标准像素解码", 0)
-		_, decodeErr := command(ctx, "vips", "autorot", input, upright)
+		_, decodeErr := l.command(ctx, "vips", "autorot", input, upright)
 		if decodeErr == nil {
 			progress.result("decode", nil)
 		} else {
@@ -232,10 +263,10 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 			progress.step("preview", "processing", nil)
 			progress.fallback("preview", gpuErr)
 			progress.fallback("thumbnail", gpuErr)
-			_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
+			_, mediaErr = l.command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
 			if mediaErr != nil {
 				for _, name := range []string{"JpgFromRaw", "PreviewImage", "OtherImage"} {
-					embedded, err := command(ctx, "exiftool", "-b", "-"+name, input)
+					embedded, err := l.command(ctx, "exiftool", "-b", "-"+name, input)
 					if err != nil || len(embedded) < 100 {
 						continue
 					}
@@ -253,7 +284,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 						mediaErr = nil
 						break
 					}
-					_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
+					_, mediaErr = l.command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
 					if mediaErr == nil {
 						break
 					}
@@ -264,7 +295,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 			}
 			if mediaErr == nil && gpuErr != nil {
 				progress.step("thumbnail", "processing", nil)
-				_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "thumb.jpg")+"[Q=85,strip]", "640", "--size", "down")
+				_, mediaErr = l.command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "thumb.jpg")+"[Q=85,strip]", "640", "--size", "down")
 				progress.result("thumbnail", mediaErr)
 			}
 		}
@@ -279,7 +310,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 			f.DHash = perceptual(l.Derived(f.Hash, "-thumb.jpg"))
 			// Hash full decoded pixels and their interpretation. No resized or lossy hash triggers automatic grouping.
 			if decodeErr == nil {
-				header, he := command(ctx, "vipsheader", filepath.Join(work, "upright.v"))
+				header, he := l.command(ctx, "vipsheader", filepath.Join(work, "upright.v"))
 				if he == nil {
 					sum := sha256.New()
 					description := strings.SplitN(string(header), ": ", 2)
@@ -293,10 +324,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 						}
 					}
 					io.WriteString(sum, marshal(icc))
-					cmd := exec.CommandContext(ctx, "vips", "rawsave", filepath.Join(work, "upright.v"), "/dev/stdout")
-					cmd.Stdout = sum
-					cmd.Stderr = &limitedBuffer{max: 4096}
-					if cmd.Run() == nil {
+					if l.commandOutput(ctx, "vips", sum, "rawsave", filepath.Join(work, "upright.v"), "/dev/stdout") == nil {
 						f.PixelHash = hex.EncodeToString(sum.Sum(nil))
 					}
 				}

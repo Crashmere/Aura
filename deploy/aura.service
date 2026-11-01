@@ -10,6 +10,9 @@ WorkingDirectory=/opt/aura
 ExecStart=/opt/aura/bin/aura serve --data /opt/aura/data --listen 127.0.0.1:18087 --workers 8 --gpu-slots 4
 Environment=TZ=Asia/Shanghai
 Environment=MALLOC_ARENA_MAX=2
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MAGICK_THREAD_LIMIT=1
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
@@ -20,7 +23,7 @@ ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/opt/aura/data
 Nice=5
-TasksMax=128
+TasksMax=1024
 
 [Install]
 WantedBy=multi-user.target

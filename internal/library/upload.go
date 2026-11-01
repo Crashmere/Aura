@@ -492,7 +492,7 @@ func (l *Library) commitUpload(w http.ResponseWriter, r *http.Request) {
 	// A repair restores an already accepted object regardless of new import filters.
 	if !repair && (h.From != "" || h.To != "") {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		data, err := command(ctx, "exiftool", "-j", "-G1", "-n", "-api", "QuickTimeUTC=1", path)
+		data, err := l.command(ctx, "exiftool", "-j", "-G1", "-n", "-api", "QuickTimeUTC=1", path)
 		cancel()
 		m := map[string]any{}
 		if err == nil {

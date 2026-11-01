@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed image_gpu.py
@@ -32,6 +33,22 @@ type imageGPUWorker struct {
 	events chan imageGPUEvent
 	done   chan struct{}
 	error  error
+}
+
+// Cancel a blocked request write as well as its response wait, then drain the
+// callback before the caller can reuse the child's request stream.
+func interruptWorker(ctx context.Context, cmd *exec.Cmd, input io.WriteCloser) func() {
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = cmd.Process.Kill()
+		_ = input.Close()
+		close(done)
+	})
+	return func() {
+		if !stop() {
+			<-done
+		}
+	}
 }
 
 func (w *imageGPUWorker) stop() {
@@ -101,6 +118,8 @@ func (l *Library) runImageGPU(ctx context.Context, request map[string]string, p 
 		return err
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 	var w *imageGPUWorker
 	l.imageGPUMu.Lock()
 	for len(l.imageGPUIdle) > 0 {
@@ -124,9 +143,15 @@ func (l *Library) runImageGPU(ctx context.Context, request map[string]string, p 
 			return err
 		}
 	}
+	interrupt := interruptWorker(ctx, w.cmd, w.input)
 	// A worker has one request/event stream and belongs exclusively to this operation.
 	defer func() {
+		interrupt()
 		if w != nil {
+			if ctx.Err() != nil {
+				w.stop()
+				return
+			}
 			l.imageGPUMu.Lock()
 			l.imageGPUIdle = append(l.imageGPUIdle, w)
 			l.imageGPUMu.Unlock()
@@ -135,6 +160,9 @@ func (l *Library) runImageGPU(ctx context.Context, request map[string]string, p 
 	if err := json.NewEncoder(w.input).Encode(request); err != nil {
 		w.stop()
 		w = nil
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	for {
@@ -195,7 +223,7 @@ func (l *Library) imageDerivativesGPU(ctx context.Context, f File, meta map[stri
 			slog.Info("retry GPU previews with CPU decoding", "error", err)
 		}
 	}
-	width, err := command(ctx, "vipsheader", "-f", "width", decoded)
+	width, err := l.command(ctx, "vipsheader", "-f", "width", decoded)
 	if err != nil {
 		return err
 	}
@@ -203,7 +231,7 @@ func (l *Library) imageDerivativesGPU(ctx context.Context, f File, meta map[stri
 	if err != nil || w < 1 {
 		return fmt.Errorf("invalid decoded image width")
 	}
-	height, err := command(ctx, "vipsheader", "-f", "height", decoded)
+	height, err := l.command(ctx, "vipsheader", "-f", "height", decoded)
 	if err != nil {
 		return err
 	}
@@ -215,7 +243,7 @@ func (l *Library) imageDerivativesGPU(ctx context.Context, f File, meta map[stri
 		return fmt.Errorf("image exceeds the GPU working-set limit")
 	}
 	rgb := filepath.Join(work, "gpu-source.ppm")
-	if _, err = command(ctx, "vips", "thumbnail", decoded, rgb+"[strip,format=ppm]", strconv.Itoa(max(w, h)), "--size", "down"); err != nil {
+	if _, err = l.command(ctx, "vips", "thumbnail", decoded, rgb+"[strip,format=ppm]", strconv.Itoa(max(w, h)), "--size", "down"); err != nil {
 		return err
 	}
 	defer os.Remove(rgb)

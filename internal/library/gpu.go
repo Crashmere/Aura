@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +23,7 @@ func (l *Library) nvidiaAvailable(ctx context.Context) bool {
 		defer release()
 		probe, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		_, err = command(probe, "ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-threads", "2", "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu", "-f", "lavfi", "-i", "color=size=640x480:rate=1", "-vf", "format=nv12,hwupload,scale_cuda=320:240", "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-")
+		_, err = l.command(probe, "ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-threads", "2", "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu", "-f", "lavfi", "-i", "color=size=640x480:rate=1", "-vf", "format=nv12,hwupload,scale_cuda=320:240", "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-")
 		l.gpuAvailable = err == nil
 		if err != nil {
 			slog.Info("NVIDIA acceleration unavailable; using CPU", "error", err)
@@ -35,7 +34,7 @@ func (l *Library) nvidiaAvailable(ctx context.Context) bool {
 
 // Progress uses encoded media time, not elapsed wall time or a synthetic timer.
 func ffmpegProgress(ctx context.Context, args []string, duration float64, update func(float64)) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg", append([]string{"-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats"}, args...)...)
+	cmd := mediaCommand(ctx, "ffmpeg", append([]string{"-nostdin", "-v", "error", "-progress", "pipe:1", "-nostats"}, args...)...)
 	stderr := &limitedBuffer{max: 4096}
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
@@ -55,6 +54,9 @@ func ffmpegProgress(ctx context.Context, args []string, duration float64, update
 		}
 	}
 	if err = cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return fmt.Errorf("ffmpeg: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	if err = scanner.Err(); err != nil {
@@ -67,6 +69,11 @@ func ffmpegProgress(ctx context.Context, args []string, duration float64, update
 func (l *Library) videoDerivative(ctx context.Context, input, output, step string, duration float64, p *jobTracker) error {
 	const dimensions = "w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
 	thumbnail := step == "thumbnail"
+	if thumbnail {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+	}
 	modes := []string{"CPU"}
 	if l.nvidiaAvailable(ctx) {
 		modes = []string{"NVIDIA GPU", "NVIDIA GPU · 软件解码", "CPU"}
@@ -117,6 +124,11 @@ func (l *Library) videoDerivative(ctx context.Context, input, output, step strin
 		var release func()
 		if gpu {
 			release, err = l.acquireGPU(ctx)
+			if err != nil {
+				return err
+			}
+		} else {
+			release, err = l.acquireCPU(ctx)
 			if err != nil {
 				return err
 			}

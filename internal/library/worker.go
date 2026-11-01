@@ -14,12 +14,13 @@ import (
 type ProcessingLimits struct {
 	Workers       int `json:"workers"`
 	GPUOperations int `json:"gpuOperations"`
+	CPUOperations int `json:"cpuOperations"`
 }
 
 func DefaultProcessingLimits() ProcessingLimits {
-	// Each media subprocess uses two CPU threads; leave capacity for the other services.
+	// Decoder libraries can create their own pools beyond VIPS_CONCURRENCY.
 	workers := max(1, min(4, runtime.GOMAXPROCS(0)/4))
-	return ProcessingLimits{Workers: workers, GPUOperations: min(2, workers)}
+	return ProcessingLimits{Workers: workers, GPUOperations: min(2, workers), CPUOperations: min(4, workers)}
 }
 
 // ConfigureProcessing sets immutable limits before starting the worker and HTTP server.
@@ -28,8 +29,22 @@ func (l *Library) ConfigureProcessing(workers, gpuOperations int) error {
 		return fmt.Errorf("processing workers and GPU operations must be positive; GPU operations cannot exceed workers")
 	}
 	l.ProcessingLimits = ProcessingLimits{Workers: workers, GPUOperations: gpuOperations}
+	l.ProcessingLimits.CPUOperations = min(4, workers)
 	l.gpuSlots = make(chan struct{}, gpuOperations)
+	l.cpuSlots = make(chan struct{}, l.ProcessingLimits.CPUOperations)
 	return nil
+}
+
+func (l *Library) acquireCPU(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case l.cpuSlots <- struct{}{}:
+		return func() { <-l.cpuSlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (l *Library) acquireGPU(ctx context.Context) (func(), error) {
@@ -65,7 +80,7 @@ func (l *Library) Worker(ctx context.Context) {
 		l.dinoLoop(ctx)
 	}()
 	defer func() { <-dinoStopped }()
-	slog.Info("media processing concurrency", "workers", l.ProcessingLimits.Workers, "gpuOperations", l.ProcessingLimits.GPUOperations)
+	slog.Info("media processing concurrency", "workers", l.ProcessingLimits.Workers, "gpuOperations", l.ProcessingLimits.GPUOperations, "cpuOperations", l.ProcessingLimits.CPUOperations)
 	var running sync.WaitGroup
 	// Drain jobs before shutting down their GPU contexts or the catalog connection.
 	defer running.Wait()

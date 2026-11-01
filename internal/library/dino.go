@@ -516,9 +516,21 @@ func (l *Library) runDINOBatch(parent context.Context, worker **dinoProcess, cat
 	}
 	l.dinoMu.RUnlock()
 	request := map[string]any{"records": filepath.Join(l.Root, "derived"), "catalog": changes, "reset": !(*worker).catalogReady, "items": items}
-	if err := json.NewEncoder((*worker).input).Encode(request); err != nil {
+	active := *worker
+	interrupt := interruptWorker(ctx, active.cmd, active.input)
+	defer func() {
+		interrupt()
+		if ctx.Err() != nil && *worker != nil {
+			(*worker).stop()
+			*worker = nil
+		}
+	}()
+	if err := json.NewEncoder(active.input).Encode(request); err != nil {
 		(*worker).stop()
 		*worker = nil
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	var response dinoResponse
