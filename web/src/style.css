@@ -2444,6 +2444,10 @@ input {
   border-bottom: 1px solid var(--line);
   scroll-margin-top: 130px;
 }
+.similar-pair .photo.original-aspect { aspect-ratio: var(--photo-aspect, 1); align-self: center; }
+.similar-pair .photo.original-aspect img { object-fit: contain; }
+.similar-pair .photo.original-aspect:hover img { transform: none; }
+@media (max-width: 1200px) { .similar-pair .pair-actions { flex-wrap: wrap; gap: 8px; } }
 .similar-pagination {
   display: flex;
   justify-content: center;
@@ -2458,6 +2462,9 @@ input {
   font-size: 12px;
 }
 .similar-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 0 0 12px;
   font-size: 14px;
   color: #89917f;
@@ -2467,6 +2474,16 @@ input {
   color: var(--accent-dark);
   border-bottom-color: var(--accent);
 }
+.similar-count {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: #89917f15;
+  font-size: 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.similar-tabs button.active .similar-count { background: #81986b20; }
 .similar-index {
   display: flex;
   align-items: center;

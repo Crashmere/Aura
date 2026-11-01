@@ -70,15 +70,21 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		{"versions", "single multiple"},
 		{"grouping", "automatic manual"},
 		{"albumState", "in none"},
-		{"cameraMatch", "exact contains"},
-		{"lensMatch", "exact contains"},
+		{"cameraMatch", "exact contains missing"},
+		{"lensMatch", "exact contains missing"},
 	} {
 		if value := q.Get(enum.name); value != "" && !slices.Contains(strings.Fields(enum.values), value) {
 			fail(w, 400, enum.name+" 筛选值无效")
 			return "", nil, false
 		}
 	}
-	if q.Get("camera") != "" || q.Get("lens") != "" || q.Get("location") != "" || q.Get("q") != "" {
+	for _, field := range assetEquipmentFields {
+		if q.Get(field.name+"Match") == "missing" && strings.TrimSpace(q.Get(field.name)) != "" {
+			fail(w, 400, field.name+" 缺失筛选不能同时指定名称")
+			return "", nil, false
+		}
+	}
+	if q.Get("camera") != "" || q.Get("lens") != "" || q.Get("cameraMatch") == "missing" || q.Get("lensMatch") == "missing" || q.Get("location") != "" || q.Get("q") != "" {
 		if err := l.ensureFacets(context.Background()); err != nil {
 			fail(w, 500, err)
 			return "", nil, false
@@ -257,6 +263,11 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 	}
 
 	for _, field := range assetEquipmentFields {
+		if q.Get(field.name+"Match") == "missing" {
+			where += ` AND NOT EXISTS (SELECT 1 FROM file_equipment e JOIN files r ON r.hash=e.hash WHERE e.dimension=? AND r.asset_id=a.id)`
+			args = append(args, field.name)
+			continue
+		}
 		if value := strings.TrimSpace(q.Get(field.name)); value != "" {
 			comparison := `e.value LIKE ? ESCAPE '\'`
 			argument := assetTextPattern(value)

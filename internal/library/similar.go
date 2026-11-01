@@ -269,11 +269,54 @@ func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []s
 		fail(w, 500, err)
 		return
 	}
-	out := map[string]any{"items": items, "next": next, "assets": cards}
+	counts, err := l.similarCounts(r.Context())
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	source := "dhash"
+	if dino {
+		source = "dino"
+	}
+	out := map[string]any{"items": items, "next": next, "assets": cards, "total": counts[source], "counts": counts}
 	if dino {
 		out["index"] = l.dinoSnapshot()
 	}
 	writeJSON(w, 200, out)
+}
+
+func (l *Library) similarCounts(ctx context.Context) (map[string]int, error) {
+	value, err := l.cachedCatalog(ctx, "similar-counts", "review", func() (any, error) {
+		value, err := l.cachedCatalog(ctx, "dhash-index", "library", func() (any, error) { return l.buildDHashIndex(ctx) })
+		if err != nil {
+			return nil, err
+		}
+		index := value.(*dhashIndex)
+		ignored, err := l.ignoredPairs()
+		if err != nil {
+			return nil, err
+		}
+		count := 0
+		for i, item := range index.items {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			for _, match := range index.matches(i) {
+				if !ignored[pairKey(item.ID, match.Item.ID)] {
+					count++
+				}
+			}
+		}
+		value, err = l.cachedCatalog(ctx, "dino-pairs", "review", func() (any, error) { return l.buildDINOPairs(ctx) })
+		if err != nil {
+			return nil, err
+		}
+		return map[string]int{"dhash": count, "dino": len(value.([]similarPair))}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return value.(map[string]int), nil
 }
 
 func (l *Library) ignoreSimilar(w http.ResponseWriter, r *http.Request) {

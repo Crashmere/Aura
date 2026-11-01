@@ -75,13 +75,15 @@ export function FilterPanel({ value, anchor, apply, close }: {
   const select = (key: keyof typeof filterOptions, label: string) => <label className="filter-field"><span>{label}</span><select aria-label={label} value={draft[key]} onChange={event => set(key, event.target.value)}><option value="">全部</option>{filterOptions[key].map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>;
   const equipmentSelect = (key: "camera" | "lens", label: string, choices: string[] | undefined) => (
     <label className="filter-field"><span>{label}</span>
-      <select aria-label={label} value={draft[key]} disabled={equipmentLoading && !equipment} onChange={event => {
-        const selected = event.target.value;
-        setDraft(previous => ({ ...previous, [key]: selected, [`${key}Match`]: selected ? "exact" : "" }));
+      <select aria-label={label} value={draft[`${key}Match`] === "missing" ? "missing" : draft[key] ? `value:${draft[key]}` : ""} disabled={equipmentLoading && !equipment} onChange={event => {
+        const missing = event.target.value === "missing";
+        const selected = event.target.value.startsWith("value:") ? event.target.value.slice(6) : "";
+        setDraft(previous => ({ ...previous, [key]: selected, [`${key}Match`]: missing ? "missing" : selected ? "exact" : "" }));
       }}>
-        <option value="">{equipmentLoading && !equipment ? "正在读取照片库…" : choices?.length === 0 && !draft[key] ? `暂无${label}信息` : `全部${label}`}</option>
-        {draft[key] && !choices?.includes(draft[key]) && <option value={draft[key]}>{draft[key]}</option>}
-        {choices?.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+        <option value="">{equipmentLoading && !equipment ? "正在读取照片库…" : `全部${label}`}</option>
+        <option value="missing">无{label}记录</option>
+        {draft[key] && !choices?.includes(draft[key]) && <option value={`value:${draft[key]}`}>{draft[key]}</option>}
+        {choices?.map(choice => <option key={choice} value={`value:${choice}`}>{choice}</option>)}
       </select>
     </label>
   );

@@ -18,6 +18,7 @@ export function Photo({
   selecting = false,
   select,
   disabled = false,
+  originalAspect = false,
 }: {
   asset: Asset;
   onClick: (event: MouseEvent<HTMLButtonElement>) => void;
@@ -25,6 +26,7 @@ export function Photo({
   selecting?: boolean;
   select?: (event: MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
+  originalAspect?: boolean;
 }) {
   const image = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(false);
@@ -35,6 +37,7 @@ export function Photo({
   // Decoded previews include EXIF rotation; catalog dimensions can precede it.
   const ratio = previewAspect?.source === source ? previewAspect.ratio : asset.width > 0 && asset.height > 0 ? asset.width / asset.height : 1;
   const geometry = {
+    "--photo-aspect": ratio,
     "--photo-natural-width": `${Math.min(1, ratio) * 100}%`,
     "--photo-natural-height": `${Math.min(1, 1 / ratio) * 100}%`,
     "--photo-crop-scale": Math.max(ratio, 1 / ratio),
@@ -48,7 +51,7 @@ export function Photo({
     return () => window.removeEventListener("online", retry);
   }, [broken]);
   return (
-    <div data-asset-id={asset.id} style={geometry} className={`photo ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}>
+    <div data-asset-id={asset.id} style={geometry} className={`photo ${originalAspect ? "original-aspect" : ""} ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}>
       <button className="photo-open" disabled={disabled} onPointerEnter={event => { if (event.pointerType === "mouse" && !selecting && !disabled) preloadPreviews([asset], 180); }} onPointerLeave={cancelPreloads} onPointerDown={() => { if (!selecting && !disabled) preloadPreviews([asset], 0); }} onClick={onClick} aria-label={selecting ? `${selected ? "取消选择" : "选择"} ${asset.name}` : `查看 ${asset.name}`}>
         <div className="photo-frame">
           {!broken ? (

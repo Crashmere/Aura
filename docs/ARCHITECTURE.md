@@ -80,6 +80,8 @@ Uploading an original whose item is in recently deleted does not restore it auto
 
 The web navigation separates automatically combined photo versions (`照片版本`) from user merges (`手动归并`). Both categories require multiple image resources; paired video and adjustment data are counted separately as resources. Classification reads existing merge decisions and current original membership, rather than trusting an asset ID that can change during grouping. A manual merge takes precedence while its moved images and an image from the other side still belong to the same item. Details identify native original, edited, motion and adjustment resources using their PhotoKit resource types. These read-only projections do not change membership or original bytes.
 
+The similarity tabs display the total number of candidate pairs from each source after visibility and dismissal rules, independent of pagination. Counts reuse the existing fingerprint index and DINO snapshot and refresh with the review revision. Candidate cards show complete decoded photo proportions. The comparison dialog displays both current primary previews at full proportions, either side by side or centered in a shared canvas with a reveal slider. Browsing comparisons does not change originals, version choices or grouping.
+
 ## Deletion
 
 Normal removal updates the logical item's trash timestamp and preserves every original and membership. Restore reverses that visibility change. Batch removal and restore validate all selected IDs in one transaction; a failed batch does not partially update the catalog. List, album, month, and library counts refresh together after mutations, including uncertain request failures. Recently deleted has no automatic expiry or purge.

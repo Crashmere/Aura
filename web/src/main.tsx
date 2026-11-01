@@ -42,6 +42,7 @@ import {
   Monitor,
   ExternalLink,
   ListChecks,
+  Columns2,
 } from "lucide-react";
 import {
   api,
@@ -71,6 +72,7 @@ import { useGalleryZoom, GalleryZoomControls } from "./gallery-zoom";
 import { FilterPanel } from "./filter-panel";
 import { emptyFilters, filterChips, filterParams, type FilterDraft } from "./library-filters";
 import { Viewer } from "./viewer";
+import { PhotoCompare } from "./photo-compare";
 import { Button, IconButton } from "./controls";
 import { DeletionProgress, PermanentDeleteDialog, useDeletionOperations } from "./permanent-delete";
 import "./style.css";
@@ -166,6 +168,8 @@ function App() {
     [ignoredPair, setIgnoredPair] = useState<SimilarPair | null>(null),
     [ignoring, setIgnoring] = useState(""),
     [similarAssets, setSimilarAssets] = useState<Record<string, Asset>>({});
+  const [similarCounts, setSimilarCounts] = useState<SimilarPage["counts"]>();
+  const [comparison, setComparison] = useState<{ left: Asset; right: Asset } | null>(null);
   const [months, setMonths] = useState<Timeline["months"]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -249,7 +253,7 @@ function App() {
     const id = setTimeout(() => setQuery(search), 250);
     return () => clearTimeout(id);
   }, [search, composingSearch]);
-  const overlayOpen = !!viewer || uploadOpen || help || !!albumDialog || !!deletionTargets || mobileMenu || filters;
+  const overlayOpen = !!viewer || !!comparison || uploadOpen || help || !!albumDialog || !!deletionTargets || mobileMenu || filters;
   useEffect(() => {
     if (!overlayOpen) return;
     const previous = document.body.style.overflow;
@@ -357,6 +361,7 @@ function App() {
       if (key !== queryKey.current) return;
       setSimilar(old => append ? [...old, ...pairs.filter(pair => !old.some(previous => previous.left === pair.left && previous.right === pair.right))] : pairs);
       setSimilarNext(data.next);
+      setSimilarCounts(data.counts);
       setSimilarAssets(old => append ? { ...old, ...assets } : assets);
       if (similarSource === "dino") {
         setSimilarPage(currentPage);
@@ -601,7 +606,12 @@ function App() {
     try {
       await api("similar/ignore", { left: pair.left, right: pair.right }, undo ? "DELETE" : "POST");
       if (undo) { setIgnoredPair(null); await loadSimilar(); }
-      else { setSimilar(old => old.filter(candidate => candidate.left !== pair.left || candidate.right !== pair.right)); setIgnoredPair(pair); }
+      else {
+        setSimilar(old => old.filter(candidate => candidate.left !== pair.left || candidate.right !== pair.right));
+        const source = pair.source || similarSource;
+        setSimilarCounts(old => old ? { ...old, [source]: Math.max(0, old[source] - 1) } : old);
+        setIgnoredPair(pair);
+      }
     } catch (e) { notify(e instanceof Error ? e.message : String(e), true); }
     finally { setIgnoring(""); }
   }
@@ -1026,8 +1036,8 @@ function App() {
           ) : view === "similar" ? (
             <div className="similar-list">
               <div className="similar-tabs" aria-label="相似类型">
-                <button className={similarSource === "dhash" ? "active" : ""} aria-pressed={similarSource === "dhash"} onClick={() => setSimilarSource("dhash")}>算法判定</button>
-                <button className={similarSource === "dino" ? "active" : ""} aria-pressed={similarSource === "dino"} onClick={() => setSimilarSource("dino")}>智能推荐</button>
+                <button className={similarSource === "dhash" ? "active" : ""} aria-pressed={similarSource === "dhash"} onClick={() => setSimilarSource("dhash")}>算法判定{similarCounts && <small className="similar-count" title="候选总数">{similarCounts.dhash.toLocaleString("zh-CN")}</small>}</button>
+                <button className={similarSource === "dino" ? "active" : ""} aria-pressed={similarSource === "dino"} onClick={() => setSimilarSource("dino")}>智能推荐{similarCounts && <small className="similar-count" title="候选总数">{similarCounts.dino.toLocaleString("zh-CN")}</small>}</button>
               </div>
               {similarSource === "dino" && info?.similarityIndex && <div className="similar-index">
                 {info.similarityIndex.state === "processing" ? <LoaderCircle size={14} className="spin" /> : null}
@@ -1049,14 +1059,15 @@ function App() {
                     b = similarAssets[pair.right];
                   return a && b ? (
                     <div className="similar-pair" key={pair.left + pair.right}>
-                      <Photo asset={a} onClick={() => setViewer(a)} />
-                      <Photo asset={b} onClick={() => setViewer(b)} />
+                      <Photo asset={a} originalAspect onClick={() => setViewer(a)} />
+                      <Photo asset={b} originalAspect onClick={() => setViewer(b)} />
                       <div className="pair-actions">
                         <span>{similarSource === "dino" ? "画面内容相近" : "图像指纹相近"}</span>
                         {similarSource === "dino" && pair.score !== undefined && <small className="similar-score">特征相似度 {pair.score.toFixed(2)}</small>}
                         <small>
                           {a.width} × {a.height} · {b.width} × {b.height}
                         </small>
+                        <Button disabled={!!a.deletionPending || !!b.deletionPending} onClick={() => setComparison({ left: a, right: b })}><Columns2 size={16} />对比</Button>
                         <Button
                           disabled={!!ignoring}
                           onClick={async () => {
@@ -1270,6 +1281,7 @@ function App() {
           permanentlyDelete={openPermanentDelete}
         />
       )}
+      {comparison && <PhotoCompare left={comparison.left} right={comparison.right} close={() => setComparison(null)} />}
       {deletionTargets && <PermanentDeleteDialog targets={deletionTargets} close={() => setDeletionTargets(null)} submit={permanentDelete} />}
       {albumDialog && (
         <AlbumDialog
