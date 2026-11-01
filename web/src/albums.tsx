@@ -26,7 +26,7 @@ function AlbumCover({ album, attempt = 0, failed }: { album: Album; attempt?: nu
     <span className="album-cover">
       {album.cover && !broken ? (
         <img
-          src={media(album.cover.primary) + (attempt ? `?retry=${attempt}` : "")}
+          src={media(album.cover.primary) + (attempt ? `&retry=${attempt}` : "")}
           alt=""
           loading="lazy"
           onError={() => { setBroken(true); failed?.(true); }}

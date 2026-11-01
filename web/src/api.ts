@@ -179,7 +179,7 @@ export async function api<T>(
   return r.json();
 }
 export const media = (hash: string, kind = "thumb") =>
-  `${base}media/${hash}/${kind}`;
+  `${base}media/${hash}/${kind}${kind === "thumb" ? "?v=2" : ""}`;
 export function resourceLabel(file: Original) {
   const labels: Record<string, string> = {
     originalPhoto: "原始照片", photo: "原始照片", fullSizePhoto: "编辑后照片",

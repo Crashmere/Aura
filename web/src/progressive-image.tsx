@@ -34,7 +34,7 @@ export function ProgressiveImage({ asset, zoomed = false, onReady }: { asset: As
   }, [load, preview]);
   return <>
     <div className="viewer-image-frame" role="img" aria-label={asset.name} data-image-width={asset.width} data-image-height={asset.height}>
-      {!thumbFailed && <img className="viewer-image-placeholder" src={media(asset.primary) + (attempt ? `?retry=${attempt}` : "")} alt="" aria-hidden="true" decoding="async" draggable={false} onError={() => setThumbFailed(true)} />}
+      {!thumbFailed && <img className="viewer-image-placeholder" src={media(asset.primary) + (attempt ? `&retry=${attempt}` : "")} alt="" aria-hidden="true" decoding="async" draggable={false} onError={() => setThumbFailed(true)} />}
       {load && <img ref={image} className={`viewer-image-detail ${ready ? "is-ready" : ""}`} src={preview} alt="" aria-hidden="true" decoding="async" fetchPriority="high" draggable={false}
         onLoad={async event => {
           const element = event.currentTarget;
