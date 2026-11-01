@@ -20,7 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const chunkSize int64 = 8 << 20
+const chunkSize int64 = 32 << 20
 
 var validHash = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var validID = regexp.MustCompile(`^[a-f0-9]{32}$`)

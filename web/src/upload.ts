@@ -297,7 +297,7 @@ async function upload(item: UploadItem) {
 function validateSession(session: Session, size: number) {
   if (typeof session.complete !== "boolean") throw new Error("服务器返回了无效的上传状态");
   if (session.complete) return;
-  if (!Number.isInteger(session.offset) || session.offset < 0 || session.offset > size || !Number.isInteger(session.chunkSize) || session.chunkSize < 1 || session.chunkSize > 8 * 1024 * 1024) throw new Error("服务器返回了无效的续传参数");
+  if (!Number.isInteger(session.offset) || session.offset < 0 || session.offset > size || !Number.isInteger(session.chunkSize) || session.chunkSize < 1 || session.chunkSize > 32 * 1024 * 1024) throw new Error("服务器返回了无效的续传参数");
 }
 async function run() {
   if (active || state.paused) return;

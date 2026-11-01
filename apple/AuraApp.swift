@@ -39,6 +39,7 @@ struct DeletionNotice {
 
 enum ImportStage: String, Codable {
     case export = "iCloud / 系统原件"
+    case checksum = "原件校验"
     case upload = "上传原件"
     case processing = "服务器处理"
     case verification = "核对原件"
@@ -100,6 +101,27 @@ struct AssetSummary {
     var excluded: Bool
 }
 
+enum UploadStep: Int, CaseIterable {
+    case export, checksum, upload, commit
+    var title: String {
+        switch self {
+        case .export: return "读取原件"
+        case .checksum: return "计算 SHA-256"
+        case .upload: return "上传原件"
+        case .commit: return "服务器确认"
+        }
+    }
+}
+
+struct UploadStepProgress: Identifiable {
+    enum State { case waiting, active, complete, failed }
+    var id: UploadStep
+    var state: State = .waiting
+    var fraction: Double?
+    var detail = ""
+    var startedAt: Date?
+}
+
 @MainActor
 final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver {
     @Published var server = UserDefaults.standard.string(forKey: "server") ?? "" {
@@ -114,7 +136,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     @Published var showLogin = false
     @Published var running = false
     @Published var busy = false
-    @Published var progress: Double = 0
+    @Published var uploadSteps: [UploadStepProgress] = []
     @Published var current = ""
     @Published var status = "连接照片库"
     @Published var matched = 0
@@ -171,6 +193,11 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private var processingCursor = 0
     private var lastStateWrite = Date.distantPast
     private var activeExport: ResourceExport?
+    private var resourceProgressID = UUID()
+    private var exportedBytes = 0
+    private var transferChunkID: UUID?
+    private var transferStartedAt = Date()
+    private var transferInitialOffset = 0
     private var networkKnown = false
     private var networkAvailable = false
     private var nonCellularNetwork = false
@@ -412,7 +439,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         defer { ProcessInfo.processInfo.endActivity(activity) }
         #endif
         defer {
-            busy = false; current = ""; progress = 0
+            busy = false; current = ""; uploadSteps = []
             status = running ? (uploadPauseReason ?? (errors.isEmpty ? "持续监测中" : "有待处理项目")) : "已暂停"
             try? compactReceipts()
             saveState(force: true)
@@ -451,18 +478,32 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                 var currentHash: String?
                 do {
                     current = resource.originalFilename
+                    resourceProgressID = UUID()
+                    exportedBytes = 0
+                    uploadSteps = UploadStep.allCases.map { UploadStepProgress(id: $0) }
                     status = "读取原件 · \(index + 1) / \(assets.count)"
-                    progress = 0
+                    beginStep(.export, detail: "等待系统提供原件")
                     let file = cache.appendingPathComponent(UUID().uuidString + "-" + resource.originalFilename)
                     defer { try? FileManager.default.removeItem(at: file) }
                     try await export(resource, to: file)
+                    let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
+                    finishStep(.export, detail: Self.bytes(size))
                     guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
                     status = "校验原件"
-                    let checksumTask = Task.detached { try Self.checksum(file) }
+                    stage = .checksum
+                    beginStep(.checksum)
+                    let progressID = resourceProgressID
+                    let checksumProgress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+                        Task { @MainActor in
+                            self?.updateStep(.checksum, fraction: Double(done) / Double(max(1, total)),
+                                detail: "\(Self.bytes(done)) / \(Self.bytes(total))", resourceID: progressID)
+                        }
+                    }
+                    let checksumTask = Task.detached { try Self.checksum(file, progress: checksumProgress) }
                     let checksum = try await withTaskCancellationHandler(operation: { try await checksumTask.value }, onCancel: { checksumTask.cancel() })
+                    finishStep(.checksum, detail: Self.bytes(size))
                     currentHash = checksum
                     guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
-                    let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
                     var hints: [String: Any] = ["hash": checksum, "name": resource.originalFilename, "size": size,
                         "sourceKey": source, "resourceType": Self.resourceName(resource.type), "favorite": asset.isFavorite]
                     if let date = asset.creationDate { hints["capturedAt"] = ISO8601DateFormatter().string(from: date) }
@@ -503,6 +544,10 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                     }
                     pendingAssetIDs.insert(asset.localIdentifier)
                     if Task.isCancelled || !running || uploadPauseReason != nil { break }
+                    if let active = uploadSteps.firstIndex(where: { $0.state == .active }) {
+                        uploadSteps[active].state = .failed
+                        uploadSteps[active].detail = error.localizedDescription
+                    }
                     recordIssue(key: key, assetID: asset.localIdentifier, name: resource.originalFilename, stage: stage, error: error)
                 }
                 if sourceDeleted(source) { break }
@@ -570,8 +615,20 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         guard uploadPauseReason == nil else { throw CancellationError() }
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
-        options.progressHandler = { [weak self] value in Task { @MainActor in self?.progress = value * 0.1 } }
-        let writer = try ResourceExport(file: file)
+        let progressID = resourceProgressID
+        options.progressHandler = { [weak self] value in
+            Task { @MainActor in
+                guard let self, self.exportedBytes == 0 else { return }
+                self.updateStep(.export, fraction: value, detail: "从 iCloud 下载原件", resourceID: progressID)
+            }
+        }
+        let writer = try ResourceExport(file: file) { [weak self] bytes in
+            Task { @MainActor in
+                guard let self, self.resourceProgressID == progressID else { return }
+                self.exportedBytes = bytes
+                self.updateStep(.export, fraction: nil, detail: "已读取 \(Self.bytes(bytes))", resourceID: progressID)
+            }
+        }
         activeExport = writer
         defer { activeExport = nil }
         try await withTaskCancellationHandler(operation: {
@@ -593,11 +650,22 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             if result == .deleted { return .deleted(DeletionNotice(scope: .hash, hash: hash)) }
             if result == .trash { return .trash(row) }
         }
+        beginStep(.upload, detail: "核对服务器已有原件和续传位置")
         let prepared = try await json("uploads", body: hints)
-        if prepared["trashed"] as? Bool == true { return .trash(prepared) }
-        if prepared["complete"] as? Bool == true { return .accepted(true, prepared) }
+        if prepared["trashed"] as? Bool == true || prepared["complete"] as? Bool == true {
+            finishStep(.upload, detail: "服务器已有原件")
+            beginStep(.commit)
+            finishStep(.commit, detail: prepared["trashed"] as? Bool == true ? "位于最近删除" : "原件已确认")
+            return prepared["trashed"] as? Bool == true ? .trash(prepared) : .accepted(true, prepared)
+        }
         var offset = prepared["offset"] as? Int ?? 0
         let chunkSize = prepared["chunkSize"] as? Int ?? 8 * 1024 * 1024
+        guard offset >= 0 && offset <= size && chunkSize > 0 && chunkSize <= 32 * 1024 * 1024 else {
+            throw TransferError(message: "服务器返回了无效的续传参数")
+        }
+        transferStartedAt = Date()
+        transferInitialOffset = offset
+        showTransferProgress(offset, size: size)
         let input = try FileHandle(forReadingFrom: file)
         defer { try? input.close() }
         status = "上传原件"
@@ -617,24 +685,80 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
             request.timeoutInterval = 180
             do {
-                let (data, response) = try await BackgroundTransfer.shared.upload(request, file: chunk, wifiOnly: wifiOnly)
+                let chunkOffset = offset, progressID = resourceProgressID, chunkID = UUID()
+                transferChunkID = chunkID
+                let (data, response) = try await BackgroundTransfer.shared.upload(request, file: chunk, wifiOnly: wifiOnly) { [weak self] sent in
+                    Task { @MainActor in
+                        guard let self, self.resourceProgressID == progressID, self.transferChunkID == chunkID else { return }
+                        self.showTransferProgress(chunkOffset + min(Int(sent), bytes.count), size: size)
+                    }
+                }
+                transferChunkID = nil
                 let row = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-                if response.statusCode == 409, let received = row["offset"] as? Int { offset = received; continue }
+                if response.statusCode == 409, let received = row["offset"] as? Int, received >= 0 && received <= size {
+                    offset = received; showTransferProgress(offset, size: size); continue
+                }
                 guard (200..<300).contains(response.statusCode), let received = row["offset"] as? Int else { throw Self.responseError(row, status: response.statusCode) }
+                guard received > offset && received <= size else { throw TransferError(message: "服务器未确认已接收的分片") }
                 offset = received; failures = 0
-                progress = 0.1 + 0.9 * Double(offset) / Double(size)
+                showTransferProgress(offset, size: size)
             } catch {
+                transferChunkID = nil
                 if (error as? TransferError)?.deletion(for: hash, source: hints["sourceKey"] as? String) != nil { throw error }
                 if Task.isCancelled || !running || uploadPauseReason != nil { throw error }
                 failures += 1
                 if failures > 3 { throw error }
+                updateStep(.upload, fraction: Double(offset) / Double(max(1, size)),
+                    detail: "连接中断，\(1 << failures) 秒后从 \(Self.bytes(offset)) 重试")
                 try await Task.sleep(nanoseconds: UInt64(1 << failures) * 1_000_000_000)
                 let current = try await json("uploads/" + hash)
                 offset = current["offset"] as? Int ?? offset
+                guard offset >= 0 && offset <= size else { throw TransferError(message: "服务器返回了无效的续传位置") }
+                showTransferProgress(offset, size: size)
             }
         }
+        finishStep(.upload, detail: "\(Self.bytes(size)) · 服务器已接收")
+        status = "服务器确认"
+        beginStep(.commit, detail: "服务器校验 SHA-256 并保存原件")
         let result = try await json("uploads/" + hash + "/complete", body: [:])
+        finishStep(.commit, detail: result["trashed"] as? Bool == true ? "位于最近删除" : "原件已保存")
         return result["trashed"] as? Bool == true ? .trash(result) : .accepted(false, result)
+    }
+
+    private func beginStep(_ step: UploadStep, detail: String = "") {
+        guard let index = uploadSteps.firstIndex(where: { $0.id == step }) else { return }
+        uploadSteps[index] = UploadStepProgress(id: step, state: .active, detail: detail, startedAt: Date())
+    }
+    private func updateStep(_ step: UploadStep, fraction: Double?, detail: String, resourceID: UUID? = nil) {
+        guard resourceID == nil || resourceID == resourceProgressID,
+              let index = uploadSteps.firstIndex(where: { $0.id == step && $0.state == .active }) else { return }
+        uploadSteps[index].fraction = fraction.map { min(1, max(0, $0)) }
+        uploadSteps[index].detail = detail
+    }
+    private func finishStep(_ step: UploadStep, detail: String) {
+        guard let index = uploadSteps.firstIndex(where: { $0.id == step }) else { return }
+        uploadSteps[index].state = .complete
+        uploadSteps[index].fraction = 1
+        uploadSteps[index].detail = detail
+    }
+    private func showTransferProgress(_ sent: Int, size: Int) {
+        let elapsed = Date().timeIntervalSince(transferStartedAt)
+        let speed = elapsed > 0.5 ? Double(max(0, sent - transferInitialOffset)) / elapsed : 0
+        var detail = "\(Self.bytes(sent)) / \(Self.bytes(size))"
+        if speed > 0 {
+            detail += " · \(Self.bytes(Int(speed)))/s"
+            if sent < size { detail += " · 预计剩余 \(Self.duration(Double(size - sent) / speed))" }
+        }
+        updateStep(.upload, fraction: Double(sent) / Double(max(1, size)), detail: detail)
+    }
+    nonisolated static func bytes(_ count: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
+    }
+    nonisolated static func duration(_ seconds: Double) -> String {
+        let seconds = max(0, Int(seconds.rounded(.up)))
+        if seconds < 60 { return "\(seconds) 秒" }
+        if seconds < 3600 { return "\((seconds + 59) / 60) 分钟" }
+        return "\(seconds / 3600) 小时 \((seconds % 3600 + 59) / 60) 分钟"
     }
     func json(_ path: String, body: [String: Any]? = nil) async throws -> [String: Any] {
         guard let origin else { throw TransferError(message: "服务器地址无效") }
@@ -655,12 +779,18 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             statusCode: status, code: row["code"] as? String, deleted: row["deleted"] as? Bool == true,
             deletionScope: row["scope"] as? String, hash: row["hash"] as? String, sourceKey: row["sourceKey"] as? String)
     }
-    nonisolated static func checksum(_ file: URL) throws -> String {
+    nonisolated static func checksum(_ file: URL, progress: @Sendable (Int, Int) -> Void = { _, _ in }) throws -> String {
         let input = try FileHandle(forReadingFrom: file); defer { try? input.close() }
+        let total = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
+        var done = 0, lastReport = Date.distantPast
         var hash = SHA256()
         while let data = try input.read(upToCount: 4 * 1024 * 1024), !data.isEmpty {
             try Task.checkCancellation()
             hash.update(data: data)
+            done += data.count
+            if Date().timeIntervalSince(lastReport) >= 0.15 || done == total {
+                lastReport = Date(); progress(done, total)
+            }
         }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
@@ -1055,12 +1185,16 @@ final class ResourceExport: @unchecked Sendable {
     private var requestID: PHAssetResourceDataRequestID?
     private var continuation: CheckedContinuation<Void, Error>?
     private var result: Result<Void, Error>?
+    private let progress: @Sendable (Int) -> Void
+    private var bytesWritten = 0
+    private var lastReport = Date.distantPast
 
-    init(file url: URL) throws {
+    init(file url: URL, progress: @escaping @Sendable (Int) -> Void) throws {
         guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
             throw TransferError(message: "无法创建原件缓存，请检查可用空间")
         }
         file = try FileHandle(forWritingTo: url)
+        self.progress = progress
     }
     func write(resource: PHAssetResource, options: PHAssetResourceRequestOptions) async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -1078,7 +1212,15 @@ final class ResourceExport: @unchecked Sendable {
     private func receive(_ data: Data) {
         lock.lock()
         guard result == nil else { lock.unlock(); return }
-        do { try file.write(contentsOf: data); lock.unlock() }
+        do {
+            try file.write(contentsOf: data)
+            bytesWritten += data.count
+            let report = Date().timeIntervalSince(lastReport) >= 0.15
+            if report { lastReport = Date() }
+            let bytes = bytesWritten
+            lock.unlock()
+            if report { progress(bytes) }
+        }
         catch { lock.unlock(); finish(error); cancel() }
     }
     private func finish(_ error: Error?) {
@@ -1119,6 +1261,7 @@ final class BackgroundTransfer: NSObject, URLSessionDataDelegate, @unchecked Sen
     private let lock = NSLock()
     private var pending: [String: CheckedContinuation<(Data, HTTPURLResponse), Error>] = [:]
     private var buffers: [String: Data] = [:]
+    private var progressHandlers: [String: @Sendable (Int64) -> Void] = [:]
     private var sessions: [String: URLSession] = [:]
     private var completions: [String: () -> Void] = [:]
     private func session(wifiOnly: Bool) -> URLSession {
@@ -1161,7 +1304,7 @@ final class BackgroundTransfer: NSObject, URLSessionDataDelegate, @unchecked Sen
         lock.lock(); let completion = completions.removeValue(forKey: session.configuration.identifier ?? ""); lock.unlock()
         DispatchQueue.main.async { completion?() }
     }
-    func upload(_ request: URLRequest, file: URL, wifiOnly: Bool) async throws -> (Data, HTTPURLResponse) {
+    func upload(_ request: URLRequest, file: URL, wifiOnly: Bool, progress: @escaping @Sendable (Int64) -> Void) async throws -> (Data, HTTPURLResponse) {
         let cancellation = TransferCancellation()
         return try await withTaskCancellationHandler(operation: {
           try await withCheckedThrowingContinuation { continuation in
@@ -1174,7 +1317,7 @@ final class BackgroundTransfer: NSObject, URLSessionDataDelegate, @unchecked Sen
             let task = session.uploadTask(with: request, fromFile: file)
             task.taskDescription = file.path
             let id = key(session, task)
-            lock.lock(); pending[id] = continuation; buffers[id] = Data(); lock.unlock()
+            lock.lock(); pending[id] = continuation; buffers[id] = Data(); progressHandlers[id] = progress; lock.unlock()
             cancellation.bind(task)
             task.resume()
           }
@@ -1185,9 +1328,15 @@ final class BackgroundTransfer: NSObject, URLSessionDataDelegate, @unchecked Sen
         let id = key(session, dataTask)
         if (buffers[id]?.count ?? 0) < 1_048_576 { buffers[id, default: Data()].append(data) }
     }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        lock.lock(); let progress = progressHandlers[key(session, task)]; lock.unlock()
+        progress?(totalBytesSent)
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let id = key(session, task)
-        lock.lock(); let continuation = pending.removeValue(forKey: id); let data = buffers.removeValue(forKey: id) ?? Data(); lock.unlock()
+        lock.lock(); let continuation = pending.removeValue(forKey: id); let data = buffers.removeValue(forKey: id) ?? Data()
+        progressHandlers.removeValue(forKey: id); lock.unlock()
         if let error { continuation?.resume(throwing: error) }
         else if let response = task.response as? HTTPURLResponse { continuation?.resume(returning: (data, response)) }
         else { continuation?.resume(throwing: TransferError(message: "上传响应无效")) }
@@ -1203,6 +1352,43 @@ final class AuraAppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 #endif
+
+struct UploadProgressView: View {
+    let current: String
+    let steps: [UploadStepProgress]
+    let tint: Color
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(current).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            ForEach(steps) { step in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        Image(systemName: step.state == .complete ? "checkmark.circle.fill" : step.state == .failed ? "exclamationmark.circle" : "circle")
+                            .foregroundStyle(step.state == .failed ? Color.orange : step.state == .waiting ? Color.secondary : tint)
+                        Text(step.id.title).fontWeight(.medium)
+                        Spacer()
+                        if step.state == .complete { Text("完成") }
+                        else if step.state == .waiting { Text("等待") }
+                        else if step.state == .failed { Text("失败") }
+                        else if let fraction = step.fraction { Text(fraction, format: .percent.precision(.fractionLength(1))).monospacedDigit() }
+                        else if let started = step.startedAt {
+                            TimelineView(.periodic(from: started, by: 1)) { context in
+                                Text(AuraModel.duration(context.date.timeIntervalSince(started))).monospacedDigit()
+                            }
+                        }
+                    }.font(.caption)
+                    if !step.detail.isEmpty {
+                        Text(step.detail).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if step.state == .active {
+                        if let fraction = step.fraction { ProgressView(value: fraction).tint(tint) }
+                        else { ProgressView().controlSize(.small) }
+                    }
+                }
+            }
+        }
+    }
+}
 
 struct AuraContent: View {
     @ObservedObject var model: AuraModel
@@ -1265,7 +1451,7 @@ struct AuraContent: View {
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.subheadline); Spacer() }
-                    if !model.current.isEmpty { Text(model.current).font(.caption).foregroundStyle(.secondary).lineLimit(1); ProgressView(value: model.progress).tint(olive) }
+                    if !model.current.isEmpty { UploadProgressView(current: model.current, steps: model.uploadSteps, tint: olive) }
                     HStack {
                         Button { model.running ? model.pauseUpload() : model.startUpload() } label: {
                             Label(model.running ? "暂停" : "开始持续上传", systemImage: model.running ? "pause.fill" : "arrow.up.circle.fill").frame(maxWidth: .infinity).padding(.vertical, 7)
