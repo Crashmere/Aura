@@ -264,7 +264,7 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 
 	for _, field := range assetEquipmentFields {
 		if q.Get(field.name+"Match") == "missing" {
-			where += ` AND NOT EXISTS (SELECT 1 FROM file_equipment e JOIN files r ON r.hash=e.hash WHERE e.dimension=? AND r.asset_id=a.id)`
+			where += ` AND a.id NOT IN (SELECT r.asset_id FROM file_equipment e JOIN files r ON r.hash=e.hash WHERE e.dimension=?)`
 			args = append(args, field.name)
 			continue
 		}
