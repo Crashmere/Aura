@@ -184,6 +184,9 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private var blockedAlbums = Set<String>()
     private var deletedSources = Set<String>()
     private var processingCursor = 0
+    private var processingErrorCursor = 0
+    private var lastProcessingRefresh = Date.distantPast
+    private var refreshingProcessing = false
     private var lastStateWrite = Date.distantPast
     private var activePrefetch: ResourceExport?
     private var activeExport: ResourceExport?
@@ -302,6 +305,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             originalPresenceAvailable = capabilities["originalPresence"] as? Bool == true
             albumImportAvailable = capabilities["albumImport"] as? Bool == true
             connected = true; status = "已连接 Aura"
+            await refreshProcessing(failuresOnly: true)
             let access = PHPhotoLibrary.authorizationStatus(for: .readWrite)
             limited = access == .limited
             if resume && UserDefaults.standard.bool(forKey: "continuous") && (access == .authorized || access == .limited) && !running {
@@ -452,6 +456,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         } else {
             assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(pendingAssetIDs), options: options)
         }
+        await refreshProcessing()
         var prefetched: (key: String, file: URL, task: Task<(Int, String), Error>)?
         func prepareNext(after key: String, at index: Int) {
             guard prefetched == nil, running, uploadPauseReason == nil else { return }
@@ -478,6 +483,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             }
         }
         for index in 0..<assets.count {
+            if Date().timeIntervalSince(lastProcessingRefresh) >= 60 { await refreshProcessing() }
             if index.isMultiple(of: 64) { await Task.yield() }
             guard running && !Task.isCancelled && uploadPauseReason == nil else { break }
             let asset = assets.object(at: index)
@@ -937,8 +943,10 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private func recordIssue(key: String, assetID: String? = nil, name: String, stage: ImportStage, error: Error) {
         let id = key + "|" + stage.rawValue
         let row = ImportIssue(id: id, resourceKey: key, assetID: assetID, name: name, stage: stage, message: error.localizedDescription, occurredAt: clock)
-        if let index = errors.firstIndex(where: { $0.id == id }) { errors[index] = row }
-        else { errors.append(row) }
+        if let index = errors.firstIndex(where: { $0.id == id }) {
+            if errors[index].message == row.message { return }
+            errors[index] = row
+        } else { errors.append(row) }
         saveState(force: true)
     }
     private func removeIssues(resourceKey: String, stage: ImportStage? = nil) {
@@ -1002,7 +1010,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             if missing && isTrash {
                 removeIssues(resourceKey: key)
             } else if receipt.status == "error" {
-                recordIssue(key: key, assetID: receipt.sourceAsset, name: String(hash.prefix(12)), stage: .processing,
+                recordIssue(key: key, assetID: receipt.sourceAsset, name: String(key.split(separator: "|", maxSplits: 4).last ?? Substring(hash.prefix(12))), stage: .processing,
                     error: TransferError(message: row["error"] as? String ?? "原件已保存，但服务器处理失败，请在照片库中重试处理"))
             } else if receipt.status == "ready" { removeIssues(resourceKey: key, stage: .processing) }
         }
@@ -1012,18 +1020,33 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         if trash { removeIssues(resourceKey: "missing:" + hash) }
         return trash ? .trash : .missing
     }
-    private func refreshProcessing() async {
+    private func refreshProcessing(failuresOnly: Bool = false) async {
+        guard connected && (running || failuresOnly) && !refreshingProcessing else { return }
+        refreshingProcessing = true
+        defer { refreshingProcessing = false }
         let prefix = (origin?.absoluteString ?? "") + "|"
-        let hashes = Set(receipts.values.filter {
-            $0.key.hasPrefix(prefix) && $0.deleted != true && $0.trashed != true && activeAssetIDs.contains($0.sourceAsset ?? "") &&
-            ($0.status == "queued" || $0.status == "processing" || $0.serverAssetID?.isEmpty != false)
-        }.map(\.hash)).sorted()
-        guard !hashes.isEmpty else { return }
-        let begin = processingCursor % hashes.count
-        let count = min(32, hashes.count)
-        for index in 0..<count {
-            guard running && connected && !Task.isCancelled && uploadPauseReason == nil else { return }
-            let hash = hashes[(begin + index) % hashes.count]
+        let eligible = receipts.values.filter {
+            $0.key.hasPrefix(prefix) && $0.deleted != true && $0.trashed != true &&
+            ($0.status == "error" || activeAssetIDs.contains($0.sourceAsset ?? ""))
+        }
+        let failed = Set(eligible.filter { $0.status == "error" }.map(\.hash)).sorted()
+        let pending = failuresOnly ? [] : Set(eligible.filter {
+            $0.status == "queued" || $0.status == "processing" || $0.serverAssetID?.isEmpty != false
+        }.map(\.hash)).subtracting(failed).sorted()
+        var hashes: [String] = []
+        // Reserve requests for failures so a large pending queue cannot delay
+        // noticing their recovery; both groups rotate within a bounded pass.
+        func appendRotating(_ group: [String], cursor: inout Int, limit: Int) {
+            guard !group.isEmpty else { return }
+            let count = min(limit, group.count)
+            hashes += (0..<count).map { group[(cursor + $0) % group.count] }
+            cursor = (cursor + count) % group.count
+        }
+        appendRotating(failed, cursor: &processingErrorCursor, limit: pending.isEmpty ? 32 : 8)
+        appendRotating(pending, cursor: &processingCursor, limit: 32 - hashes.count)
+        lastProcessingRefresh = Date()
+        for hash in hashes {
+            guard (running || failuresOnly) && connected && !Task.isCancelled && uploadPauseReason == nil else { return }
             do {
                 let row = try await presence(hash)
                 if originalPresenceAvailable { _ = try applyServerState(hash: hash, row: row) }
@@ -1041,7 +1064,8 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                 if !(error is TransferError) || !connected { return }
             }
         }
-        processingCursor = (begin + count) % hashes.count
+        try? compactReceipts()
+        saveState()
     }
     func refreshAlbums() {
         guard importAlbums && !busy else { return }
