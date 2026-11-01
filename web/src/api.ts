@@ -80,6 +80,7 @@ export type JobStep = {
   percent?: number;
   engine?: string;
   error?: string;
+  note?: string;
 };
 export type Job = {
   hash: string;

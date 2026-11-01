@@ -35,3 +35,7 @@ The version 0.3 deletion protocol was checked with synthetic JPEG versions, a pa
 The catalog remains schema version 1 and passes SQLite integrity and foreign-key checks after cleanup. These synthetic checks do not delete existing NAS originals or establish real-device Photos/background behavior.
 
 The maintenance computer lacks full Xcode and an iOS signing identity. iPhone installation, PhotoKit resource extraction on a user's authorized device, actual iOS background scheduling, and iPhone home-screen installation require real-device acceptance. Compilation and HTTP checks do not establish those results.
+
+## GPU still-image compatibility
+
+A synthetic 12-megapixel fixture set covers EXIF-rotated JPEG, HEIC, PNG, grayscale, alpha, Display P3 and CMYK inputs on NAS's RTX 3070. GPU and CPU runs retained identical original SHA-256 and canonical pixel hashes across the set. Preview/thumbnail dimensions and orientation matched. Decoded RGB mean absolute differences were below 1.25 out of 255 for these fixtures, reflecting different resizing/JPEG encoders rather than byte-identical derivatives. This is a bounded compatibility check, not a guarantee for every camera profile or RAW decoder. GPU work remains limited to derivatives; exact grouping uses the established libvips path.

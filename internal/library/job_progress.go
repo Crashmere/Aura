@@ -16,6 +16,7 @@ type jobStep struct {
 	Percent    float64 `json:"percent,omitempty"`
 	Engine     string  `json:"engine,omitempty"`
 	Error      string  `json:"error,omitempty"`
+	Note       string  `json:"note,omitempty"`
 }
 
 type jobProgress struct {
@@ -72,6 +73,8 @@ func (p *jobTracker) step(id, status string, err error) {
 		s.Status = status
 		if status == "processing" {
 			s.StartedAt = now()
+			s.FinishedAt, s.Error = "", ""
+			s.Percent = 0
 		} else {
 			s.FinishedAt = now()
 		}
@@ -80,6 +83,17 @@ func (p *jobTracker) step(id, status string, err error) {
 		}
 		p.save()
 		return
+	}
+}
+
+func (p *jobTracker) fallback(id string, err error) {
+	for i := range p.Steps {
+		if p.Steps[i].ID == id {
+			p.Steps[i].Engine = "CPU"
+			p.Steps[i].Note = "GPU 回退：" + err.Error()
+			p.save()
+			return
+		}
 	}
 }
 
@@ -97,6 +111,9 @@ func (p *jobTracker) encoding(id, engine string, percent float64) {
 		if s.ID == id {
 			changed := s.Engine != engine
 			s.Engine, s.Percent = engine, percent
+			if engine != "CPU" {
+				s.Note = ""
+			}
 			if changed || time.Since(p.lastSave) >= time.Second {
 				p.save()
 			}

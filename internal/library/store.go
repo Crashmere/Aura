@@ -30,6 +30,8 @@ type Library struct {
 	Wake             chan struct{}
 	gpuOnce          sync.Once
 	gpuAvailable     bool
+	imageGPUMu       sync.Mutex
+	imageGPU         *imageGPUWorker
 }
 
 type uploadLock struct {

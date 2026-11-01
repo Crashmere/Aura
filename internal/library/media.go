@@ -91,6 +91,7 @@ func captureDate(m map[string]any, h Hints) string {
 	return now()
 }
 func (l *Library) Worker(ctx context.Context) {
+	defer l.closeImageGPU()
 	if e := l.RecoverDeletions(ctx); e != nil && ctx.Err() == nil {
 		slog.Error("recover permanent deletion", "error", e)
 	}
@@ -260,6 +261,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 		// Decode once: RAW decoders are expensive, and both previews and pixel identity need the same samples.
 		upright := filepath.Join(work, "upright.v")
 		progress.step("decode", "processing", nil)
+		progress.encoding("decode", "CPU · 标准像素解码", 0)
 		_, decodeErr := command(ctx, "vips", "autorot", input, upright)
 		if decodeErr == nil {
 			progress.result("decode", nil)
@@ -270,28 +272,50 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 		if decodeErr == nil {
 			previewInput = upright
 		}
-		_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
-		if mediaErr != nil {
-			for _, name := range []string{"JpgFromRaw", "PreviewImage", "OtherImage"} {
-				embedded, err := command(ctx, "exiftool", "-b", "-"+name, input)
-				if err != nil || len(embedded) < 100 {
-					continue
-				}
-				previewInput = filepath.Join(work, "embedded.jpg")
-				if os.WriteFile(previewInput, embedded, 0600) != nil {
-					continue
-				}
-				_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
-				if mediaErr == nil {
-					break
+		gpuErr := l.imageDerivativesGPU(ctx, f, meta, input, previewInput, work, progress)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if gpuErr != nil {
+			slog.Info("use CPU image derivatives", "hash", f.Hash, "reason", gpuErr)
+			progress.step("preview", "processing", nil)
+			progress.fallback("preview", gpuErr)
+			progress.fallback("thumbnail", gpuErr)
+			_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
+			if mediaErr != nil {
+				for _, name := range []string{"JpgFromRaw", "PreviewImage", "OtherImage"} {
+					embedded, err := command(ctx, "exiftool", "-b", "-"+name, input)
+					if err != nil || len(embedded) < 100 {
+						continue
+					}
+					previewInput = filepath.Join(work, "embedded.jpg")
+					if os.WriteFile(previewInput, embedded, 0600) != nil {
+						continue
+					}
+					embeddedFile := f
+					embeddedFile.Mime, embeddedFile.Width, embeddedFile.Height = "image/jpeg", 0, 0
+					gpuErr = l.imageDerivativesGPU(ctx, embeddedFile, map[string]any{}, previewInput, previewInput, work, progress)
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					if gpuErr == nil {
+						mediaErr = nil
+						break
+					}
+					_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "preview.jpg")+"[Q=92,strip]", "2560", "--size", "down")
+					if mediaErr == nil {
+						break
+					}
 				}
 			}
-		}
-		progress.result("preview", mediaErr)
-		if mediaErr == nil {
-			progress.step("thumbnail", "processing", nil)
-			_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "thumb.jpg")+"[Q=85,strip]", "640", "--size", "down")
-			progress.result("thumbnail", mediaErr)
+			if gpuErr != nil {
+				progress.result("preview", mediaErr)
+			}
+			if mediaErr == nil && gpuErr != nil {
+				progress.step("thumbnail", "processing", nil)
+				_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "thumb.jpg")+"[Q=85,strip]", "640", "--size", "down")
+				progress.result("thumbnail", mediaErr)
+			}
 		}
 		if mediaErr == nil {
 			for _, s := range []string{"preview", "thumb"} {
@@ -300,6 +324,7 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 				}
 			}
 			progress.step("fingerprint", "processing", nil)
+			progress.encoding("fingerprint", "CPU · 标准像素指纹", 0)
 			f.DHash = perceptual(l.Derived(f.Hash, "-thumb.jpg"))
 			// Hash full decoded pixels and their interpretation. No resized or lossy hash triggers automatic grouping.
 			if decodeErr == nil {
