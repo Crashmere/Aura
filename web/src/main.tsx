@@ -287,9 +287,9 @@ function App() {
         albumGallery || view === "jobs"
           ? Promise.resolve({ items: [] as Asset[], next: "" })
           : readPage(),
-        api<Info>("info"),
-        api<Album[]>("albums"),
-        albumGallery || specialView ? Promise.resolve({ months: [] } as Timeline) : api<Timeline>("timeline?" + new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...filterParams(photoFilters) })),
+        append && info ? Promise.resolve(info) : api<Info>("info"),
+        append ? Promise.resolve(albums) : api<Album[]>("albums"),
+        append ? Promise.resolve({ months }) : albumGallery || specialView ? Promise.resolve({ months: [] } as Timeline) : api<Timeline>("timeline?" + new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...filterParams(photoFilters) })),
       ]);
       if (key !== queryKey.current) return;
       setItems((old) =>
@@ -1104,7 +1104,7 @@ function App() {
           ) : (
             <div {...galleryZoom.timelineProps}>
               {groups.map((group) => (
-                <section className="day-group" key={group.date}>
+                <section className="day-group" key={group.date} style={{ "--group-rows": Math.ceil(group.items.length / galleryZoom.columns), "--group-mobile-rows": Math.ceil(group.items.length / galleryZoom.mobileColumns) } as React.CSSProperties}>
                   <div className="day-heading">
                     <h2>
                       {displayDate(group.date + "T12:00:00")}

@@ -102,6 +102,19 @@
 
 .timeline.aura-gallery > .day-group {
   margin-bottom: 22px;
+  --group-row-count: var(--group-rows);
+  content-visibility: visible;
+  contain: layout style;
+}
+
+/* Exact grid geometry avoids the old 420px placeholder changing scroll position.
+   Container units are measured against the timeline, not individual cards. */
+@supports (container-type: inline-size) {
+  .timeline.aura-gallery { container-type: inline-size; }
+  .timeline.aura-gallery > .day-group {
+    content-visibility: auto;
+    contain-intrinsic-block-size: calc(42px + var(--group-row-count) * ((100cqw - (var(--gallery-columns) - 1) * var(--gallery-gap)) / var(--gallery-columns)) + (var(--group-row-count) - 1) * var(--gallery-gap));
+  }
 }
 
 .timeline.aura-gallery > .day-group[data-gallery-zoom-active] {
@@ -144,6 +157,7 @@
     --gallery-columns: var(--mobile-columns, 4);
     --gallery-gap: 2px;
   }
+  .timeline.aura-gallery > .day-group { --group-row-count: var(--group-mobile-rows); }
   .timeline.aura-gallery .photo-grid > .photo,
   .gallery-skeleton.skeleton-grid > div { border-radius: 2px; }
 }

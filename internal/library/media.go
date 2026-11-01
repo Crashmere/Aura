@@ -199,7 +199,10 @@ func (l *Library) processQueued(parent context.Context, hash string) error {
 	return e
 }
 
-func (l *Library) process(parent context.Context, f File) error {
+func (l *Library) process(parent context.Context, f File) (result error) {
+	progress := &jobTracker{library: l, hash: f.Hash, jobProgress: jobProgress{StartedAt: now(), Steps: processingSteps(f.Mime)}}
+	progress.step("metadata", "processing", nil)
+	defer func() { progress.finish(result) }()
 	ctx, cancel := context.WithTimeout(parent, 30*time.Minute)
 	defer cancel()
 	if ctx.Err() != nil {
@@ -234,6 +237,8 @@ func (l *Library) process(parent context.Context, f File) error {
 	if f.Mime == "" {
 		f.Mime = "application/octet-stream"
 	}
+	progress.configure(f.Mime)
+	progress.result("metadata", extractErr)
 	f.Width = number(meta, "ExifImageWidth", "ImageWidth", "SourceImageWidth")
 	f.Height = number(meta, "ExifImageHeight", "ImageHeight", "SourceImageHeight")
 	f.CapturedAt = captureDate(meta, f.Hints)
@@ -254,7 +259,14 @@ func (l *Library) process(parent context.Context, f File) error {
 		previewInput := input
 		// Decode once: RAW decoders are expensive, and both previews and pixel identity need the same samples.
 		upright := filepath.Join(work, "upright.v")
+		progress.step("decode", "processing", nil)
 		_, decodeErr := command(ctx, "vips", "autorot", input, upright)
+		if decodeErr == nil {
+			progress.result("decode", nil)
+		} else {
+			progress.step("decode", "skipped", decodeErr)
+		}
+		progress.step("preview", "processing", nil)
 		if decodeErr == nil {
 			previewInput = upright
 		}
@@ -275,8 +287,11 @@ func (l *Library) process(parent context.Context, f File) error {
 				}
 			}
 		}
+		progress.result("preview", mediaErr)
 		if mediaErr == nil {
+			progress.step("thumbnail", "processing", nil)
 			_, mediaErr = command(ctx, "vips", "thumbnail", previewInput, filepath.Join(work, "thumb.jpg")+"[Q=85,strip]", "640", "--size", "down")
+			progress.result("thumbnail", mediaErr)
 		}
 		if mediaErr == nil {
 			for _, s := range []string{"preview", "thumb"} {
@@ -284,6 +299,7 @@ func (l *Library) process(parent context.Context, f File) error {
 					return e
 				}
 			}
+			progress.step("fingerprint", "processing", nil)
 			f.DHash = perceptual(l.Derived(f.Hash, "-thumb.jpg"))
 			// Hash full decoded pixels and their interpretation. No resized or lossy hash triggers automatic grouping.
 			if decodeErr == nil {
@@ -314,14 +330,26 @@ func (l *Library) process(parent context.Context, f File) error {
 				}
 			}
 		}
+		if mediaErr == nil {
+			if f.PixelHash != "" {
+				progress.result("fingerprint", nil)
+			} else {
+				progress.step("fingerprint", "skipped", nil)
+			}
+		}
 	} else if strings.HasPrefix(f.Mime, "video/") {
-		_, mediaErr = command(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-i", input, "-frames:v", "1", "-vf", "scale=640:640:force_original_aspect_ratio=decrease", "-threads", "2", "-y", filepath.Join(work, "thumb.jpg"))
+		duration, _ := strconv.ParseFloat(tag(meta, "Duration"), 64)
+		progress.step("thumbnail", "processing", nil)
+		mediaErr = l.videoDerivative(ctx, input, filepath.Join(work, "thumb.jpg"), "thumbnail", duration, progress)
+		progress.result("thumbnail", mediaErr)
 		if mediaErr == nil {
 			if e = os.Rename(filepath.Join(work, "thumb.jpg"), l.Derived(f.Hash, "-thumb.jpg")); e != nil {
 				return e
 			}
 		}
-		_, videoErr := command(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-i", input, "-map", "0:v:0", "-map", "0:a?", "-vf", "scale=w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-threads", "2", "-y", filepath.Join(work, "play.mp4"))
+		progress.step("playback", "processing", nil)
+		videoErr := l.videoDerivative(ctx, input, filepath.Join(work, "play.mp4"), "playback", duration, progress)
+		progress.result("playback", videoErr)
 		if videoErr == nil {
 			if e = os.Rename(filepath.Join(work, "play.mp4"), l.Derived(f.Hash, "-play.mp4")); e != nil {
 				return e
@@ -340,7 +368,10 @@ func (l *Library) process(parent context.Context, f File) error {
 		f.Status = "error"
 		f.Error = extractErr.Error()
 	}
-	return l.publish(f)
+	progress.step("catalog", "processing", nil)
+	result = l.publish(f)
+	progress.result("catalog", result)
+	return result
 }
 func (l *Library) publish(f File) error {
 	tx, e := l.DB.Begin()

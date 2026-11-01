@@ -20,6 +20,12 @@ Aura's application target is `nas` at `/aura/`, with loopback listener `127.0.0.
 
 Go and Node are build dependencies on the maintenance computer only. Production uses official Ubuntu `libvips-tools`, `libheif-plugin-libde265`, `libimage-exiftool-perl`, and `ffmpeg`. Native libraries process files as the unprivileged application user. The service uses persistent disk for work files rather than `/tmp` capacity. TZ is `Asia/Shanghai`; update the unit for a different default interpretation of timezone-free capture dates.
 
+### NVIDIA acceleration on NAS
+
+NAS uses the RTX 3070 Laptop GPU with Ubuntu's signed NVIDIA 595 server open kernel module and matching compute/decode/encode libraries. The headless runtime requires `nvidia-headless-no-dkms-595-server-open`, `nvidia-utils-595-server`, `libnvidia-encode-595-server`, and signed `linux-modules-nvidia-595-server-open` packages matching the kernel; it requires no CUDA toolkit or build tools. Shared [NAS operations](https://github.com/Crashmere/agent-config/blob/main/skills/server-operations/references/nas-host.md) owns driver activation and kernel updates.
+
+Aura automatically probes CUDA scaling and NVENC as its unprivileged runtime user on the first video job. Video covers and playback prefer the GPU and fall back to CPU when decoding or encoding is unsupported. A software-decoded input can still use GPU scaling/encoding. `AURA_GPU=cpu` disables the probe and forces CPU processing; restart only Aura after changing it or activating a driver so the capability probe runs again. Task steps report the selected engine and encoded-media progress. Still-image libvips decoding, previews, metadata and exact-pixel hashing remain on CPU.
+
 ## Initial installation
 
 Use server-operations, explicitly read `/opt/AGENTS.md`, and check the whole inventory and live port allocation. This installation creates only the new application's identities, units, directories, and Nginx location. It inherits the shared authentication include and does not replace the shared Nginx server.
@@ -90,7 +96,7 @@ journalctl -u aura --since today
 curl --fail http://127.0.0.1:18087/healthz
 ```
 
-The web task center uses `GET /api/jobs?paged=true` for durable processing history, status counts, and errors, and `GET /api/uploads?paged=true` for acknowledged but incomplete uploads. It separates accepted originals from preview readiness and can batch-retry failed processing with `POST /api/files/retry`. Check installed decoders and the journal before retrying. RAW files without a supported full decoder can use their embedded JPEG preview. A missing derivative is disposable; a missing original is a recovery problem and must not be hidden by creating a new empty catalog.
+The web task center uses `GET /api/jobs?paged=true` for active work and the last 24 hours of completed/failed attempts, expandable durable steps, status counts, and errors, and `GET /api/uploads?paged=true` for acknowledged but incomplete uploads. It separates accepted originals from preview readiness and can batch-retry failed processing with `POST /api/files/retry`. Check installed decoders and the journal before retrying. RAW files without a supported full decoder can use their embedded JPEG preview. A missing derivative is disposable; a missing original is a recovery problem and must not be hidden by creating a new empty catalog.
 
 Upload preparation/status verifies original presence and expected size before acknowledging a duplicate. A missing cataloged object can be repaired through the same full-SHA-256 upload protocol; repair preserves its catalog identity, source observations, and recently deleted visibility. An existing non-regular or wrong-size object returns `original_integrity_error` and is never overwritten. Inspect and preserve the object before selecting an authorized recovery action. This lightweight availability check does not detect same-size byte corruption; use full backup verification for integrity. Per-hash serialization isolates unrelated transfers, and chunk body reads have a 120-second deadline; clients recover interrupted transfers from the last flushed offset.
 

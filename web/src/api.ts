@@ -71,6 +71,16 @@ export type DeletionOperation = {
 };
 export type Page<T> = { items: T[]; next: string };
 export type JobStatus = "all" | "queued" | "processing" | "error" | "ready";
+export type JobStep = {
+  id: string;
+  label: string;
+  status: "queued" | "processing" | "ready" | "error" | "skipped";
+  startedAt?: string;
+  finishedAt?: string;
+  percent?: number;
+  engine?: string;
+  error?: string;
+};
 export type Job = {
   hash: string;
   name: string;
@@ -80,6 +90,8 @@ export type Job = {
   status: Exclude<JobStatus, "all">;
   error?: string;
   createdAt: string;
+  activityAt: string;
+  progress?: { startedAt?: string; finishedAt?: string; steps: JobStep[] };
 };
 export type JobPage = Page<Job> & {
   counts: Record<JobStatus, number>;

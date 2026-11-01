@@ -2,18 +2,23 @@ package library
 
 import (
 	"database/sql"
+	"mime"
 	"net/http"
+	"path/filepath"
+	"time"
 )
 
 type jobSummary struct {
-	Hash      string `json:"hash"`
-	AssetID   string `json:"assetId"`
-	Name      string `json:"name"`
-	Size      int64  `json:"size"`
-	Mime      string `json:"mime"`
-	Status    string `json:"status"`
-	Error     string `json:"error,omitempty"`
-	CreatedAt string `json:"createdAt"`
+	Hash       string       `json:"hash"`
+	AssetID    string       `json:"assetId"`
+	Name       string       `json:"name"`
+	Size       int64        `json:"size"`
+	Mime       string       `json:"mime"`
+	Status     string       `json:"status"`
+	Error      string       `json:"error,omitempty"`
+	CreatedAt  string       `json:"createdAt"`
+	ActivityAt string       `json:"activityAt"`
+	Progress   *jobProgress `json:"progress,omitempty"`
 }
 
 func (l *Library) pagedJobs(w http.ResponseWriter, r *http.Request) {
@@ -30,8 +35,13 @@ func (l *Library) pagedJobs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Catalog rows remain durable; only terminal task visibility expires.
+	const source = ` FROM files f LEFT JOIN decisions j ON j.id='media-job:'||f.hash AND j.action='media-job'`
+	const activity = `COALESCE(json_extract(j.detail,'$.finishedAt'),json_extract(j.detail,'$.startedAt'),f.created_at)`
+	const visible = ` WHERE (f.status IN ('queued','processing') OR ` + activity + `>=?)`
+	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano)
 	counts := map[string]int64{"queued": 0, "processing": 0, "error": 0, "ready": 0, "all": 0}
-	countRows, e := l.DB.Query("SELECT status,count(*) FROM files GROUP BY status")
+	countRows, e := l.DB.Query("SELECT f.status,count(*)"+source+visible+" GROUP BY f.status", cutoff)
 	if e != nil {
 		fail(w, 500, e)
 		return
@@ -53,19 +63,19 @@ func (l *Library) pagedJobs(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, e)
 		return
 	}
-	where := "WHERE 1=1"
-	args := []any{}
+	where := visible
+	args := []any{cutoff}
 	if status != "all" {
-		where += " AND status=?"
+		where += " AND f.status=?"
 		args = append(args, status)
 	}
 	if date != "" {
-		where += " AND (created_at<? OR (created_at=? AND hash<?))"
+		where += " AND (" + activity + "<? OR (" + activity + "=? AND f.hash<?))"
 		args = append(args, date, date, hash)
 	}
 	limit := pageLimit(q, 50, 240)
 	args = append(args, limit+1)
-	rows, e := l.DB.Query("SELECT hash,asset_id,name,size,mime,status,error,created_at FROM files "+where+" ORDER BY created_at DESC,hash DESC LIMIT ?", args...)
+	rows, e := l.DB.Query("SELECT f.hash,f.asset_id,f.name,f.size,f.mime,f.status,f.error,f.created_at,"+activity+",COALESCE(j.detail,'')"+source+where+" ORDER BY "+activity+" DESC,f.hash DESC LIMIT ?", args...)
 	if e != nil {
 		fail(w, 500, e)
 		return
@@ -74,9 +84,19 @@ func (l *Library) pagedJobs(w http.ResponseWriter, r *http.Request) {
 	items := []jobSummary{}
 	for rows.Next() {
 		var file jobSummary
-		if e = rows.Scan(&file.Hash, &file.AssetID, &file.Name, &file.Size, &file.Mime, &file.Status, &file.Error, &file.CreatedAt); e != nil {
+		var detail string
+		if e = rows.Scan(&file.Hash, &file.AssetID, &file.Name, &file.Size, &file.Mime, &file.Status, &file.Error, &file.CreatedAt, &file.ActivityAt, &detail); e != nil {
 			fail(w, 500, e)
 			return
+		}
+		if file.Status != "queued" {
+			file.Progress = progressFromJSON(detail)
+		} else {
+			kind := file.Mime
+			if kind == "" {
+				kind = mime.TypeByExtension(filepath.Ext(file.Name))
+			}
+			file.Progress = &jobProgress{Steps: processingSteps(kind)}
 		}
 		items = append(items, file)
 	}
@@ -88,9 +108,9 @@ func (l *Library) pagedJobs(w http.ResponseWriter, r *http.Request) {
 	if len(items) > limit {
 		items = items[:limit]
 		file := items[len(items)-1]
-		next = file.CreatedAt + "|" + file.Hash
+		next = file.ActivityAt + "|" + file.Hash
 	}
-	writeJSON(w, 200, map[string]any{"items": items, "next": next, "counts": counts})
+	writeJSON(w, 200, map[string]any{"items": items, "next": next, "counts": counts, "retentionHours": 24})
 }
 
 func (l *Library) retryErrors(w http.ResponseWriter, r *http.Request) {

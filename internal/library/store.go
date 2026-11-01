@@ -28,6 +28,8 @@ type Library struct {
 	deletionMu       sync.Mutex
 	deletionAttempts map[string]time.Time
 	Wake             chan struct{}
+	gpuOnce          sync.Once
+	gpuAvailable     bool
 }
 
 type uploadLock struct {
