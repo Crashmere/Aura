@@ -35,7 +35,7 @@
       "id": "derived",
       "name": "预览缓存",
       "path": "/opt/aura/data/derived",
-      "purpose": "可再生缩略图、浏览预览和兼容播放视频；nas 手工全量备份和升级冷副本完整收录，原生工具仍不收录。",
+      "purpose": "可再生缩略图、浏览预览、兼容播放视频及 DINO 特征和推荐候选；nas 手工全量备份和升级冷副本完整收录，原生工具仍不收录。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -80,7 +80,7 @@
       "id": "bin",
       "name": "服务程序",
       "path": "/opt/aura/bin",
-      "purpose": "服务程序、固定发布脚本及隔离的 NVIDIA 图像运行环境；随 nas 全量备份和升级冷副本保留。",
+      "purpose": "服务程序、固定发布脚本、隔离的 NVIDIA 图像及 DINO 运行环境、模型权重；随 nas 全量备份和升级冷副本保留。",
       "kind": "binaries",
       "browse": false,
       "cleanup": false
@@ -204,7 +204,7 @@
     {
       "method": "GET",
       "path": "/api/similar",
-      "description": "分页感知哈希相似候选，排除已忽略项目；仅供人工核对"
+      "description": "分别查询算法判定与 DINO 智能推荐，附异步分析进度；排除已忽略项目，仅供人工核对"
     },
     {
       "method": "POST",

@@ -8,10 +8,11 @@ Aura's application target is `nas` at `/aura/`, with loopback listener `127.0.0.
 | --- | --- |
 | `/opt/aura/bin/aura` | Embedded-web Go program, including the generated Mac-client ZIP |
 | `/opt/aura/bin/deploy-{ssh,release}.sh` | Root-maintained restricted release entry points |
+| `/opt/aura/bin/dino/` | Pinned DINO source, weights, dependency manifest and isolated Python environment |
 | `/opt/aura/config/` | systemd units, Nginx location, Portal declaration and source receipt |
 | `/opt/aura/data/aura.sqlite` | Catalog, albums/memberships, uploads, media jobs, deletion requests and hash/source guards |
 | `/opt/aura/data/assets/` | Immutable SHA-256 originals until confirmed permanent deletion |
-| `/opt/aura/data/derived/` | Rebuildable JPEG/MP4 previews; included in NAS full cold backups |
+| `/opt/aura/data/derived/` | Rebuildable JPEG/MP4 previews and versioned DINO vectors/candidates; included in NAS full cold backups |
 | `/opt/aura/data/incoming/` | Durable acknowledged upload chunks; included in NAS full cold backups |
 | `/opt/aura/data/work/` | Decoder work state; included in NAS full cold backups |
 | `/opt/aura/backups/` | Native archive compatibility directory; no scheduled NAS snapshots |
@@ -39,6 +40,16 @@ The `nas` unit explicitly selects eight simultaneous original-processing jobs an
 `aura serve --workers N --gpu-slots M` overrides the limits before startup. Without overrides, the job count is one per four available CPU threads, bounded to 1–4; GPU operations default to at most two and never exceed the job count. `/api/info` reports the effective `processingConcurrency` values, and startup logs record both limits. Keep production overrides in `deploy/aura.service` and `/opt/aura/config/aura.service`, then reload systemd and restart only Aura. A configuration-only change uses the existing program and holds the shared maintenance lock followed by Aura's deployment lock; `current-commit` continues to identify the running program. Program releases do not install unit changes automatically. Use isolated mixed-media batches and observe GPU memory and the unit's `TasksCurrent` against `TasksMax` before increasing limits.
 
 Jobs retain per-hash exclusion and durable progress. Catalog updates stay on the single SQLite connection; parallel exact matches and native Live Photo resources retain the existing grouping rules. Shutdown cancels and waits for all jobs before closing media workers and the database. Confirmed permanent deletion cancels and drains only its selected hashes, including jobs waiting for a GPU slot; other jobs keep running. Interrupted jobs resume from the queue on restart.
+
+### DINO similarity runtime
+
+`bash deploy/install-dino.sh` installs the pinned DINOv2 ViT-S/14 source and official weights into `/opt/aura/bin/dino`, with a Linux CPython 3.14 environment in `.venv`. `deploy/dino-requirements.txt` pins PyTorch/CUDA and preprocessing dependencies with distribution hashes. The installer verifies the pinned source archive and weight SHA-256, loads the model and executes a synthetic inference. It does not change the service or install global Python packages. Keep the runtime in the application program tree so full NAS backups and upgrade protection retain it.
+
+On the current nas instance, `.venv` reuses the retained, evaluated environment under `/opt/aura/bin/dino-eval-20261101/`. Both directories remain required until the environment is deliberately replaced; preserve the evaluation source/weights and dependency cache. `bash deploy/install-dino.sh /opt/aura/bin/dino /opt/aura/bin/dino-eval-20261101` validates dependency versions before reusing it. A new host can install a self-contained environment without the second argument. A changed dependency lock requires a new runtime directory. `AURA_DINO_RUNTIME` selects that directory; `AURA_DINO=off` pauses DINO only, while `AURA_GPU=cpu` also selects CPU DINO inference.
+
+The model runs in one private child process under `aura`, outside upload and media processing. A missing/outdated feature record for a ready primary image is its durable queue entry. Full batches run immediately; partial batches run ten seconds after first detection. Each batch occupies one existing GPU slot, with FP16 inference preferred and CPU fallback for CUDA failures. The child exits after 30 seconds idle. Runtime errors retry after one minute; per-image failures retry after five minutes. `/api/info.similarityIndex` and the `智能推荐` page show independent progress; DINO errors do not change accepted originals or media-job status.
+
+Feature files in `data/derived/` contain the model/preprocessing version, thumbnail signature, vector and bounded neighbor list. NAS full packages include them. Legacy native snapshots retain originals/catalog and omit derivatives; after restore, thumbnails and DINO records rebuild independently. Confirmed permanent deletion cancels/drains the relevant batch and removes only selected feature files. Restoring/moving thumbnails changes their signature and queues recomputation. No SQLite schema change is required for DINO.
 
 ## Initial installation
 

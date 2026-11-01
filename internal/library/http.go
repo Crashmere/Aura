@@ -135,7 +135,8 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 }
 func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "Aura", "version": "0.3.0", "chunkSize": chunkSize, "processingConcurrency": l.ProcessingLimits,
-		"capabilities": map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "timeline": true, "permanentDelete": true}}
+		"similarityIndex": l.dinoSnapshot(),
+		"capabilities":    map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true}}
 	counts := map[string]string{
 		"total": "SELECT count(*) FROM assets WHERE trashed_at=''", "favorites": "SELECT count(*) FROM assets WHERE favorite=1 AND trashed_at=''",
 		"live": "SELECT count(*) FROM assets WHERE kind='live' AND trashed_at=''", "videos": "SELECT count(*) FROM assets WHERE kind='video' AND trashed_at=''",

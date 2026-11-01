@@ -19,9 +19,11 @@ type similarItem struct {
 }
 
 type similarPair struct {
-	Left     string `json:"left"`
-	Right    string `json:"right"`
-	Distance int    `json:"distance"`
+	Left     string  `json:"left"`
+	Right    string  `json:"right"`
+	Distance int     `json:"distance"`
+	Source   string  `json:"source,omitempty"`
+	Score    float32 `json:"score,omitempty"`
 }
 
 type similarMatch struct {
@@ -88,6 +90,13 @@ func (l *Library) ignoredPairs() (map[string]bool, error) {
 
 func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if source := q.Get("source"); source == "dino" {
+		l.similarDINO(w, r)
+		return
+	} else if source != "" && source != "dhash" {
+		fail(w, 400, "相似类型无效")
+		return
+	}
 	paged := q.Get("paged") == "true"
 	limit := 100
 	cursorDate, cursorItem, cursorMatch := "", "", ""
@@ -152,7 +161,7 @@ func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 				if ignored[pairKey(item.ID, match.Item.ID)] {
 					continue
 				}
-				items = append(items, similarPair{match.Item.ID, item.ID, match.Distance})
+				items = append(items, similarPair{Left: match.Item.ID, Right: item.ID, Distance: match.Distance, Source: "dhash"})
 				cursors = append(cursors, item.Date+"|"+item.ID+"|"+match.Item.ID)
 				if len(items) > limit {
 					break
@@ -175,6 +184,117 @@ func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 	}
 	if paged {
 		writeJSON(w, 200, map[string]any{"items": items, "next": next})
+	} else {
+		writeJSON(w, 200, items)
+	}
+}
+
+func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := 100
+	paged := q.Get("paged") == "true"
+	if paged {
+		limit = pageLimit(q, 50, 240)
+	}
+	var cursor struct {
+		Score float32 `json:"score"`
+		Left  string  `json:"left"`
+		Right string  `json:"right"`
+	}
+	if value := q.Get("cursor"); value != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(value)
+		if err != nil || json.Unmarshal(raw, &cursor) != nil || !validID.MatchString(cursor.Left) || !validID.MatchString(cursor.Right) || cursor.Score < .7 || cursor.Score > 1.001 {
+			fail(w, 400, "分页位置无效")
+			return
+		}
+	}
+	ignored, err := l.ignoredPairs()
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	rows, err := l.DB.QueryContext(r.Context(), `SELECT a.id,f.hash,f.dhash,f.width,f.height FROM assets a
+ JOIN files f ON f.hash=a.primary_hash WHERE a.trashed_at='' AND f.status='ready' AND NOT EXISTS
+ (SELECT 1 FROM decisions d,json_each(d.detail,'$.hashes') h WHERE d.action='purge-request' AND h.value=f.hash)`)
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	type entry struct {
+		id, hash, dhash string
+		width, height   int
+	}
+	assets := map[string]entry{}
+	for rows.Next() {
+		var item entry
+		if err = rows.Scan(&item.id, &item.hash, &item.dhash, &item.width, &item.height); err != nil {
+			break
+		}
+		assets[item.hash] = item
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	records := l.dinoRecordSnapshot()
+	pairs := map[string]similarPair{}
+	for hash, record := range records {
+		if record.Error != "" {
+			continue
+		}
+		left, exists := assets[hash]
+		if !exists {
+			continue
+		}
+		for _, match := range record.Matches {
+			right, exists := assets[match.Hash]
+			target, indexed := records[match.Hash]
+			if !exists || !indexed || target.Error != "" || left.id == right.id || match.Score < .7 {
+				continue
+			}
+			a, b := orderedDINO(left.id, right.id)
+			key := pairKey(a, b)
+			if ignored[key] {
+				continue
+			}
+			lh, le := strconv.ParseUint(left.dhash, 16, 64)
+			rh, re := strconv.ParseUint(right.dhash, 16, 64)
+			if le == nil && re == nil && left.height > 0 && right.height > 0 && bits.OnesCount64(lh^rh) <= 4 && math.Abs(float64(left.width)/float64(left.height)-float64(right.width)/float64(right.height)) < .03 {
+				continue
+			}
+			if previous, ok := pairs[key]; !ok || previous.Score < match.Score {
+				pairs[key] = similarPair{Left: a, Right: b, Source: "dino", Score: match.Score}
+			}
+		}
+	}
+	items := []similarPair{}
+	for _, pair := range pairs {
+		if cursor.Left != "" && (pair.Score > cursor.Score || pair.Score == cursor.Score && (pair.Left < cursor.Left || pair.Left == cursor.Left && pair.Right <= cursor.Right)) {
+			continue
+		}
+		items = append(items, pair)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Score != items[j].Score {
+			return items[i].Score > items[j].Score
+		}
+		if items[i].Left != items[j].Left {
+			return items[i].Left < items[j].Left
+		}
+		return items[i].Right < items[j].Right
+	})
+	next := ""
+	if len(items) > limit {
+		items = items[:limit]
+		last := items[len(items)-1]
+		next = base64.RawURLEncoding.EncodeToString([]byte(marshal(map[string]any{"score": last.Score, "left": last.Left, "right": last.Right})))
+	}
+	if paged {
+		writeJSON(w, 200, map[string]any{"items": items, "next": next, "index": l.dinoSnapshot()})
 	} else {
 		writeJSON(w, 200, items)
 	}

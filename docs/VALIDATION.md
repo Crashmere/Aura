@@ -2,6 +2,14 @@
 
 Validation uses isolated libraries and synthetic or public upstream test media. Production acceptance is read-only and never seeds demonstration photos into the personal library.
 
+## Asynchronous DINO similarity
+
+An isolated nas library using public photo fixtures verified DINOv2 ViT-S/14 extraction under the `aura` identity with NVIDIA execution. A three-image queue remained unprocessed during its initial wait and completed as one partial batch; sixteen additional ready images formed an immediate full batch. A separate real resumable upload completed its byte acknowledgment and final commit while its feature record was still absent; media publication and DINO progress remained independent.
+
+The review API and UI separated dHash matches from DINO recommendations, excluded overlapping pairs, and preserved shared dismiss/undo decisions. Focused API validation with the Go race detector checked source-specific pagination and trash filtering. Missing derived records were recovered after restart. Permanent deletion of a selected synthetic item during an active DINO batch canceled/drained the batch, removed its feature and original, and did not recreate the feature afterward. All remaining synthetic original SHA-256 values were preserved. Production acceptance uses read-only health, progress and review queries.
+
+## Initial library contracts
+
 Verified during initial development:
 
 - Chunk interruption/resume from an acknowledged nonzero offset, stale-offset rejection, server SHA-256 validation, and repeated upload without duplicate object storage.

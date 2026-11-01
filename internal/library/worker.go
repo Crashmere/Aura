@@ -53,6 +53,12 @@ func (l *Library) Worker(ctx context.Context) {
 		slog.Error("recover processing jobs", "error", e)
 		return
 	}
+	dinoStopped := make(chan struct{})
+	go func() {
+		defer close(dinoStopped)
+		l.dinoLoop(ctx)
+	}()
+	defer func() { <-dinoStopped }()
 	slog.Info("media processing concurrency", "workers", l.ProcessingLimits.Workers, "gpuOperations", l.ProcessingLimits.GPUOperations)
 	var running sync.WaitGroup
 	// Drain jobs before shutting down their GPU contexts or the catalog connection.

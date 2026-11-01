@@ -52,7 +52,7 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `POST /api/assets/{id}/merge` | `{other:"asset-id"}`; merge without discarding originals |
 | `POST /api/assets/{id}/split` | `{hash:"original-sha256"}`; separate one resource |
 | `GET /api/assets/{id}/download` | Streaming ZIP of all originals plus `aura.json` |
-| `GET /api/similar` | Legacy array of at most 100 `{left,right,distance}` pairs; `paged=true` returns `{items,next}` |
+| `GET /api/similar` | `source=dhash` (default) or `source=dino`; legacy array up to 100 pairs, or `paged=true` returns `{items,next}` with DINO `index` progress |
 | `POST /api/similar/ignore` | `{left,right}`; persist a dismissal without merging or deleting originals |
 | `DELETE /api/similar/ignore` | `{left,right}`; undo a dismissal |
 | `GET /api/jobs` | Legacy array of the latest 100 pending/error files; `paged=true` returns durable processing history |
@@ -120,7 +120,9 @@ Each item contains `hash`, `name`, `mime`, `size`, `assetId`, `status`, `created
 
 `GET /api/uploads?paged=true` returns `{items,next}` for incomplete sessions, using the same default/maximum page sizes. Each item includes `id`, `name`, `size`, `offset`, `createdAt`, `state`, and `missing`. Pages sort by creation time and ID descending. These server records survive browser restarts. The client must recover or reselect the original source file to continue; listing a session grants no background file access and does not discard its acknowledged chunks.
 
-Similar review supports `paged=true`, `limit`, and an opaque cursor. Ignored pairs are omitted from ordinary results. Ignore and undo append reversible decisions for the explicit pair; they do not alter catalog membership or original files. Manual merges remain separate user actions.
+Similar review supports `source=dhash` (default), `source=dino`, `paged=true`, `limit`, and an opaque cursor specific to the selected source. dHash pairs contain `{left,right,distance,source:"dhash"}`. DINO pairs contain `{left,right,distance:0,source:"dino",score}`, where `score` is normalized-feature cosine similarity, not a duplicate probability. DINO candidates are limited to the incremental top-20 neighbors with score at least 0.7, exclude pairs already passing the dHash conditions, and are ordered by descending score with asset IDs as tie-breakers. Ignored pairs are omitted from both sources. Ignore and undo append reversible decisions for the explicit pair; they do not alter catalog membership or original files. Manual merges remain separate user actions.
+
+`/api/info.similarityIndex` and paged DINO results' `index` report `{state,total,ready,pending,errors,engine?,batchSize,waitSeconds}`. States are `starting`, `idle`, `waiting`, `processing`, `unavailable`, or `disabled`. Counts cover ready primary images with available thumbnails; `pending` includes failed images waiting to retry. DINO works asynchronously in batches of at most 16, after ten seconds for a partial batch. It never changes upload or media-job status. Candidate pages may change while background analysis adds records; refresh starts from the latest result set.
 
 ## Albums
 

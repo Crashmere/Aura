@@ -2437,6 +2437,34 @@ input {
   color: #869875;
   background: #f2f6eb;
 }
+.similar-tabs {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.similar-tabs button {
+  padding: 0 0 12px;
+  font-size: 14px;
+  color: #89917f;
+  border-bottom: 2px solid transparent;
+}
+.similar-tabs button.active {
+  color: var(--accent-dark);
+  border-bottom-color: var(--accent);
+}
+.similar-index {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 20px;
+  font-size: 12px;
+  color: #89917f;
+}
+.pair-actions .similar-score {
+  color: var(--accent-dark);
+}
 .similar-undo button {
   color: var(--accent-dark);
   flex-shrink: 0;

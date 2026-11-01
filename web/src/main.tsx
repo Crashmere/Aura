@@ -54,6 +54,7 @@ import {
   displayDate,
   Page,
   SimilarPair,
+  SimilarPage,
   Timeline,
   ApiError,
   PurgeResponse,
@@ -155,6 +156,7 @@ function App() {
     [help, setHelp] = useState(false),
     [mobileMenu, setMobileMenu] = useState(false);
   const [similar, setSimilar] = useState<SimilarPair[]>([]),
+    [similarSource, setSimilarSource] = useState<"dhash" | "dino">("dhash"),
     [similarNext, setSimilarNext] = useState(""),
     [ignoredPair, setIgnoredPair] = useState<SimilarPair | null>(null),
     [ignoring, setIgnoring] = useState(""),
@@ -342,7 +344,7 @@ function App() {
     setError("");
     setMonths([]);
     try {
-      const data = await api<Page<SimilarPair>>("similar?" + new URLSearchParams({ paged: "true", limit: "50", ...(append && similarNext ? { cursor: similarNext } : {}) }));
+      const data = await api<SimilarPage>("similar?" + new URLSearchParams({ source: similarSource, paged: "true", limit: "50", ...(append && similarNext ? { cursor: similarNext } : {}) }));
       if (key !== queryKey.current) return;
       const pairs = data.items;
       setSimilar(old => append ? [...old, ...pairs.filter(pair => !old.some(previous => previous.left === pair.left && previous.right === pair.right))] : pairs);
@@ -381,7 +383,7 @@ function App() {
     setActionError("");
     if (view === "similar") { setSimilar([]); setSimilarNext(""); setIgnoredPair(null); void loadSimilar(); }
     else void load();
-  }, [view, albumId, albumGallery ? "" : query, from, to, photoFilterKey]);
+  }, [view, albumId, albumGallery ? "" : query, from, to, photoFilterKey, similarSource]);
   refreshRef.current = async (reconcile = false) => {
     if (view === "similar") await loadSimilar();
     else await load(false, true, true);
@@ -392,10 +394,10 @@ function App() {
     return () => window.removeEventListener("aura-library-changed", fn);
   }, []);
   useEffect(() => {
-    if (error || (!info?.queued && !info?.pendingDeletions && !uploading.running)) return;
+    if (error || (!info?.queued && !info?.pendingDeletions && !uploading.running && !(view === "similar" && info?.similarityIndex?.pending))) return;
     const timer = setInterval(() => { if (!document.hidden && !queryLoading.current) void refreshRef.current(); }, 4000);
     return () => clearInterval(timer);
-  }, [info?.queued, info?.pendingDeletions, uploading.running, error]);
+  }, [info?.queued, info?.pendingDeletions, info?.similarityIndex?.pending, view, uploading.running, error]);
   useEffect(() => {
     if (!next || loading || error || viewerId || view === "similar") return;
     const observer = new IntersectionObserver(
@@ -1011,6 +1013,15 @@ function App() {
             </div>
           ) : view === "similar" ? (
             <div className="similar-list">
+              <div className="similar-tabs" aria-label="相似类型">
+                <button className={similarSource === "dhash" ? "active" : ""} aria-pressed={similarSource === "dhash"} onClick={() => setSimilarSource("dhash")}>算法判定</button>
+                <button className={similarSource === "dino" ? "active" : ""} aria-pressed={similarSource === "dino"} onClick={() => setSimilarSource("dino")}>智能推荐</button>
+              </div>
+              {similarSource === "dino" && info?.similarityIndex && <div className="similar-index">
+                {info.similarityIndex.state === "processing" ? <LoaderCircle size={14} className="spin" /> : null}
+                <span>{info.similarityIndex.state === "unavailable" ? "智能分析暂不可用，稍后自动重试" : info.similarityIndex.state === "disabled" ? "智能分析已暂停" : info.similarityIndex.pending ? `${info.similarityIndex.state === "processing" ? "正在分析" : "等待批量分析"} · ${info.similarityIndex.ready} / ${info.similarityIndex.total}` : `已分析 ${info.similarityIndex.ready} 张照片`}</span>
+                {!!info.similarityIndex.errors && <span>{info.similarityIndex.errors} 张稍后重试</span>}
+              </div>}
               {ignoredPair && <div className="similar-undo">已确认一组候选不同，后续不再提示。<button disabled={!!ignoring} onClick={() => void ignore(ignoredPair, true)}>撤销</button></div>}
               {loading && !similar.length ? (
                 <div className="loading-inline">
@@ -1018,7 +1029,7 @@ function App() {
                   正在查找相似照片
                 </div>
               ) : !similar.length && !similarNext ? (
-                <Empty icon={<Copy />} title="没有需要核对的相似照片" />
+                <Empty icon={<Copy />} title={similarSource === "dino" && info?.similarityIndex?.pending ? "分析完成后会显示推荐照片" : similarSource === "dino" ? "暂无智能推荐" : "没有算法判定相似的照片"} />
               ) : (
                 similar.map((pair) => {
                   const a = similarAssets[pair.left],
@@ -1028,7 +1039,8 @@ function App() {
                       <Photo asset={a} onClick={() => setViewer(a)} />
                       <Photo asset={b} onClick={() => setViewer(b)} />
                       <div className="pair-actions">
-                        <span>可能是同一张照片</span>
+                        <span>{similarSource === "dino" ? "画面内容相近" : "图像指纹相近"}</span>
+                        {similarSource === "dino" && pair.score !== undefined && <small className="similar-score">特征相似度 {pair.score.toFixed(2)}</small>}
                         <small>
                           {a.width} × {a.height} · {b.width} × {b.height}
                         </small>

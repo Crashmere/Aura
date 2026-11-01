@@ -36,6 +36,11 @@ type Library struct {
 	imageGPUIdle     []*imageGPUWorker
 	ProcessingLimits ProcessingLimits
 	gpuSlots         chan struct{}
+	dinoMu           sync.RWMutex
+	dinoStatus       dinoStatus
+	dinoRecords      map[string]dinoRecord
+	dinoActive       *processingJob
+	dinoHashes       map[string]bool
 }
 
 type uploadLock struct {

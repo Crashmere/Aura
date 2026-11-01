@@ -57,6 +57,7 @@ export type Info = {
   errors: number;
   grouped: number;
   pendingDeletions?: number;
+  similarityIndex?: SimilarityIndex;
   capabilities?: { permanentDelete?: boolean };
 };
 export type PurgeResponse = {
@@ -108,7 +109,18 @@ export type PendingUpload = {
   state: string;
   missing?: boolean;
 };
-export type SimilarPair = { left: string; right: string; distance: number };
+export type SimilarPair = { left: string; right: string; distance: number; source?: "dhash" | "dino"; score?: number };
+export type SimilarityIndex = {
+  state: "starting" | "idle" | "waiting" | "processing" | "unavailable" | "disabled";
+  total: number;
+  ready: number;
+  pending: number;
+  errors: number;
+  engine?: string;
+  batchSize: number;
+  waitSeconds: number;
+};
+export type SimilarPage = Page<SimilarPair> & { index?: SimilarityIndex };
 export type Timeline = { months: { month: string; count: number }[] };
 export const base = "/aura/";
 export class ApiError extends Error {

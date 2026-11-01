@@ -474,6 +474,7 @@ func planDeletion(tx *sql.Tx, ids []string) (deletionPlan, error) {
 }
 
 func (l *Library) cancelProcessing(hashes []string) {
+	l.cancelDINO(hashes)
 	l.processingMu.Lock()
 	defer l.processingMu.Unlock()
 	for _, hash := range hashes {
@@ -493,6 +494,9 @@ func (l *Library) waitProcessing(ctx context.Context, hashes []string) error {
 		}
 	}
 	l.processingMu.Unlock()
+	if job := l.cancelDINO(hashes); job != nil {
+		jobs = append(jobs, job)
+	}
 	for _, job := range jobs {
 		select {
 		case <-job.done:
@@ -604,7 +608,7 @@ func (l *Library) runDeletion(ctx context.Context, id string, plan deletionPlan)
 		if e := l.removeOriginalWork(hash); e != nil {
 			return e
 		}
-		for _, path := range []string{l.Object(hash), l.Derived(hash, "-thumb.jpg"), l.Derived(hash, "-preview.jpg"), l.Derived(hash, "-play.mp4"), filepath.Join(l.Root, "incoming", hash)} {
+		for _, path := range []string{l.Object(hash), l.Derived(hash, "-thumb.jpg"), l.Derived(hash, "-preview.jpg"), l.Derived(hash, "-play.mp4"), l.Derived(hash, dinoSuffix), filepath.Join(l.Root, "incoming", hash)} {
 			if e := removeDurably(path); e != nil {
 				return e
 			}
