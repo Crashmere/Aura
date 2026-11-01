@@ -96,6 +96,8 @@ For migration, pause clients and the ALI application, transfer complete cold sta
 
 ## Diagnostics
 
+For slow original transfers, follow [Upload throughput and request limits](https://github.com/Crashmere/agent-config/blob/main/skills/server-operations/references/conventions.md#upload-throughput-and-request-limits), also at `/opt/server-context/references/conventions.md` on NAS. It owns the shared HTTP/2 receive-window setting and comparison procedure. Aura's chunk limits, body deadlines and durable acknowledgment remain governed by its upload protocol below and [API](API.md#upload-protocol).
+
 ```sh
 systemctl status aura
 journalctl -u aura --since today
