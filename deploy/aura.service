@@ -7,7 +7,7 @@ Type=simple
 User=aura
 Group=aura
 WorkingDirectory=/opt/aura
-ExecStart=/opt/aura/bin/aura serve --data /opt/aura/data --listen 127.0.0.1:18087
+ExecStart=/opt/aura/bin/aura serve --data /opt/aura/data --listen 127.0.0.1:18087 --workers 8 --gpu-slots 4
 Environment=TZ=Asia/Shanghai
 Environment=MALLOC_ARENA_MAX=2
 Restart=on-failure
