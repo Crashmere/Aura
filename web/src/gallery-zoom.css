@@ -132,6 +132,13 @@
   contain: none;
 }
 
+.virtual-gallery > .day-group {
+  margin-bottom: 0;
+  content-visibility: visible;
+  contain: none;
+}
+.virtual-gallery .day-heading { margin-bottom: 10px; }
+
 .timeline.aura-gallery > .day-group > .day-heading {
   margin-bottom: 10px;
 }

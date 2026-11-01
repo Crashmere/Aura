@@ -46,6 +46,7 @@ export type Album = {
   updatedAt: string;
 };
 export type Info = {
+  revision: number;
   total: number;
   favorites: number;
   live: number;
@@ -120,7 +121,7 @@ export type SimilarityIndex = {
   batchSize: number;
   waitSeconds: number;
 };
-export type SimilarPage = Page<SimilarPair> & { index?: SimilarityIndex };
+export type SimilarPage = Page<SimilarPair> & { index?: SimilarityIndex; assets: Record<string, Asset> };
 export type Timeline = { months: { month: string; count: number }[] };
 export const base = "/aura/";
 export class ApiError extends Error {

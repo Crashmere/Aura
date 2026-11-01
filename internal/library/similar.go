@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -29,32 +30,6 @@ type similarPair struct {
 type similarMatch struct {
 	Item     similarItem
 	Distance int
-}
-
-type bkNode struct {
-	Item     similarItem
-	Children map[int]*bkNode
-}
-
-func (n *bkNode) add(v similarItem) {
-	d := bits.OnesCount64(n.Item.Value ^ v.Value)
-	if child := n.Children[d]; child != nil {
-		child.add(v)
-	} else {
-		n.Children[d] = &bkNode{v, map[int]*bkNode{}}
-	}
-}
-
-func (n *bkNode) find(v similarItem, out *[]similarMatch) {
-	d := bits.OnesCount64(n.Item.Value ^ v.Value)
-	if d <= 4 && math.Abs(n.Item.Ratio-v.Ratio) < 0.03 {
-		*out = append(*out, similarMatch{n.Item, d})
-	}
-	for step, child := range n.Children {
-		if step >= d-4 && step <= d+4 {
-			child.find(v, out)
-		}
-	}
 }
 
 func pairKey(left, right string) string {
@@ -112,81 +87,53 @@ func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 			cursorDate, cursorItem, cursorMatch = parts[0], parts[1], parts[2]
 		}
 	}
-	ignored, e := l.ignoredPairs()
-	if e != nil {
-		fail(w, 500, e)
+	value, err := l.cachedCatalog(r.Context(), "dhash-index", "library", func() (any, error) { return l.buildDHashIndex(r.Context()) })
+	if err != nil {
+		fail(w, 500, err)
 		return
 	}
-	rows, e := l.DB.Query("SELECT a.id,a.captured_at,f.dhash,f.width,f.height FROM assets a JOIN files f ON f.hash=a.primary_hash WHERE a.trashed_at='' AND f.dhash!='' ORDER BY a.captured_at DESC,a.id DESC")
-	if e != nil {
-		fail(w, 500, e)
+	index := value.(*dhashIndex)
+	ignored, err := l.ignoredPairs()
+	if err != nil {
+		fail(w, 500, err)
 		return
 	}
-	defer rows.Close()
-	var root *bkNode
+	start := 0
+	if cursorDate != "" {
+		start = sort.Search(len(index.items), func(i int) bool {
+			item := index.items[i]
+			return item.Date < cursorDate || item.Date == cursorDate && item.ID <= cursorItem
+		})
+	}
 	items := []similarPair{}
 	cursors := []string{}
-	for rows.Next() {
+	for i := start; i < len(index.items) && len(items) <= limit; i++ {
 		if r.Context().Err() != nil {
 			return
 		}
-		var item similarItem
-		var hash string
-		var width, height int
-		if e = rows.Scan(&item.ID, &item.Date, &hash, &width, &height); e != nil {
-			fail(w, 500, e)
-			return
-		}
-		if height == 0 {
-			continue
-		}
-		item.Value, e = strconv.ParseUint(hash, 16, 64)
-		if e != nil {
-			continue
-		}
-		item.Ratio = float64(width) / float64(height)
-		if root == nil {
-			root = &bkNode{item, map[int]*bkNode{}}
-			continue
-		}
-		// Rebuild the earlier tree so later pages retain matches to newer items.
-		if cursorDate == "" || item.Date < cursorDate || item.Date == cursorDate && item.ID <= cursorItem {
-			matches := []similarMatch{}
-			root.find(item, &matches)
-			sort.Slice(matches, func(i, j int) bool { return matches[i].Item.ID < matches[j].Item.ID })
-			for _, match := range matches {
-				if item.Date == cursorDate && item.ID == cursorItem && match.Item.ID <= cursorMatch {
-					continue
-				}
-				if ignored[pairKey(item.ID, match.Item.ID)] {
-					continue
-				}
-				items = append(items, similarPair{Left: match.Item.ID, Right: item.ID, Distance: match.Distance, Source: "dhash"})
-				cursors = append(cursors, item.Date+"|"+item.ID+"|"+match.Item.ID)
-				if len(items) > limit {
-					break
-				}
+		item := index.items[i]
+		matches := index.matches(i)
+		sort.Slice(matches, func(i, j int) bool { return matches[i].Item.ID < matches[j].Item.ID })
+		for _, match := range matches {
+			if item.Date == cursorDate && item.ID == cursorItem && match.Item.ID <= cursorMatch {
+				continue
+			}
+			if ignored[pairKey(item.ID, match.Item.ID)] {
+				continue
+			}
+			items = append(items, similarPair{Left: match.Item.ID, Right: item.ID, Distance: match.Distance, Source: "dhash"})
+			cursors = append(cursors, item.Date+"|"+item.ID+"|"+match.Item.ID)
+			if len(items) > limit {
+				break
 			}
 		}
-		if len(items) > limit {
-			break
-		}
-		root.add(item)
-	}
-	if e = rows.Err(); e != nil {
-		fail(w, 500, e)
-		return
 	}
 	next := ""
 	if len(items) > limit {
 		items = items[:limit]
 		next = base64.RawURLEncoding.EncodeToString([]byte(cursors[limit-1]))
 	}
-	if paged {
-		writeJSON(w, 200, map[string]any{"items": items, "next": next})
-	} else {
-		writeJSON(w, 200, items)
-	}
+	l.writeSimilar(w, r, items, next, paged, false)
 }
 
 func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
@@ -208,17 +155,38 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ignored, err := l.ignoredPairs()
+	value, err := l.cachedCatalog(r.Context(), "dino-pairs", "review", func() (any, error) { return l.buildDINOPairs(r.Context()) })
 	if err != nil {
 		fail(w, 500, err)
 		return
 	}
-	rows, err := l.DB.QueryContext(r.Context(), `SELECT a.id,f.hash,f.dhash,f.width,f.height FROM assets a
- JOIN files f ON f.hash=a.primary_hash WHERE a.trashed_at='' AND f.status='ready' AND NOT EXISTS
- (SELECT 1 FROM decisions d,json_each(d.detail,'$.hashes') h WHERE d.action='purge-request' AND h.value=f.hash)`)
+	pairs := value.([]similarPair)
+	start := 0
+	if cursor.Left != "" {
+		start = sort.Search(len(pairs), func(i int) bool {
+			p := pairs[i]
+			return p.Score < cursor.Score || p.Score == cursor.Score && (p.Left > cursor.Left || p.Left == cursor.Left && p.Right > cursor.Right)
+		})
+	}
+	end := min(len(pairs), start+limit)
+	items := pairs[start:end]
+	next := ""
+	if end < len(pairs) && len(items) > 0 {
+		last := items[len(items)-1]
+		next = base64.RawURLEncoding.EncodeToString([]byte(marshal(map[string]any{"score": last.Score, "left": last.Left, "right": last.Right})))
+	}
+	l.writeSimilar(w, r, items, next, paged, true)
+}
+
+func (l *Library) buildDINOPairs(ctx context.Context) ([]similarPair, error) {
+	ignored, err := l.ignoredPairs()
 	if err != nil {
-		fail(w, 500, err)
-		return
+		return nil, err
+	}
+	rows, err := l.DB.QueryContext(ctx, `SELECT a.id,f.hash,f.dhash,f.width,f.height FROM assets a
+ JOIN files f ON f.hash=a.primary_hash WHERE a.trashed_at='' AND f.status='ready' AND NOT EXISTS(SELECT 1 FROM deletion_hashes p WHERE p.hash=f.hash)`)
+	if err != nil {
+		return nil, err
 	}
 	type entry struct {
 		id, hash, dhash string
@@ -237,8 +205,7 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 	if err != nil {
-		fail(w, 500, err)
-		return
+		return nil, err
 	}
 	records := l.dinoRecordSnapshot()
 	pairs := map[string]similarPair{}
@@ -271,11 +238,8 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	items := []similarPair{}
+	items := make([]similarPair, 0, len(pairs))
 	for _, pair := range pairs {
-		if cursor.Left != "" && (pair.Score > cursor.Score || pair.Score == cursor.Score && (pair.Left < cursor.Left || pair.Left == cursor.Left && pair.Right <= cursor.Right)) {
-			continue
-		}
 		items = append(items, pair)
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -287,17 +251,29 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 		}
 		return items[i].Right < items[j].Right
 	})
-	next := ""
-	if len(items) > limit {
-		items = items[:limit]
-		last := items[len(items)-1]
-		next = base64.RawURLEncoding.EncodeToString([]byte(marshal(map[string]any{"score": last.Score, "left": last.Left, "right": last.Right})))
-	}
-	if paged {
-		writeJSON(w, 200, map[string]any{"items": items, "next": next, "index": l.dinoSnapshot()})
-	} else {
+	return items, nil
+}
+
+func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []similarPair, next string, paged, dino bool) {
+	if !paged {
 		writeJSON(w, 200, items)
+		return
 	}
+	ids := map[string]bool{}
+	for _, pair := range items {
+		ids[pair.Left] = true
+		ids[pair.Right] = true
+	}
+	cards, err := l.assetCards(r.Context(), ids)
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	out := map[string]any{"items": items, "next": next, "assets": cards}
+	if dino {
+		out["index"] = l.dinoSnapshot()
+	}
+	writeJSON(w, 200, out)
 }
 
 func (l *Library) ignoreSimilar(w http.ResponseWriter, r *http.Request) {

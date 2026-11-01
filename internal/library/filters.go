@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Each entry is one priority tier; grouped variants in the same tier all qualify.
@@ -19,47 +21,36 @@ var assetEquipmentFields = []struct {
 	{"lens", "lenses", []string{"LensModel", "LensID", "Lens", "LensType", "LensInfo LensSpec LensSpecification", "LensMake"}},
 }
 
-// Match strings.TrimSpace for both dropdown values and exact comparisons.
-const assetMetadataText = `trim(CAST(m.value AS TEXT), char(9,10,11,12,13,32,133,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288))`
-
 func (l *Library) filterOptions(w http.ResponseWriter, r *http.Request) {
-	queries := []string{}
-	options := map[string][]string{}
-	for _, field := range assetEquipmentFields {
-		options[field.option] = []string{}
-		priority := "CASE"
-		for i, keys := range field.keys {
-			priority += " WHEN " + assetMetadataKeys(keys) + " THEN " + strconv.Itoa(i)
-		}
-		priority += " END"
-		// Rank only nonempty scalar tags, retaining ties between EXIF groups.
-		queries = append(queries, `SELECT '`+field.option+`' AS dimension, `+assetMetadataText+` AS value,
- DENSE_RANK() OVER (PARTITION BY r.hash ORDER BY `+priority+`) AS priority
- FROM files r JOIN assets a ON a.id=r.asset_id, json_each(r.metadata) m
- WHERE `+assetMetadataKeys(strings.Join(field.keys, " "))+`
- AND m.type IN ('text','integer','real') AND `+assetMetadataText+`!=''`)
-	}
-	rows, e := l.DB.QueryContext(r.Context(), `WITH options AS (`+strings.Join(queries, " UNION ALL ")+`)
- SELECT dimension, min(value) AS value FROM options WHERE priority=1
- GROUP BY dimension, value COLLATE NOCASE ORDER BY dimension, value COLLATE NOCASE, value`)
-	if e != nil {
-		fail(w, 500, e)
+	if err := l.ensureFacets(r.Context()); err != nil {
+		fail(w, 500, err)
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var dimension, value string
-		if e = rows.Scan(&dimension, &value); e != nil {
-			fail(w, 500, e)
-			return
+	value, err := l.cachedCatalog(r.Context(), "equipment", "equipment", func() (any, error) {
+		options := map[string][]string{"cameras": {}, "lenses": {}}
+		rows, err := l.DB.QueryContext(r.Context(), `SELECT e.dimension,min(e.value) FROM file_equipment e JOIN files f ON f.hash=e.hash JOIN assets a ON a.id=f.asset_id WHERE e.preferred=1 GROUP BY e.dimension,e.value COLLATE NOCASE ORDER BY e.dimension,e.value COLLATE NOCASE,e.value`)
+		if err != nil {
+			return nil, err
 		}
-		options[dimension] = append(options[dimension], value)
-	}
-	if e = rows.Err(); e != nil {
-		fail(w, 500, e)
+		defer rows.Close()
+		for rows.Next() {
+			var dimension, value string
+			if err = rows.Scan(&dimension, &value); err != nil {
+				return nil, err
+			}
+			key := "cameras"
+			if dimension == "lens" {
+				key = "lenses"
+			}
+			options[key] = append(options[key], value)
+		}
+		return options, rows.Err()
+	})
+	if err != nil {
+		fail(w, 500, err)
 		return
 	}
-	writeJSON(w, 200, options)
+	writeJSON(w, 200, value)
 }
 
 func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []any, bool) {
@@ -83,6 +74,12 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 	} {
 		if value := q.Get(enum.name); value != "" && !slices.Contains(strings.Fields(enum.values), value) {
 			fail(w, 400, enum.name+" 筛选值无效")
+			return "", nil, false
+		}
+	}
+	if q.Get("camera") != "" || q.Get("lens") != "" || q.Get("location") != "" || q.Get("q") != "" {
+		if err := l.ensureFacets(context.Background()); err != nil {
+			fail(w, 500, err)
 			return "", nil, false
 		}
 	}
@@ -243,23 +240,24 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		where += " AND EXISTS (SELECT 1 FROM album_assets aa WHERE aa.asset_id=a.id)"
 	}
 	if search := strings.TrimSpace(q.Get("q")); search != "" {
+		if utf8.RuneCountInString(search) >= 3 && !strings.ContainsAny(search, "%_\\") {
+			where += ` AND a.id IN (SELECT s.asset_id FROM file_search x JOIN file_facets p ON p.search_rowid=x.rowid JOIN files s ON s.hash=p.hash WHERE x.name LIKE ? OR x.metadata LIKE ?)`
+			args = append(args, assetTextPattern(search), assetTextPattern(search))
+		}
 		where += ` AND EXISTS (SELECT 1 FROM files s WHERE s.asset_id=a.id AND (s.name LIKE ? ESCAPE '\' OR s.metadata LIKE ? ESCAPE '\'))`
 		args = append(args, assetTextPattern(search), assetTextPattern(search))
 	}
-	// Inspect metadata only for requested dimensions, after locating each asset's
-	// originals through files_asset. ExifTool -G1 stores group-prefixed keys.
+
 	for _, field := range assetEquipmentFields {
 		if value := strings.TrimSpace(q.Get(field.name)); value != "" {
-			comparison := `CAST(m.value AS TEXT) LIKE ? ESCAPE '\'`
+			comparison := `e.value LIKE ? ESCAPE '\'`
 			argument := assetTextPattern(value)
 			if q.Get(field.name+"Match") == "exact" {
-				comparison = assetMetadataText + " = ? COLLATE NOCASE"
+				comparison = "e.value=? COLLATE NOCASE"
 				argument = value
 			}
-			where += ` AND EXISTS (SELECT 1 FROM files r WHERE r.asset_id=a.id AND EXISTS
- (SELECT 1 FROM json_each(r.metadata) m WHERE ` + assetMetadataKeys(strings.Join(field.keys, " ")) + `
- AND m.type IN ('text','integer','real') AND ` + comparison + `))`
-			args = append(args, argument)
+			where += ` AND a.id IN (SELECT r.asset_id FROM file_equipment e JOIN files r ON r.hash=e.hash WHERE e.dimension=? AND ` + comparison + `)`
+			args = append(args, field.name, argument)
 		}
 	}
 	if location := q.Get("location"); location != "" {
@@ -267,30 +265,14 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		if location == "without" {
 			where += "NOT "
 		}
-		// CASE skips EXIF parsing when native hints already contain both coordinates.
-		// Presence checks retain numeric zero, including (0, 0).
-		where += `EXISTS (SELECT 1 FROM files r WHERE r.asset_id=a.id AND CASE
- WHEN json_type(r.hints,'$.latitude') IN ('integer','real')
-  AND json_type(r.hints,'$.longitude') IN ('integer','real') THEN 1
- ELSE (SELECT COALESCE(max(CASE WHEN ` + assetMetadataKeys("GPSPosition GPSCoordinates") + ` THEN 1 ELSE 0 END),0)
-  OR count(DISTINCT CASE WHEN ` + assetMetadataKeys("GPSLatitude") + ` THEN 'lat'
-                        WHEN ` + assetMetadataKeys("GPSLongitude") + ` THEN 'lon' END)=2
- FROM json_each(r.metadata) m WHERE m.type IN ('text','integer','real') AND trim(CAST(m.value AS TEXT))!='') END)`
+		where += `a.id IN (SELECT r.asset_id FROM file_facets p JOIN files r ON r.hash=p.hash WHERE p.has_location=1)`
 	}
+
 	return where, args, true
 }
 
 func assetTextPattern(value string) string {
 	return "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(value) + "%"
-}
-
-// Keys come only from the fixed tag lists above, never from query parameters.
-func assetMetadataKeys(keys string) string {
-	conditions := []string{}
-	for _, key := range strings.Fields(keys) {
-		conditions = append(conditions, "m.key='"+key+"' OR m.key LIKE '%:"+key+"'")
-	}
-	return "(" + strings.Join(conditions, " OR ") + ")"
 }
 
 func assetFormatSQL(format string) string {
@@ -358,28 +340,29 @@ func (l *Library) timeline(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, e := l.DB.Query("SELECT substr(a.captured_at,1,7),count(*) FROM assets a JOIN files f ON f.hash=a.primary_hash "+where+" GROUP BY substr(a.captured_at,1,7) ORDER BY substr(a.captured_at,1,7) DESC", args...)
-	if e != nil {
-		fail(w, 500, e)
-		return
-	}
-	defer rows.Close()
-	type monthCount struct {
-		Month string `json:"month"`
-		Count int    `json:"count"`
-	}
-	months := []monthCount{}
-	for rows.Next() {
-		var month monthCount
-		if e = rows.Scan(&month.Month, &month.Count); e != nil {
-			fail(w, 500, e)
-			return
+	value, err := l.cachedCatalog(r.Context(), "timeline:"+r.URL.RawQuery, "library", func() (any, error) {
+		rows, err := l.DB.QueryContext(r.Context(), "SELECT substr(a.captured_at,1,7),count(*) FROM assets a JOIN files f ON f.hash=a.primary_hash "+where+" GROUP BY substr(a.captured_at,1,7) ORDER BY substr(a.captured_at,1,7) DESC", args...)
+		if err != nil {
+			return nil, err
 		}
-		months = append(months, month)
-	}
-	if e = rows.Err(); e != nil {
-		fail(w, 500, e)
+		defer rows.Close()
+		type monthCount struct {
+			Month string `json:"month"`
+			Count int    `json:"count"`
+		}
+		months := []monthCount{}
+		for rows.Next() {
+			var m monthCount
+			if err = rows.Scan(&m.Month, &m.Count); err != nil {
+				return nil, err
+			}
+			months = append(months, m)
+		}
+		return map[string]any{"months": months}, rows.Err()
+	})
+	if err != nil {
+		fail(w, 500, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"months": months})
+	writeJSON(w, 200, value)
 }

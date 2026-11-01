@@ -36,9 +36,9 @@ func (l *Library) pagedJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Catalog rows remain durable; only terminal task visibility expires.
-	const source = ` FROM files f LEFT JOIN decisions j ON j.id='media-job:'||f.hash AND j.action='media-job'`
-	const activity = `COALESCE(json_extract(j.detail,'$.finishedAt'),json_extract(j.detail,'$.startedAt'),f.created_at)`
-	const visible = ` WHERE (f.status IN ('queued','processing') OR ` + activity + `>=?)`
+	const source = ` FROM (SELECT hash FROM files WHERE status IN ('queued','processing') UNION SELECT hash FROM job_activity WHERE activity_at>=?) visible_jobs JOIN files f ON f.hash=visible_jobs.hash JOIN job_activity p ON p.hash=f.hash LEFT JOIN decisions j ON j.id='media-job:'||f.hash AND j.action='media-job'`
+	const activity = `p.activity_at`
+	const visible = ` WHERE 1=1`
 	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano)
 	counts := map[string]int64{"queued": 0, "processing": 0, "error": 0, "ready": 0, "all": 0}
 	countRows, e := l.DB.Query("SELECT f.status,count(*)"+source+visible+" GROUP BY f.status", cutoff)

@@ -72,11 +72,12 @@ type dinoResponse struct {
 }
 
 type dinoProcess struct {
-	cmd      *exec.Cmd
-	input    io.WriteCloser
-	response chan dinoResponse
-	done     chan struct{}
-	err      error
+	catalogReady bool
+	cmd          *exec.Cmd
+	input        io.WriteCloser
+	response     chan dinoResponse
+	done         chan struct{}
+	err          error
 }
 
 func dinoRuntime() string {
@@ -109,8 +110,7 @@ func (l *Library) dinoRecordSnapshot() map[string]dinoRecord {
 
 func (l *Library) dinoCatalog(ctx context.Context) ([]dinoItem, error) {
 	rows, err := l.DB.QueryContext(ctx, `SELECT f.hash FROM assets a JOIN files f ON f.hash=a.primary_hash
- WHERE a.trashed_at='' AND f.status='ready' AND f.mime LIKE 'image/%' AND NOT EXISTS
- (SELECT 1 FROM decisions d,json_each(d.detail,'$.hashes') h WHERE d.action='purge-request' AND h.value=f.hash)
+ WHERE a.trashed_at='' AND f.status='ready' AND f.mime LIKE 'image/%' AND NOT EXISTS(SELECT 1 FROM deletion_hashes p WHERE p.hash=f.hash)
  ORDER BY f.created_at,f.hash`)
 	if err != nil {
 		return nil, err
@@ -143,42 +143,186 @@ func (l *Library) dinoCatalog(ctx context.Context) ([]dinoItem, error) {
 
 // Missing or outdated records form the persistent queue, independent of media jobs.
 func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, error) {
-	catalog, err := l.dinoCatalog(ctx)
+	l.dinoMu.RLock()
+	initial := l.dinoItems == nil
+	l.dinoMu.RUnlock()
+	items := []dinoItem{}
+	dirty := []string{}
+	if initial {
+		var err error
+		items, err = l.dinoCatalog(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		l.dinoMu.Lock()
+		l.dinoItems = map[string]dinoItem{}
+		l.dinoRecords = map[string]dinoRecord{}
+		l.dinoDelta = map[string]dinoItem{}
+		l.dinoStatus.Ready = 0
+		l.dinoStatus.Errors = 0
+		l.dinoMu.Unlock()
+	} else {
+		tx, err := l.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		rows, err := tx.QueryContext(ctx, "SELECT hash FROM dino_dirty LIMIT 512")
+		if err != nil {
+			tx.Rollback()
+			return nil, nil, err
+		}
+		for rows.Next() {
+			var hash string
+			if err = rows.Scan(&hash); err != nil {
+				break
+			}
+			dirty = append(dirty, hash)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err == nil {
+			for _, hash := range dirty {
+				if _, err = tx.Exec("DELETE FROM dino_dirty WHERE hash=?", hash); err != nil {
+					break
+				}
+			}
+		}
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			tx.Rollback()
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+
+		for _, hash := range dirty {
+			if len(hash) != 64 {
+				continue
+			}
+			var eligible bool
+			err = l.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM files f JOIN assets a ON a.primary_hash=f.hash WHERE f.hash=? AND a.trashed_at='' AND f.status='ready' AND f.mime LIKE 'image/%' AND NOT EXISTS(SELECT 1 FROM deletion_hashes p WHERE p.hash=f.hash))`, hash).Scan(&eligible)
+			if err != nil {
+				return nil, nil, err
+			}
+			item := dinoItem{Hash: hash}
+			if eligible {
+				path := l.Derived(hash, "-thumb.jpg")
+				if stat, e := os.Stat(path); e == nil && stat.Mode().IsRegular() {
+					item.Thumbnail = fmt.Sprintf("%d:%d", stat.Size(), stat.ModTime().UnixNano())
+					item.Path = path
+				}
+			}
+			items = append(items, item)
+		}
+	}
+	for _, item := range items {
+		l.dinoMu.RLock()
+		old, exists := l.dinoRecords[item.Hash]
+		previous := l.dinoItems[item.Hash]
+		l.dinoMu.RUnlock()
+		if item.Thumbnail != "" && old.Thumbnail == item.Thumbnail && previous.Thumbnail == item.Thumbnail {
+			continue
+		}
+		if item.Thumbnail == "" {
+			if _, err := l.DB.ExecContext(ctx, "DELETE FROM dino_tasks WHERE hash=?", item.Hash); err != nil {
+				return nil, nil, err
+			}
+			l.dinoMu.Lock()
+			delete(l.dinoItems, item.Hash)
+			delete(l.dinoRecords, item.Hash)
+			l.dinoDelta[item.Hash] = item
+			if exists {
+				if old.Error == "" {
+					l.dinoStatus.Ready--
+				} else {
+					l.dinoStatus.Errors--
+				}
+			}
+			l.dinoMu.Unlock()
+			continue
+		}
+		var record dinoRecord
+		if data, e := os.ReadFile(l.Derived(item.Hash, dinoSuffix)); e == nil {
+			_ = json.Unmarshal(data, &record)
+		}
+		valid := record.Model == dinoModel && record.Hash == item.Hash && record.Thumbnail == item.Thumbnail
+		if !valid || record.Error != "" {
+			retry := ""
+			if valid {
+				if at, e := time.Parse(time.RFC3339Nano, record.CreatedAt); e == nil {
+					retry = at.Add(5 * time.Minute).Format(time.RFC3339Nano)
+				}
+			}
+			if _, err := l.DB.ExecContext(ctx, `INSERT INTO dino_tasks VALUES(?,?,?,?) ON CONFLICT(hash) DO UPDATE SET thumbnail=excluded.thumbnail,retry_at=excluded.retry_at`, item.Hash, item.Thumbnail, now(), retry); err != nil {
+				return nil, nil, err
+			}
+		} else {
+			if _, err := l.DB.ExecContext(ctx, "DELETE FROM dino_tasks WHERE hash=?", item.Hash); err != nil {
+				return nil, nil, err
+			}
+		}
+		l.dinoMu.Lock()
+		l.dinoItems[item.Hash] = item
+		l.dinoDelta[item.Hash] = item
+		if exists {
+			if old.Error == "" {
+				l.dinoStatus.Ready--
+			} else {
+				l.dinoStatus.Errors--
+			}
+		}
+		if valid {
+			l.dinoRecords[item.Hash] = record
+			if record.Error == "" {
+				l.dinoStatus.Ready++
+			} else {
+				l.dinoStatus.Errors++
+			}
+		} else {
+			delete(l.dinoRecords, item.Hash)
+		}
+		l.dinoMu.Unlock()
+	}
+	if len(items) > 0 {
+		_, _ = l.DB.ExecContext(ctx, "UPDATE catalog_versions SET value=value+1 WHERE name='review'")
+	}
+	if initial {
+		if _, err := l.DB.ExecContext(ctx, `DELETE FROM dino_tasks WHERE hash NOT IN (SELECT f.hash FROM assets a JOIN files f ON f.hash=a.primary_hash WHERE a.trashed_at='' AND f.status='ready' AND f.mime LIKE 'image/%')`); err != nil {
+			return nil, nil, err
+		}
+	}
+	if len(dirty) == 512 {
+		select {
+		case l.dinoWake <- struct{}{}:
+		default:
+		}
+	}
+
+	rows, err := l.DB.QueryContext(ctx, "SELECT hash,thumbnail FROM dino_tasks WHERE retry_at<=? ORDER BY queued_at,hash LIMIT 16", now())
 	if err != nil {
 		return nil, nil, err
 	}
-	old := l.dinoRecordSnapshot()
-	records := make(map[string]dinoRecord, len(catalog))
 	pending := []dinoItem{}
-	ready, failed := 0, 0
-	for _, item := range catalog {
-		record, cached := old[item.Hash]
-		if !cached || record.Thumbnail != item.Thumbnail {
-			if data, e := os.ReadFile(l.Derived(item.Hash, dinoSuffix)); e == nil {
-				_ = json.Unmarshal(data, &record)
-			}
+	for rows.Next() {
+		var item dinoItem
+		if err = rows.Scan(&item.Hash, &item.Thumbnail); err != nil {
+			break
 		}
-		valid := record.Model == dinoModel && record.Hash == item.Hash && record.Thumbnail == item.Thumbnail
-		if valid {
-			records[item.Hash] = record
-			if record.Error == "" {
-				ready++
-				continue
-			}
-			failed++
-			at, _ := time.Parse(time.RFC3339Nano, record.CreatedAt)
-			if time.Since(at) < 5*time.Minute {
-				continue
-			}
-		}
+		item.Path = l.Derived(item.Hash, "-thumb.jpg")
 		pending = append(pending, item)
 	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
 	l.dinoMu.Lock()
-	l.dinoRecords = records
-	l.dinoStatus.Total, l.dinoStatus.Ready = len(catalog), ready
-	l.dinoStatus.Pending, l.dinoStatus.Errors = len(catalog)-ready, failed
+	l.dinoStatus.Total = len(l.dinoItems)
+	l.dinoStatus.Pending = l.dinoStatus.Total - l.dinoStatus.Ready
 	l.dinoMu.Unlock()
-	return catalog, pending, nil
+	return nil, pending, err
 }
 
 func startDINO() (*dinoProcess, error) {
@@ -282,8 +426,29 @@ func (l *Library) persistDINO(ctx context.Context, item dinoItem, output dinoOut
 		if l.dinoRecords == nil {
 			l.dinoRecords = map[string]dinoRecord{}
 		}
+		old, ok := l.dinoRecords[item.Hash]
+		if ok {
+			if old.Error == "" {
+				l.dinoStatus.Ready--
+			} else {
+				l.dinoStatus.Errors--
+			}
+		}
+		if record.Error == "" {
+			l.dinoStatus.Ready++
+		} else {
+			l.dinoStatus.Errors++
+		}
 		l.dinoRecords[item.Hash] = record
 		l.dinoMu.Unlock()
+	}
+	if err == nil {
+		if record.Error == "" {
+			_, err = l.DB.ExecContext(ctx, "DELETE FROM dino_tasks WHERE hash=?", item.Hash)
+		} else {
+			_, err = l.DB.ExecContext(ctx, "UPDATE dino_tasks SET retry_at=? WHERE hash=?", time.Now().Add(5*time.Minute).Format(time.RFC3339Nano), item.Hash)
+		}
+		_, _ = l.DB.ExecContext(ctx, "UPDATE catalog_versions SET value=value+1 WHERE name='review'")
 	}
 	return err
 }
@@ -338,7 +503,19 @@ func (l *Library) runDINOBatch(parent context.Context, worker **dinoProcess, cat
 			return err
 		}
 	}
-	request := map[string]any{"records": filepath.Join(l.Root, "derived"), "catalog": catalog, "items": items}
+	l.dinoMu.RLock()
+	changes := make([]dinoItem, 0, len(l.dinoDelta))
+	for _, item := range l.dinoDelta {
+		changes = append(changes, item)
+	}
+	if !(*worker).catalogReady {
+		changes = make([]dinoItem, 0, len(l.dinoItems))
+		for _, item := range l.dinoItems {
+			changes = append(changes, item)
+		}
+	}
+	l.dinoMu.RUnlock()
+	request := map[string]any{"records": filepath.Join(l.Root, "derived"), "catalog": changes, "reset": !(*worker).catalogReady, "items": items}
 	if err := json.NewEncoder((*worker).input).Encode(request); err != nil {
 		(*worker).stop()
 		*worker = nil
@@ -366,6 +543,10 @@ func (l *Library) runDINOBatch(parent context.Context, worker **dinoProcess, cat
 	if len(response.Items) != len(items) {
 		return fmt.Errorf("DINO returned an incomplete batch")
 	}
+	(*worker).catalogReady = true
+	l.dinoMu.Lock()
+	l.dinoDelta = map[string]dinoItem{}
+	l.dinoMu.Unlock()
 	byHash := map[string]dinoItem{}
 	for _, item := range items {
 		byHash[item.Hash] = item
@@ -419,7 +600,7 @@ func (l *Library) dinoLoop(ctx context.Context) {
 	}
 	firstPending := time.Time{}
 	retry := time.Time{}
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		catalog, pending, err := l.refreshDINO(ctx)
@@ -456,10 +637,18 @@ func (l *Library) dinoLoop(ctx context.Context) {
 		l.dinoMu.Lock()
 		l.dinoStatus.State = state
 		l.dinoMu.Unlock()
+		var deadline <-chan time.Time
+		if err != nil || len(pending) > 0 || l.dinoSnapshot().Pending > 0 {
+			deadline = time.After(time.Second)
+		}
 		select {
 		case <-ctx.Done():
 			return
+		case <-l.dinoWake:
+		case <-deadline:
+			// Small queues need their batch/retry deadline; no catalog scan is performed.
 		case <-ticker.C:
+			_, _ = l.DB.ExecContext(ctx, "INSERT OR IGNORE INTO dino_dirty SELECT primary_hash FROM assets")
 		}
 	}
 }

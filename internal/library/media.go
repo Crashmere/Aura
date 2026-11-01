@@ -280,28 +280,24 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 			// Hash full decoded pixels and their interpretation. No resized or lossy hash triggers automatic grouping.
 			if decodeErr == nil {
 				header, he := command(ctx, "vipsheader", filepath.Join(work, "upright.v"))
-				_, re := command(ctx, "vips", "rawsave", filepath.Join(work, "upright.v"), filepath.Join(work, "pixels.raw"))
-				if he == nil && re == nil {
-					pixels, pe := os.Open(filepath.Join(work, "pixels.raw"))
-					if pe == nil {
-						sum := sha256.New()
-						description := strings.SplitN(string(header), ": ", 2)
-						if len(description) == 2 {
-							io.WriteString(sum, description[1])
+				if he == nil {
+					sum := sha256.New()
+					description := strings.SplitN(string(header), ": ", 2)
+					if len(description) == 2 {
+						io.WriteString(sum, description[1])
+					}
+					icc := map[string]any{}
+					for key, value := range meta {
+						if strings.HasPrefix(key, "ICC-") || strings.HasPrefix(key, "ICC_Profile:") {
+							icc[key] = value
 						}
-						// Color profiles affect the meaning of otherwise equal sample values.
-						icc := map[string]any{}
-						for k, v := range meta {
-							if strings.HasPrefix(k, "ICC-") || strings.HasPrefix(k, "ICC_Profile:") {
-								icc[k] = v
-							}
-						}
-						io.WriteString(sum, marshal(icc))
-						_, pe = io.Copy(sum, pixels)
-						pixels.Close()
-						if pe == nil {
-							f.PixelHash = hex.EncodeToString(sum.Sum(nil))
-						}
+					}
+					io.WriteString(sum, marshal(icc))
+					cmd := exec.CommandContext(ctx, "vips", "rawsave", filepath.Join(work, "upright.v"), "/dev/stdout")
+					cmd.Stdout = sum
+					cmd.Stderr = &limitedBuffer{max: 4096}
+					if cmd.Run() == nil {
+						f.PixelHash = hex.EncodeToString(sum.Sum(nil))
 					}
 				}
 			}
@@ -349,6 +345,9 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 	}
 	progress.step("catalog", "processing", nil)
 	result = l.publish(f)
+	if result == nil {
+		l.Notify()
+	}
 	progress.result("catalog", result)
 	return result
 }

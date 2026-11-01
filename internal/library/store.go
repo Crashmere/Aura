@@ -41,6 +41,13 @@ type Library struct {
 	dinoRecords      map[string]dinoRecord
 	dinoActive       *processingJob
 	dinoHashes       map[string]bool
+	dinoItems        map[string]dinoItem
+	dinoDelta        map[string]dinoItem
+	dinoWake         chan struct{}
+	facetMu          sync.Mutex
+	cacheMu          sync.Mutex
+	cache            map[string]catalogCache
+	cacheBuilds      sync.Map
 }
 
 type uploadLock struct {
@@ -173,6 +180,13 @@ CREATE TABLE IF NOT EXISTS album_assets (
  PRIMARY KEY(album_id,asset_id)
 );
 CREATE INDEX IF NOT EXISTS album_assets_asset ON album_assets(asset_id);
+CREATE INDEX IF NOT EXISTS decisions_action ON decisions(action,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS uploads_state_time ON uploads(state,created_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS observations_hash ON observations(hash,created_at,id);
+CREATE INDEX IF NOT EXISTS assets_favorite_time ON assets(favorite,trashed_at,captured_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS assets_kind_time ON assets(kind,trashed_at,captured_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS assets_primary ON assets(primary_hash);
+CREATE INDEX IF NOT EXISTS assets_day ON assets(trashed_at,substr(captured_at,1,10),captured_at DESC,id DESC);
 PRAGMA user_version=1;
 `
 
@@ -195,7 +209,11 @@ func Open(root string) (*Library, error) {
 		db.Close()
 		return nil, err
 	}
-	l := &Library{DB: db, Root: root, Wake: make(chan struct{}, 1)}
+	l := &Library{DB: db, Root: root, Wake: make(chan struct{}, 1), dinoWake: make(chan struct{}, 1), cache: map[string]catalogCache{}}
+	if err = l.initializeIndexes(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	limits := DefaultProcessingLimits()
 	_ = l.ConfigureProcessing(limits.Workers, limits.GPUOperations)
 	return l, nil
@@ -215,6 +233,10 @@ func (l *Library) Derived(hash, suffix string) string {
 func (l *Library) Notify() {
 	select {
 	case l.Wake <- struct{}{}:
+	default:
+	}
+	select {
+	case l.dinoWake <- struct{}{}:
 	default:
 	}
 }
@@ -253,8 +275,7 @@ func (l *Library) Files(asset string) ([]File, error) {
 
 const assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind,a.favorite,a.trashed_at,
  f.name,f.width,f.height,f.size,f.status,(SELECT count(*) FROM files v WHERE v.asset_id=a.id),
- EXISTS(SELECT 1 FROM decisions d,json_each(d.detail,'$.ids') p WHERE d.action='purge-request' AND p.value=a.id
- AND NOT EXISTS(SELECT 1 FROM decisions c WHERE c.action='purge-complete' AND json_extract(c.detail,'$.requestId')=d.id)),
+ EXISTS(SELECT 1 FROM deletion_pending p WHERE p.asset_id=a.id),
  CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END
  FROM assets a JOIN files f ON f.hash=a.primary_hash `
 

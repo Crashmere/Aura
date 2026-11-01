@@ -61,16 +61,14 @@ func deletedFailure(w http.ResponseWriter, e error) bool {
 
 func originalDeletion(q queryer, hash, source string) error {
 	var exists bool
-	if e := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM decisions d,json_each(d.detail,'$.hashes') h
- WHERE d.action='purge-request' AND h.value=?)`, hash).Scan(&exists); e != nil {
+	if e := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM deletion_hashes WHERE hash=?)`, hash).Scan(&exists); e != nil {
 		return e
 	}
 	if exists {
 		return &deletedOriginal{Scope: "hash", Hash: hash}
 	}
 	if source != "" {
-		if e := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM decisions d,json_each(d.detail,'$.sourceKeys') s
- WHERE d.action='purge-request' AND s.value=?)`, source).Scan(&exists); e != nil {
+		if e := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM deletion_sources WHERE source_key=?)`, source).Scan(&exists); e != nil {
 			return e
 		}
 		if exists {
@@ -82,10 +80,7 @@ func originalDeletion(q queryer, hash, source string) error {
 
 func assetDeletion(q queryer, id string) (string, error) {
 	var request string
-	e := q.QueryRow(`SELECT d.id FROM decisions d,json_each(d.detail,'$.ids') a
- WHERE d.action='purge-request' AND a.value=? AND NOT EXISTS
- (SELECT 1 FROM decisions c WHERE c.action='purge-complete' AND json_extract(c.detail,'$.requestId')=d.id)
- LIMIT 1`, id).Scan(&request)
+	e := q.QueryRow("SELECT request_id FROM deletion_pending WHERE asset_id=?", id).Scan(&request)
 	if e == sql.ErrNoRows {
 		return "", nil
 	}

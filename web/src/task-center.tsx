@@ -54,8 +54,8 @@ export function TaskCenter({ openUpload, openAsset, changed }: {
   const request = useRef(0);
   const refresh = useRef(() => {});
   const busy = useRef(false);
-  const loadedCount = useRef(50);
-  loadedCount.current = Math.max(50, tab === "processing" ? jobs.length : uploads.length);
+  const [page, setPage] = useState(0);
+  const cursors = useRef([""]);
 
   async function load(cursor = "", quiet = false) {
     if (busy.current) return;
@@ -67,29 +67,13 @@ export function TaskCenter({ openUpload, openAsset, changed }: {
       const params = new URLSearchParams({ paged: "true", limit: "50", status, ...(cursor ? { cursor } : {}) });
       if (tab === "uploads") {
         const data = await api<Page<PendingUpload>>("uploads?" + params);
-        while (!cursor && data.next && data.items.length < loadedCount.current) {
-          if (request.current !== key) return;
-          params.set("cursor", data.next);
-          const page = await api<Page<PendingUpload>>("uploads?" + params);
-          data.items.push(...page.items.filter(item => !data.items.some(old => old.id === item.id)));
-          if (page.next === data.next) break;
-          data.next = page.next;
-        }
         if (request.current !== key) return;
-        setUploads(old => cursor ? [...old, ...data.items.filter(item => !old.some(existing => existing.id === item.id))] : data.items);
+        setUploads(data.items);
         setNext(data.next);
       } else {
         const data = await api<JobPage>("jobs?" + params);
-        while (!cursor && data.next && data.items.length < loadedCount.current) {
-          if (request.current !== key) return;
-          params.set("cursor", data.next);
-          const page = await api<JobPage>("jobs?" + params);
-          data.items.push(...page.items.filter(item => !data.items.some(old => old.hash === item.hash)));
-          if (page.next === data.next) break;
-          data.next = page.next;
-        }
         if (request.current !== key) return;
-        setJobs(old => cursor ? [...old, ...data.items.filter(item => !old.some(existing => existing.hash === item.hash))] : data.items);
+        setJobs(data.items);
         setCounts(data.counts);
         setNext(data.next);
       }
@@ -99,10 +83,10 @@ export function TaskCenter({ openUpload, openAsset, changed }: {
       if (request.current === key) { busy.current = false; setLoading(false); }
     }
   }
-  refresh.current = () => { void load("", true); };
+  refresh.current = () => { void load(cursors.current[page] || "", true); };
   useEffect(() => {
     busy.current = false;
-    loadedCount.current = 50;
+    cursors.current = [""]; setPage(0);
     setJobs([]);
     setUploads([]);
     setNext("");
@@ -125,7 +109,7 @@ export function TaskCenter({ openUpload, openAsset, changed }: {
     setError("");
     try {
       await api("files/retry", { hashes });
-      await load();
+      await load(cursors.current[page] || "");
       changed();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -137,7 +121,7 @@ export function TaskCenter({ openUpload, openAsset, changed }: {
       <div className="task-tabs">
         <button className={tab === "processing" ? "active" : ""} onClick={() => setTab("processing")}><ImageIcon size={16} />原件与预览</button>
         <button className={tab === "uploads" ? "active" : ""} onClick={() => setTab("uploads")}><CloudUpload size={16} />未完成上传</button>
-        <button className="task-refresh" disabled={loading || retrying} onClick={() => void load()}><RefreshCw size={15} />刷新</button>
+        <button className="task-refresh" disabled={loading || retrying} onClick={() => void load(cursors.current[page] || "")}><RefreshCw size={15} />刷新</button>
       </div>
       {tab === "processing" ? (
         <>
@@ -148,7 +132,7 @@ export function TaskCenter({ openUpload, openAsset, changed }: {
           </div>
         </>
       ) : <p className="task-note">已接收的分片保留在服务器。重新选择同一原件可继续上传，不会重复保存原件。</p>}
-      {error && <div className="error-banner" role="alert">{error}<button className="button" onClick={() => void load()} disabled={loading}>重试</button></div>}
+      {error && <div className="error-banner" role="alert">{error}<button className="button" onClick={() => void load(cursors.current[page] || "")} disabled={loading}>重试</button></div>}
       <div className="task-list">
         {tab === "processing" ? jobs.map(job => (
           <TaskJob key={job.hash} job={job} retrying={retrying} retry={hashes => void retry(hashes)} openAsset={openAsset} />
@@ -162,7 +146,11 @@ export function TaskCenter({ openUpload, openAsset, changed }: {
       </div>
       {loading && <div className="loading-inline"><LoaderCircle className="spin" size={20} />正在加载任务</div>}
       {!loading && !error && !(tab === "processing" ? jobs.length : uploads.length) && <div className="task-empty"><CheckCheck size={28} /><p>{tab === "uploads" ? "没有未完成的上传" : status === "all" ? "最近 24 小时没有处理记录" : `没有${labels[status]}的资源`}</p></div>}
-      {next && <button className="button task-more" disabled={loading} onClick={() => void load(next)}>加载更多</button>}
+      {(next || page > 0) && <nav className="similar-pagination" aria-label="任务分页">
+        <button className="button" disabled={loading || page === 0} onClick={() => { setPage(page - 1); void load(cursors.current[page - 1]); }}>上一页</button>
+        <span>第 {page + 1} 页</span>
+        <button className="button" disabled={loading || !next} onClick={() => { cursors.current = [...cursors.current.slice(0,page + 1),next]; setPage(page + 1); void load(next); }}>下一页</button>
+      </nav>}
     </section>
   );
 }

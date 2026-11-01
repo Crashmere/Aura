@@ -5,6 +5,7 @@ import React, {
   useState,
   useSyncExternalStore,
 } from "react";
+import { VirtualGallery } from "./virtual-gallery";
 import { createRoot } from "react-dom/client";
 import {
   ArrowDownToLine,
@@ -175,7 +176,7 @@ function App() {
   const [actionError, setActionError] = useState("");
   const [deletionTargets, setDeletionTargets] = useState<Asset[] | null>(null);
   const mutationLock = useRef(false);
-  const uploading = useSyncExternalStore(uploads.subscribe, uploads.snapshot);
+  const uploading = useSyncExternalStore(uploads.subscribe, uploads.activitySnapshot);
   const refreshRef = useRef<(reconcile?: boolean) => Promise<void>>(() => Promise.resolve());
   const queryKey = useRef(0);
   const queryLoading = useRef(false);
@@ -257,8 +258,7 @@ function App() {
     const id = viewer?.id || galleryAnchor.current;
     galleryAnchor.current = viewer?.id || "";
     if (!id) return;
-    const center = () => document.querySelector<HTMLElement>(`.photo[data-asset-id="${CSS.escape(id)}"]`)
-      ?.scrollIntoView({ behavior: "instant", block: "center", inline: "nearest" });
+    const center = () => window.dispatchEvent(new CustomEvent("aura-gallery-scroll", { detail: id }));
     let frame = requestAnimationFrame(() => {
       center();
       // Browser back can restore the pre-viewer scroll after popstate.
@@ -290,21 +290,23 @@ function App() {
     setLoading(true);
     setError("");
     try {
-      const targetCount = preserveRange ? items.length : 0;
+      const refreshedIDs = new Set<string>();
       const readPage = async () => {
         const data = await api<Page<Asset>>("assets?" + params(append ? next : ""));
-        // Refresh the visible range so processing updates do not discard later pages.
-        while (!append && data.next && data.items.length < targetCount) {
-          if (key !== queryKey.current) return data;
-          const page = await api<Page<Asset>>("assets?" + params(data.next));
-          data.items.push(...page.items.filter(a => !data.items.some(b => b.id === a.id)));
-          if (page.next === data.next) break;
-          data.next = page.next;
+        if (preserveRange && !append) {
+          const mounted = [...document.querySelectorAll<HTMLElement>(".virtual-gallery [data-asset-id]")].map(node => node.dataset.assetId!);
+          [...items.slice(0, 120).map(item => item.id), ...mounted, ...(viewerId ? [viewerId] : []), ...selected].slice(0, 1000).forEach(id => refreshedIDs.add(id));
+          if (refreshedIDs.size) {
+            const values = new URLSearchParams(params()); values.set("ids", [...refreshedIDs].join(",")); values.set("limit", "1000");
+            const visible = await api<Page<Asset>>("assets?" + values);
+            const merged = new Map(data.items.map(item => [item.id, item])); visible.items.forEach(item => merged.set(item.id, item));
+            data.items = [...merged.values()];
+          }
         }
         return data;
       };
       const [data, stats, collections, timeline] = await Promise.all([
-        albumGallery || view === "jobs"
+        albumGallery || specialView
           ? Promise.resolve({ items: [] as Asset[], next: "" })
           : readPage(),
         append && info ? Promise.resolve(info) : api<Info>("info"),
@@ -312,19 +314,17 @@ function App() {
         append ? Promise.resolve({ months }) : albumGallery || specialView ? Promise.resolve({ months: [] } as Timeline) : api<Timeline>("timeline?" + new URLSearchParams({ view, q: query, ...(view === "albums" && albumId ? { album: albumId } : {}), ...filterParams(photoFilters) })),
       ]);
       if (key !== queryKey.current) return;
-      setItems((old) =>
-        append
-          ? [
-              ...old,
-              ...data.items.filter((a) => !old.some((b) => a.id === b.id)),
-            ]
-          : data.items,
-      );
-      setNext(data.next);
+      setItems(old => {
+        const merged = new Map<string, Asset>();
+        if (append || preserveRange) old.forEach(item => { if (!refreshedIDs.has(item.id)) merged.set(item.id, item); });
+        data.items.forEach(item => merged.set(item.id, item));
+        return [...merged.values()].sort((a,b) => b.capturedAt.localeCompare(a.capturedAt) || b.id.localeCompare(a.id));
+      });
+      if (!preserveRange || append || !items.length) setNext(data.next);
       setInfo(stats);
       setAlbums(collections);
       setMonths(timeline.months);
-      if (reconcile) setSelected(old => new Set([...old].filter(id => data.items.some(asset => asset.id === id && !asset.deletionPending))));
+      if (reconcile) { const cards = new Map(data.items.map(asset => [asset.id, asset])); setSelected(old => new Set([...old].filter(id => !refreshedIDs.has(id) || !!cards.get(id) && !cards.get(id)!.deletionPending))); }
     } catch (e) {
       if (key === queryKey.current) {
         failedLoad.current = append ? "append" : "refresh";
@@ -351,20 +351,7 @@ function App() {
       const data = await api<SimilarPage>("similar?" + new URLSearchParams({ source: similarSource, paged: "true", limit: similarSource === "dino" ? "20" : "50", ...(cursor ? { cursor } : {}) }));
       if (key !== queryKey.current) return;
       const pairs = data.items;
-      const ids = [...new Set(pairs.flatMap((p) => [p.left, p.right]))];
-      const assets: Record<string, Asset> = {};
-      for (let i = 0; i < ids.length; i += 8) {
-        await Promise.all(
-          ids.slice(i, i + 8).map(async (id) => {
-            try {
-              const d = await api<Detail>("assets/" + id);
-              assets[id] = d.asset;
-            } catch {
-              /* A concurrent merge can remove a candidate. */
-            }
-          }),
-        );
-      }
+      const assets = data.assets;
       if (key !== queryKey.current) return;
       setSimilar(old => append ? [...old, ...pairs.filter(pair => !old.some(previous => previous.left === pair.left && previous.right === pair.right))] : pairs);
       setSimilarNext(data.next);
@@ -651,9 +638,7 @@ function App() {
       mutationLock.current = false;
     }
   }
-  const completed = uploading.items.filter((i) =>
-    ["done", "duplicate", "trashed", "skipped"].includes(i.state),
-  ).length;
+  const completed = uploading.completed;
   const month = from.slice(0, 7);
   const range = monthRange(month);
   const selectedMonth = from === range.from && to === range.to ? month : from || to ? "custom" : "";
@@ -1155,34 +1140,15 @@ function App() {
             </Empty>
           ) : (
             <div {...galleryZoom.timelineProps}>
-              {groups.map((group) => (
-                <section className="day-group" key={group.date} style={{ "--group-rows": Math.ceil(group.items.length / galleryZoom.columns), "--group-mobile-rows": Math.ceil(group.items.length / galleryZoom.mobileColumns) } as React.CSSProperties}>
-                  <div className="day-heading">
-                    <h2>
-                      {displayDate(group.date + "T12:00:00")}
-                      <span>{group.date.slice(0, 4)}</span>
-                    </h2>
-                    <button className="day-select" disabled={actionBusy || group.items.every(a => a.deletionPending)} aria-pressed={group.items.filter(a => !a.deletionPending).every(a => selected.has(a.id))} onClick={() => toggleGroup(group.items)} title="选择或取消选择当天照片">
-                      <span>{group.items.length} 项</span>
-                      <span className="day-select-label">{group.items.filter(a => !a.deletionPending).every(a => selected.has(a.id)) ? "取消选择" : "选择当天"}</span>
-                      <CircleCheck size={16} />
-                    </button>
-                  </div>
-                  <div className="photo-grid">
-                    {group.items.map((a) => (
-                      <Photo
-                        key={a.id}
-                        asset={a}
-                        selected={selected.has(a.id)}
-                        disabled={actionBusy}
-                        select={event => toggle(a.id, event.shiftKey)}
-                        selecting={selecting}
-                        onClick={event => selecting || event.shiftKey ? toggle(a.id, event.shiftKey) : setViewer(a)}
-                      />
-                    ))}
-                  </div>
-                </section>
-              ))}
+              <VirtualGallery groups={groups} columns={galleryZoom.columns} mobileColumns={galleryZoom.mobileColumns}
+                heading={group => <div className="day-heading">
+                  <h2>{displayDate(group.date + "T12:00:00")}<span>{group.date.slice(0,4)}</span></h2>
+                  <button className="day-select" disabled={actionBusy || group.items.every(a => a.deletionPending)} aria-pressed={group.items.filter(a => !a.deletionPending).every(a => selected.has(a.id))} onClick={() => toggleGroup(group.items)} title="选择或取消选择当天照片">
+                    <span>{group.items.length} 项</span><span className="day-select-label">{group.items.filter(a => !a.deletionPending).every(a => selected.has(a.id)) ? "取消选择" : "选择当天"}</span><CircleCheck size={16}/>
+                  </button>
+                </div>}
+                photo={a => <Photo key={a.id} asset={a} selected={selected.has(a.id)} disabled={actionBusy} select={event => toggle(a.id,event.shiftKey)} selecting={selecting} onClick={event => selecting || event.shiftKey ? toggle(a.id,event.shiftKey) : setViewer(a)}/>}
+              />
             </div>
           )}
           <div ref={more} className="load-more">

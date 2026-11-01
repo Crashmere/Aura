@@ -185,6 +185,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     private var deletedSources = Set<String>()
     private var processingCursor = 0
     private var lastStateWrite = Date.distantPast
+    private var activePrefetch: ResourceExport?
     private var activeExport: ResourceExport?
     private var resourceProgressID = UUID()
     private var exportedBytes = 0
@@ -352,7 +353,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     func pauseUpload() {
         running = false
         UserDefaults.standard.set(false, forKey: "continuous")
-        activeExport?.cancel()
+        activeExport?.cancel(); activePrefetch?.cancel()
         status = busy ? "当前分片完成后暂停" : "已暂停"
         #if os(iOS)
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: "app.aura.photos.refresh")
@@ -376,7 +377,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
     }
     private func policyChanged() {
         if let reason = uploadPauseReason {
-            activeExport?.cancel()
+            activeExport?.cancel(); activePrefetch?.cancel()
             if running { status = reason }
         } else if running { rescan() }
         #if os(iOS)
@@ -451,6 +452,31 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         } else {
             assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(pendingAssetIDs), options: options)
         }
+        var prefetched: (key: String, file: URL, task: Task<(Int, String), Error>)?
+        func prepareNext(after key: String, at index: Int) {
+            guard prefetched == nil, running, uploadPauseReason == nil else { return }
+            var passedCurrent = false
+            for candidateIndex in index..<min(assets.count, index + 65) {
+                let candidate = assets.object(at: candidateIndex)
+                if sourceDeleted(nativeSourceKey(candidate.localIdentifier)) { continue }
+                for resource in PHAssetResource.assetResources(for: candidate) {
+                    let nextKey = receiptKey(asset: candidate, resource: resource)
+                    if !passedCurrent { if nextKey == key { passedCurrent = true }; continue }
+                    if receipts[nextKey] != nil { continue }
+                    let file = cache.appendingPathComponent(UUID().uuidString + "-" + resource.originalFilename)
+                    let task = Task { () throws -> (Int, String) in
+                        try await export(resource, to: file, reportProgress: false)
+                        try Task.checkCancellation()
+                        let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
+                        let checksumTask = Task.detached { try Self.checksum(file) }
+                        let hash = try await withTaskCancellationHandler(operation: { try await checksumTask.value }, onCancel: { checksumTask.cancel() })
+                        return (size, hash)
+                    }
+                    prefetched = (nextKey, file, task)
+                    return
+                }
+            }
+        }
         for index in 0..<assets.count {
             if index.isMultiple(of: 64) { await Task.yield() }
             guard running && !Task.isCancelled && uploadPauseReason == nil else { break }
@@ -476,24 +502,33 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                     uploadSteps = UploadStep.allCases.map { UploadStepProgress(id: $0) }
                     status = "读取原件 · \(index + 1) / \(assets.count)"
                     beginStep(.export, detail: "等待系统提供原件")
-                    let file = cache.appendingPathComponent(UUID().uuidString + "-" + resource.originalFilename)
+                    let ready = prefetched?.key == key ? prefetched : nil
+                    if ready != nil { prefetched = nil }
+                    let file = ready?.file ?? cache.appendingPathComponent(UUID().uuidString + "-" + resource.originalFilename)
                     defer { try? FileManager.default.removeItem(at: file) }
-                    try await export(resource, to: file)
-                    let size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
-                    finishStep(.export, detail: Self.bytes(size))
-                    guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
-                    status = "校验原件"
-                    stage = .checksum
-                    beginStep(.checksum)
-                    let progressID = resourceProgressID
-                    let checksumProgress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
-                        Task { @MainActor in
-                            self?.updateStep(.checksum, fraction: Double(done) / Double(max(1, total)),
-                                detail: "\(Self.bytes(done)) / \(Self.bytes(total))", resourceID: progressID)
+                    let size: Int
+                    let checksum: String
+                    if let ready {
+                        (size, checksum) = try await withTaskCancellationHandler(operation: { try await ready.task.value }, onCancel: { ready.task.cancel() })
+                        finishStep(.export, detail: Self.bytes(size))
+                        beginStep(.checksum)
+                    } else {
+                        try await export(resource, to: file)
+                        size = (try file.resourceValues(forKeys: [.fileSizeKey])).fileSize!
+                        finishStep(.export, detail: Self.bytes(size))
+                        guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
+                        status = "校验原件"
+                        stage = .checksum
+                        beginStep(.checksum)
+                        let progressID = resourceProgressID
+                        let checksumProgress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+                            Task { @MainActor in
+                                self?.updateStep(.checksum, fraction: Double(done) / Double(max(1,total)), detail: "\(Self.bytes(done)) / \(Self.bytes(total))", resourceID: progressID)
+                            }
                         }
+                        let checksumTask = Task.detached { try Self.checksum(file, progress: checksumProgress) }
+                        checksum = try await withTaskCancellationHandler(operation: { try await checksumTask.value }, onCancel: { checksumTask.cancel() })
                     }
-                    let checksumTask = Task.detached { try Self.checksum(file, progress: checksumProgress) }
-                    let checksum = try await withTaskCancellationHandler(operation: { try await checksumTask.value }, onCancel: { checksumTask.cancel() })
                     finishStep(.checksum, detail: Self.bytes(size))
                     currentHash = checksum
                     guard running && !Task.isCancelled && uploadPauseReason == nil else { pendingAssetIDs.insert(asset.localIdentifier); break }
@@ -502,6 +537,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                     if let date = asset.creationDate { hints["capturedAt"] = ISO8601DateFormatter().string(from: date) }
                     if let date = asset.modificationDate { hints["modifiedAt"] = ISO8601DateFormatter().string(from: date) }
                     if let location = asset.location { hints["latitude"] = location.coordinate.latitude; hints["longitude"] = location.coordinate.longitude }
+                    prepareNext(after: key, at: index)
                     stage = .upload
                     switch try await transfer(file: file, hints: hints) {
                     case let .accepted(duplicate, result):
@@ -548,6 +584,11 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
             updateSummary(assetID: asset.localIdentifier, keys: keys)
             saveState()
             if !connected { break }
+        }
+        if let pending = prefetched {
+            pending.task.cancel()
+            _ = try? await pending.task.value
+            try? FileManager.default.removeItem(at: pending.file)
         }
         guard running && !Task.isCancelled && uploadPauseReason == nil && connected else { return }
         await refreshProcessing()
@@ -604,26 +645,26 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
         }
         summaries[assetID] = value
     }
-    private func export(_ resource: PHAssetResource, to file: URL) async throws {
+    private func export(_ resource: PHAssetResource, to file: URL, reportProgress: Bool = true) async throws {
         guard uploadPauseReason == nil else { throw CancellationError() }
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
         let progressID = resourceProgressID
         options.progressHandler = { [weak self] value in
             Task { @MainActor in
-                guard let self, self.exportedBytes == 0 else { return }
+                guard reportProgress, let self, self.exportedBytes == 0 else { return }
                 self.updateStep(.export, fraction: value, detail: "从 iCloud 下载原件", resourceID: progressID)
             }
         }
         let writer = try ResourceExport(file: file) { [weak self] bytes in
             Task { @MainActor in
-                guard let self, self.resourceProgressID == progressID else { return }
+                guard reportProgress, let self, self.resourceProgressID == progressID else { return }
                 self.exportedBytes = bytes
                 self.updateStep(.export, fraction: nil, detail: "已读取 \(Self.bytes(bytes))", resourceID: progressID)
             }
         }
-        activeExport = writer
-        defer { activeExport = nil }
+        if reportProgress { activeExport = writer } else { activePrefetch = writer }
+        defer { if reportProgress { activeExport = nil } else { activePrefetch = nil } }
         try await withTaskCancellationHandler(operation: {
             try await writer.write(resource: resource, options: options)
         }, onCancel: { writer.cancel() })

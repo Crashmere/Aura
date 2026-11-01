@@ -43,41 +43,44 @@ func (l *Library) Album(id string) (Album, error) {
 }
 
 func (l *Library) listAlbums(w http.ResponseWriter, r *http.Request) {
-	rows, err := l.DB.Query(albumSelect + "ORDER BY al.created_at DESC,al.id DESC")
+	value, err := l.cachedCatalog(r.Context(), "albums", "library", func() (any, error) {
+		rows, err := l.DB.Query(albumSelect + "ORDER BY al.created_at DESC,al.id DESC")
+		if err != nil {
+			return nil, err
+		}
+		albums, covers := []Album{}, []string{}
+		for rows.Next() {
+			a, cover, e := scanAlbum(rows)
+			if e != nil {
+				rows.Close()
+				return nil, e
+			}
+			albums = append(albums, a)
+			covers = append(covers, cover)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		// Close the catalog cursor before fetching covers on the single connection.
+		for i, id := range covers {
+			if id == "" {
+				continue
+			}
+			a, e := l.Asset(id)
+			if e != nil {
+				return nil, e
+			}
+			albums[i].Cover = &a
+		}
+		return albums, nil
+	})
 	if err != nil {
 		fail(w, 500, err)
 		return
 	}
-	albums, covers := []Album{}, []string{}
-	for rows.Next() {
-		a, cover, e := scanAlbum(rows)
-		if e != nil {
-			rows.Close()
-			fail(w, 500, e)
-			return
-		}
-		albums = append(albums, a)
-		covers = append(covers, cover)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		fail(w, 500, err)
-		return
-	}
-	// Close the catalog cursor before fetching covers on the single connection.
-	for i, id := range covers {
-		if id == "" {
-			continue
-		}
-		a, e := l.Asset(id)
-		if e != nil {
-			fail(w, 500, e)
-			return
-		}
-		albums[i].Cover = &a
-	}
-	writeJSON(w, 200, albums)
+	writeJSON(w, 200, value)
 }
 
 func (l *Library) albumDetail(w http.ResponseWriter, r *http.Request) {

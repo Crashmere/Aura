@@ -53,7 +53,13 @@ func (l *Library) Worker(ctx context.Context) {
 		slog.Error("recover processing jobs", "error", e)
 		return
 	}
+	facetStopped := make(chan struct{})
+	go func() { defer close(facetStopped); l.facetLoop(ctx) }()
+	defer func() { <-facetStopped }()
 	dinoStopped := make(chan struct{})
+	reviewStopped := make(chan struct{})
+	go func() { defer close(reviewStopped); l.reviewIndexLoop(ctx) }()
+	defer func() { <-reviewStopped }()
 	go func() {
 		defer close(dinoStopped)
 		l.dinoLoop(ctx)
@@ -70,8 +76,7 @@ func (l *Library) Worker(ctx context.Context) {
 	for ctx.Err() == nil {
 		_ = l.recoverDeletions(ctx, false)
 		if len(assigned) < l.ProcessingLimits.Workers {
-			rows, err := l.DB.Query(`SELECT hash FROM files WHERE status='queued' AND NOT EXISTS
- (SELECT 1 FROM decisions d,json_each(d.detail,'$.hashes') h WHERE d.action='purge-request' AND h.value=files.hash)
+			rows, err := l.DB.Query(`SELECT hash FROM files WHERE status='queued' AND NOT EXISTS(SELECT 1 FROM deletion_hashes p WHERE p.hash=files.hash)
  ORDER BY created_at,hash LIMIT ?`, l.ProcessingLimits.Workers)
 			hashes := []string{}
 			if err == nil {

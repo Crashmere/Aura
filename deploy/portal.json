@@ -109,7 +109,7 @@
     {
       "method": "GET",
       "path": "/api/assets",
-      "description": "按相片集、类型、拍摄日期、关键词查询照片；游标分页"
+      "description": "按相片集、类型、日期、关键词和设备索引查询照片；游标分页或按指定编号批量刷新卡片"
     },
     {
       "method": "GET",
@@ -204,7 +204,7 @@
     {
       "method": "GET",
       "path": "/api/similar",
-      "description": "分别查询算法判定与 DINO 智能推荐，附异步分析进度；排除已忽略项目，仅供人工核对"
+      "description": "分别分页查询算法判定与 DINO 智能推荐，复用候选索引并附照片卡片和异步进度；仅供人工核对"
     },
     {
       "method": "POST",
@@ -219,7 +219,7 @@
     {
       "method": "GET",
       "path": "/api/jobs",
-      "description": "分页持久处理历史、状态数量与失败原因"
+      "description": "按活动时间索引分页查询持久处理记录、状态数量与失败原因"
     },
     {
       "method": "POST",
@@ -249,7 +249,7 @@
     {
       "method": "PUT",
       "path": "/api/uploads/{id}",
-      "description": "写入并同步最大 8 MiB 的分片"
+      "description": "写入并同步最大 128 MiB 的分片"
     },
     {
       "method": "POST",

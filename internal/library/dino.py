@@ -29,6 +29,36 @@ except RuntimeError as error:
     device = "cpu"
     model.to(device)
 cached = {}
+keys = []
+positions = {}
+matrix = np.empty((1024,384), dtype=np.float32)
+
+
+def remove_vector(key):
+    index = positions.pop(key, None)
+    if index is None:
+        return
+    last = keys.pop()
+    if index < len(keys):
+        keys[index] = last
+        matrix[index] = matrix[len(keys)]
+        positions[last] = index
+    cached.pop(key, None)
+
+
+def store_vector(key, stamp, vector):
+    global matrix
+    index = positions.get(key)
+    if index is None:
+        index = len(keys)
+        if index == len(matrix):
+            larger = np.empty((max(1024,len(matrix)*2),384),dtype=np.float32)
+            larger[:index] = matrix[:index]
+            matrix = larger
+        positions[key] = index
+        keys.append(key)
+    matrix[index] = vector
+    cached[key] = stamp
 mean = np.array([.485, .456, .406], dtype=np.float32)
 std = np.array([.229, .224, .225], dtype=np.float32)
 
@@ -68,18 +98,23 @@ def infer(tensors):
 
 def process(request):
     records = Path(request["records"])
-    catalog = {item["hash"]: item["thumbnail"] for item in request["catalog"]}
-    for key in list(cached):
-        if catalog.get(key) != cached[key][0]:
-            del cached[key]
-    for key, stamp in catalog.items():
-        if key in cached:
+    if request.get("reset"):
+        cached.clear()
+        keys.clear()
+        positions.clear()
+    for item in request["catalog"]:
+        key, stamp = item["hash"], item["thumbnail"]
+        if not stamp:
+            remove_vector(key)
             continue
+        if cached.get(key) == stamp:
+            continue
+        remove_vector(key)
         try:
             record = json.loads((records / f"{key}-dino-vits14-224-v1.json").read_text())
             vector = np.asarray(record["vector"], dtype=np.float32)
             if record["model"] == MODEL and record["thumbnail"] == stamp and vector.shape == (384,) and np.isfinite(vector).all():
-                cached[key] = (stamp, vector)
+                store_vector(key, stamp, vector)
         except (OSError, ValueError, KeyError):
             pass
     outputs, tensors, items = [], [], []
@@ -94,13 +129,11 @@ def process(request):
         features, fallback_note = infer(tensors)
         note = fallback_note or note
         for item, vector in zip(items, features):
-            cached[item["hash"]] = (item["thumbnail"], vector)
-        keys = sorted(cached)
-        matrix = np.stack([cached[key][1] for key in keys])
+            store_vector(item["hash"], item["thumbnail"], vector)
         # CPU scores reuse normalized vectors; retrieval does not run the model again.
-        scores = features @ matrix.T
+        scores = features @ matrix[:len(keys)].T
         for item, vector, row in zip(items, features, scores):
-            row[keys.index(item["hash"])] = -2
+            row[positions[item["hash"]]] = -2
             count = min(20, len(keys))
             best = np.argpartition(-row, count - 1)[:count]
             best = sorted(best, key=lambda index: (-float(row[index]), keys[index]))

@@ -43,6 +43,9 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 				}
 			}
 			next.ServeHTTP(w, r)
+			if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
+				l.Notify()
+			}
 		})
 	})
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -137,23 +140,35 @@ func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "Aura", "version": "0.3.0", "chunkSize": chunkSize, "processingConcurrency": l.ProcessingLimits,
 		"similarityIndex": l.dinoSnapshot(),
 		"capabilities":    map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true}}
-	counts := map[string]string{
-		"total": "SELECT count(*) FROM assets WHERE trashed_at=''", "favorites": "SELECT count(*) FROM assets WHERE favorite=1 AND trashed_at=''",
-		"live": "SELECT count(*) FROM assets WHERE kind='live' AND trashed_at=''", "videos": "SELECT count(*) FROM assets WHERE kind='video' AND trashed_at=''",
-		"trash": "SELECT count(*) FROM assets WHERE trashed_at!=''", "originals": "SELECT count(*) FROM files", "bytes": "SELECT COALESCE(sum(size),0) FROM files",
-		"queued": "SELECT count(*) FROM files WHERE status IN ('queued','processing')", "errors": "SELECT count(*) FROM files WHERE status='error'",
-		"grouped": "SELECT count(*) FROM assets a WHERE a.trashed_at='' AND (SELECT count(*) FROM files f WHERE f.asset_id=a.id AND f.mime LIKE 'image/%')>1",
-		"pendingDeletions": `SELECT count(DISTINCT p.value) FROM decisions d,json_each(d.detail,'$.ids') p WHERE d.action='purge-request'
- AND NOT EXISTS(SELECT 1 FROM decisions c WHERE c.action='purge-complete' AND json_extract(c.detail,'$.requestId')=d.id)`,
-	}
-	for k, q := range counts {
-		var n int64
-		if e := l.DB.QueryRow(q).Scan(&n); e != nil {
-			fail(w, 500, e)
-			return
+	value, err := l.cachedCatalog(r.Context(), "info", "library", func() (any, error) {
+		values := map[string]int64{}
+		counts := map[string]string{
+			"total": "SELECT count(*) FROM assets WHERE trashed_at=''", "favorites": "SELECT count(*) FROM assets WHERE favorite=1 AND trashed_at=''",
+			"live": "SELECT count(*) FROM assets WHERE kind='live' AND trashed_at=''", "videos": "SELECT count(*) FROM assets WHERE kind='video' AND trashed_at=''",
+			"trash": "SELECT count(*) FROM assets WHERE trashed_at!=''", "originals": "SELECT count(*) FROM files", "bytes": "SELECT COALESCE(sum(size),0) FROM files",
+			"queued": "SELECT count(*) FROM files WHERE status IN ('queued','processing')", "errors": "SELECT count(*) FROM files WHERE status='error'",
+			"grouped":          "SELECT count(*) FROM assets a WHERE a.trashed_at='' AND (SELECT count(*) FROM files f WHERE f.asset_id=a.id AND f.mime LIKE 'image/%')>1",
+			"pendingDeletions": `SELECT count(*) FROM deletion_pending`,
 		}
-		out[k] = n
+		for k, q := range counts {
+			var n int64
+			if e := l.DB.QueryRow(q).Scan(&n); e != nil {
+				return nil, e
+			}
+			values[k] = n
+		}
+		return values, nil
+	})
+	if err != nil {
+		fail(w, 500, err)
+		return
 	}
+	for key, value := range value.(map[string]int64) {
+		out[key] = value
+	}
+	revision, _ := l.revision(r.Context(), "library")
+	out["revision"] = revision
+
 	writeJSON(w, 200, out)
 }
 func (l *Library) list(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +177,28 @@ func (l *Library) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := pageLimit(q, 120, 240)
+	if raw := q.Get("ids"); raw != "" {
+		ids := strings.Split(raw, ",")
+		if len(ids) > 1000 {
+			fail(w, 400, "每次最多刷新 1000 项")
+			return
+		}
+		for _, id := range ids {
+			if !validID.MatchString(id) {
+				fail(w, 400, "照片编号无效")
+				return
+			}
+		}
+		where += " AND a.id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	maximum := 240
+	if q.Get("ids") != "" {
+		maximum = 1000
+	}
+	limit := pageLimit(q, 120, maximum)
 	date, id, ok := pageCursor(w, q.Get("cursor"))
 	if !ok {
 		return

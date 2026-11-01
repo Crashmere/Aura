@@ -96,7 +96,7 @@ Camera, lens, and GPS metadata recognize exact tag names and colon-prefixed grou
 
 Cursor pagination sorts by capture date and asset ID descending. Pass the returned cursor unchanged with the same filters; reset it when filters change. The timeline returns calendar-month keys such as `2026-10`, newest first, counting matching logical items across all pages and ignoring `cursor` and `limit`. A month picker can omit `from` and `to` while retaining every other filter, including import dates, then set the selected month's inclusive capture-date bounds. Library mutations refresh month counts along with items and ordinary counts. The web interface no longer exposes favorites; the legacy API field, filter, and native import hints remain compatible.
 
-For example, `/api/assets?kind=live&format=heic&location=with&versions=single&minMP=12&addedFrom=2026-10-01&limit=24` lists matching Live Photos; `/api/timeline` with the same filter parameters counts them by capture month. These read-only filters use the existing catalog and resource/membership indexes, without a schema migration or materialized metadata writes.
+For example, `/api/assets?kind=live&format=heic&location=with&versions=single&minMP=12&addedFrom=2026-10-01&limit=24` lists matching Live Photos; `/api/timeline` with the same filter parameters counts them by capture month. These read-only endpoints use catalog/resource indexes and rebuildable metadata projections. Pending projection updates are synchronized before filtering; existing original metadata is not rewritten.
 
 ## Deletion and restore
 
@@ -150,3 +150,13 @@ NAS backup and recovery are agent-operated through server-operations tooling. Po
 `GET` and `HEAD /media/{sha256}/{kind}` accept `original`, `thumb`, `preview`, and `play`. All are protected by Portal. Original downloads use the original filename; JPEG previews and MP4 playback support standard HTTP Range requests. Successful media responses use `Cache-Control: private, max-age=86400`, `Last-Modified`, and an ETag. Original ETags identify their SHA-256; derivative ETags include the opened file's size and nanosecond modification time so rebuilt bytes have a new validator. Conditional GET/HEAD can return 304; matching `If-Range` requests return the selected bytes, while an obsolete validator sends the full representation. Media failures use `no-store`. Browser caches can retain a fresh representation for up to 24 hours; explicit retries use a new request URL. Missing derivatives can be requeued from the jobs interface or by requesting a missing derivative of a ready resource.
 
 Permanent deletion is limited to the confirmed selected-trash protocol above; media reads do not delete originals. Export/import of the catalog for migration is a maintenance operation, described in [Operations](OPERATIONS.md).
+
+## Indexed catalog and bounded refresh
+
+`GET /api/info` includes a numeric `revision` for the catalog. Additive SQLite projections track metadata filters, activity timestamps, deletion guards and DINO pending work; authoritative originals and decisions are retained. Equipment options and summaries reuse cached results until their dependencies change.
+
+`GET /api/assets?ids=<comma-separated-asset-ids>&limit=1000` refreshes at most 1,000 selected cards with the same visibility/filter rules as the normal list. Omitted IDs no longer match that filter or visibility state. Normal list pages default to 120 with a maximum of 240; ID refreshes allow up to 1,000. Consumers should refresh a bounded visible range rather than rereading every previously loaded page.
+
+Paged `GET /api/similar` responses contain `assets`, a map from candidate asset ID to its card projection, alongside `items`, `next` and the DINO `index` where applicable. DINO pages reuse an ordered candidate snapshot until the review/catalog revision changes. The twenty-pair product pagination and existing cursor formats remain supported. dHash pages reuse a five-block fingerprint index and apply the exact distance/aspect gate.
+
+Text searches retain literal substring semantics. A trigram index narrows suitable searches of at least three characters; the original escaped predicate verifies candidates. Short or escaped-wildcard searches use the existing predicate directly.

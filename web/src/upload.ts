@@ -67,8 +67,10 @@ const listeners = new Set<() => void>();
 let active = false;
 let directory: Directory | undefined;
 let timer: number | undefined;
+let emission: ReturnType<typeof setTimeout> | undefined;
 const emit = () => {
-  state = { ...state, items: [...state.items] };
+  clearTimeout(emission); emission = undefined;
+  state = { ...state };
   listeners.forEach((fn) => fn());
 };
 export const subscribe = (fn: () => void) => {
@@ -78,6 +80,14 @@ export const subscribe = (fn: () => void) => {
   };
 };
 export const snapshot = () => state;
+let activity = { running: false, scanning: false, total: 0, completed: 0, items: state.items };
+export const activitySnapshot = () => {
+  let completed = 0;
+  for (const item of state.items) if (["done", "duplicate", "trashed", "skipped"].includes(item.state)) completed++;
+  if (activity.running !== state.running || activity.scanning !== state.scanning || activity.total !== state.items.length || activity.completed !== completed) activity = { running: state.running, scanning: state.scanning, total: state.items.length, completed, items: state.items };
+  return activity;
+};
+const emitProgress = () => { if (!emission) emission = setTimeout(emit, 120); };
 export function configure(from: string, to: string) {
   state.from = from;
   state.to = to;
@@ -204,7 +214,7 @@ async function fileDate(file: File): Promise<Date> {
   }
   return new Date(file.lastModified);
 }
-async function upload(item: UploadItem) {
+async function readOriginal(item: UploadItem) {
   item.state = "reading";
   item.error = undefined;
   emit();
@@ -213,9 +223,14 @@ async function upload(item: UploadItem) {
   // The server makes the final range decision from original metadata; QuickTime/HEIC browser parsing is not authoritative.
   const hash = await hashFile(item.file, (n) => {
     item.progress = n * 0.05;
-    emit();
+    emitProgress();
   });
   item.hash = hash;
+  return { date, hash };
+}
+async function upload(item: UploadItem, prepared: Promise<{ date: Date; hash: string }>) {
+  const { date, hash } = await prepared;
+  if (state.paused) { item.state = "waiting"; emit(); return; }
   let session = await api<Session>("uploads", {
     hash,
     name: item.file.name,
@@ -272,7 +287,7 @@ async function upload(item: UploadItem) {
       offset = data.offset;
       failures = 0;
       item.progress = 0.05 + (0.95 * offset) / item.file.size;
-      emit();
+      emitProgress();
     } catch (e) {
       if (isOriginalDeleted(e)) throw e;
       if (++failures > 3) throw e;
@@ -310,20 +325,30 @@ async function run() {
   } catch {
     /* The upload also works when wake lock is unavailable. */
   }
+  const prepared = new Map<string, Promise<{ date: Date; hash: string }>>();
+  function prepare(item: UploadItem) {
+    const promise = readOriginal(item); promise.catch(() => {}); prepared.set(item.id, promise); return promise;
+  }
   try {
     while (!state.paused) {
-      const item = state.items.find((i) => i.state === "waiting");
+      const item = state.items.find((i) => i.state === "waiting" || prepared.has(i.id));
       if (!item) break;
       try {
-        await upload(item);
+        const reading = prepared.get(item.id) || prepare(item);
+        await reading;
+        const next = state.items.find(candidate => candidate !== item && candidate.state === "waiting");
+        if (next && !state.paused) prepare(next);
+        await upload(item, reading);
       } catch (e) {
         item.state = isOriginalDeleted(e) ? "skipped" : "error";
         item.error = isOriginalDeleted(e) ? "已永久删除，不会重新导入" : e instanceof Error ? e.message : String(e);
         if (isOriginalDeleted(e)) item.progress = 1;
         emit();
-      }
+      } finally { prepared.delete(item.id); }
     }
   } finally {
+    await Promise.allSettled(prepared.values());
+    for (const id of prepared.keys()) { const item = state.items.find(item => item.id === id); if (item?.state === "reading") item.state = "waiting"; }
     active = false;
     state.running = false;
     await wake?.release();
