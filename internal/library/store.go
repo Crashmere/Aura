@@ -142,6 +142,8 @@ type Asset struct {
 	Size            int64   `json:"size"`
 	Status          string  `json:"status"`
 	Variants        int     `json:"variants"`
+	ImageVersions   int     `json:"imageVersions"`
+	Grouping        string  `json:"grouping,omitempty"`
 	Duration        float64 `json:"duration,omitempty"`
 	FrameRate       float64 `json:"frameRate,omitempty"`
 	DeletionPending bool    `json:"deletionPending,omitempty"`
@@ -277,12 +279,12 @@ func (l *Library) Files(asset string) ([]File, error) {
 const assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind,a.favorite,a.trashed_at,
  f.name,f.width,f.height,f.size,f.status,(SELECT count(*) FROM files v WHERE v.asset_id=a.id),
  EXISTS(SELECT 1 FROM deletion_pending p WHERE p.asset_id=a.id),
- CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END
+ CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END, ` + imageVersionsSQL + `, ` + groupingSQL + `
  FROM assets a JOIN files f ON f.hash=a.primary_hash `
 
 func scanAsset(row scanner) (a Asset, err error) {
 	var rawMetadata string
-	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata)
+	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata, &a.ImageVersions, &a.Grouping)
 	if err == nil && a.Kind == "video" {
 		var metadata map[string]any
 		if json.Unmarshal([]byte(rawMetadata), &metadata) == nil {

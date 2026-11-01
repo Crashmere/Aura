@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from "react";
-import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, Image as ImageIcon, ImagePlus, Info as InfoIcon, LoaderCircle, RefreshCw, ScanLine, Trash2, Video, Wifi, X, Ellipsis, ZoomIn, ZoomOut } from "lucide-react";
-import { api, Asset, Detail, base, media, bytes, displayDate } from "./api";
+import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, FileText, Image as ImageIcon, ImagePlus, Info as InfoIcon, Layers3, LoaderCircle, RefreshCw, ScanLine, Trash2, Video, Wifi, X, Ellipsis, ZoomIn, ZoomOut } from "lucide-react";
+import { api, Asset, Detail, base, media, bytes, displayDate, resourceLabel } from "./api";
 import { LivePhotoIcon } from "./live-photo-icon";
 import { useImageGestures, useWheelNavigation } from "./image-gestures";
 import { IconButton } from "./controls";
@@ -360,6 +360,12 @@ export function Viewer({
               </div>
             )}
           </div>
+          {a.grouping && <div className="metadata-summary">
+            <div><Layers3 size={19} /><span>
+              <strong>{a.grouping === "manual" ? "手动归并" : "自动组合的照片版本"}</strong>
+              <small>{a.imageVersions} 个照片版本</small>
+            </span></div>
+          </div>}
           <div className="originals">
             <h3>
               原始资源 <span>{scopedDetail?.files.length || a.variants}</span>
@@ -370,14 +376,16 @@ export function Viewer({
                   <span className="file-type">
                     {f.mime.startsWith("video/") ? (
                       <Video size={19} />
-                    ) : (
+                    ) : f.mime.startsWith("image/") ? (
                       <ImageIcon size={19} />
+                    ) : (
+                      <FileText size={19} />
                     )}
                   </span>
                   <div>
                     <strong>{f.name}</strong>
                     <small>
-                      {bytes(f.size)}
+                      {resourceLabel(f)} · {bytes(f.size)}
                       {f.hash === a.primary
                         ? " · 主版本"
                         : f.hash === a.motion

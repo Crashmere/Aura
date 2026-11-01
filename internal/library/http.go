@@ -147,7 +147,9 @@ func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 			"live": "SELECT count(*) FROM assets WHERE kind='live' AND trashed_at=''", "videos": "SELECT count(*) FROM assets WHERE kind='video' AND trashed_at=''",
 			"trash": "SELECT count(*) FROM assets WHERE trashed_at!=''", "originals": "SELECT count(*) FROM files", "bytes": "SELECT COALESCE(sum(size),0) FROM files",
 			"queued": "SELECT count(*) FROM files WHERE status IN ('queued','processing')", "errors": "SELECT count(*) FROM files WHERE status='error'",
-			"grouped":          "SELECT count(*) FROM assets a WHERE a.trashed_at='' AND (SELECT count(*) FROM files f WHERE f.asset_id=a.id AND f.mime LIKE 'image/%')>1",
+			"grouped":          "SELECT count(*) FROM assets a WHERE a.trashed_at='' AND " + imageVersionsSQL + ">1",
+			"automatic":        "SELECT count(*) FROM assets a WHERE a.trashed_at='' AND " + groupingFilterSQL("automatic"),
+			"merged":           "SELECT count(*) FROM assets a WHERE a.trashed_at='' AND " + groupingFilterSQL("manual"),
 			"pendingDeletions": `SELECT count(*) FROM deletion_pending`,
 		}
 		for k, q := range counts {

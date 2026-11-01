@@ -62,13 +62,15 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 
 Video assets include optional `duration` in seconds and `frameRate` in frames per second from the primary original's stored `Duration` and `VideoFrameRate` metadata, including group-prefixed tags. Each field is omitted until its positive finite value is available. Photo and Live Photo assets omit these fields. Listing and detail responses use the same asset representation. The viewer displays the catalog duration before playback, then uses the loaded video's duration. Frame stepping pauses playback and uses the catalog frame rate, the observed frame interval when unavailable, or 30 fps before either is known; variable-rate sources use this interval estimate.
 
+Assets include `variants` for all retained resources and `imageVersions` for resources with MIME `image/*`. When `imageVersions` is greater than one, `grouping` is `manual` if image resources moved by a recorded user merge still share the item with an image from the other side; otherwise it is `automatic`. Grouping is derived from current resource membership, so it follows later automatic regrouping and stops applying after the two sides are separated. Single-image Live Photos omit `grouping`. `GET /api/info` retains the total multi-image count `grouped` and adds disjoint `automatic` and `merged` counts for these two classes.
+
 ### Shared library filters
 
 `GET /api/assets` and `GET /api/timeline` accept the same optional scalar parameters. Empty values omit a filter; whitespace-only `q`, `camera`, and `lens` also omit it. All supplied filters combine with AND before cursor pagination. Both endpoints return 400 for repeated filter parameters, unknown enum values, malformed dates or numbers, negative or non-finite numeric bounds, and a lower bound greater than its upper bound. Enum values are case-sensitive. Contradictory valid filters return an empty result.
 
 | Parameter | Values | Meaning |
 | --- | --- | --- |
-| `view` | `all`, `albums`, `favorites`, `live`, `videos`, `grouped`, `trash` | Default `all` excludes recently deleted items. `albums` uses the same visibility and combines with `album` to select a specific album. `trash` includes only deleted items; other views also exclude them. `grouped` requires more than one image original. |
+| `view` | `all`, `albums`, `favorites`, `live`, `videos`, `grouped`, `automatic`, `merged`, `trash` | Default `all` excludes recently deleted items. `albums` uses the same visibility and combines with `album` to select a specific album. `trash` includes only deleted items; other views also exclude them. `grouped` requires more than one image original; `automatic` and `merged` select its automatically combined and manually merged items respectively. |
 | `q` | Text | Literal substring of any original filename or retained metadata JSON. |
 | `from`, `to` | `YYYY-MM-DD` | Inclusive capture-date bounds, compared to the stored date portion of `asset.captured_at`. |
 | `album` | Album ID | Require membership; a nonexistent album returns 404. |
@@ -80,6 +82,7 @@ Video assets include optional `duration` in seconds and `frameRate` in frames pe
 | `status` | `ready`, `queued`, `processing`, `error` | Primary file processing status. A secondary resource's status does not change this match. |
 | `location` | `with`, `without` | Presence or absence of location on any one original: both native latitude/longitude hints, both GPS latitude/longitude metadata tags, or a nonempty combined GPS position/coordinates tag. Zero coordinates are present. |
 | `versions` | `single`, `multiple` | Exactly one or more than one original with MIME `image/*`. Paired motion and adjustment resources do not count. A one-image Live Photo is `single`; pure videos and items with no identified image match neither. |
+| `grouping` | `automatic`, `manual` | Multi-image items with the corresponding grouping classification; combines with every view, including albums and trash. |
 | `albumState` | `in`, `none` | Belongs to at least one album, or to none. `none` has the same effect as `excludeAlbums=true`. |
 | `camera` | Text | Match a `Make` or `Model` metadata value on any original. |
 | `lens` | Text | Match `LensMake`, `LensModel`, `LensID`, `Lens`, `LensType`, `LensInfo`, `LensSpec`, or `LensSpecification` on any original. |

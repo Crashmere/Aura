@@ -11,7 +11,7 @@ export type LibraryLocation = {
   filters: PhotoFilters;
 };
 
-const views = new Set(["all", "albums", "live", "videos", "grouped", "similar", "trash", "jobs"]);
+const views = new Set(["all", "albums", "live", "videos", "grouped", "automatic", "merged", "similar", "trash", "jobs"]);
 const date = (value: string | null) => value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
 
 export function readLocation(): LibraryLocation {

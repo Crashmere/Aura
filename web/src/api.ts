@@ -13,6 +13,8 @@ export type Asset = {
   size: number;
   status: string;
   variants: number;
+  imageVersions: number;
+  grouping?: "automatic" | "manual";
   duration?: number;
   frameRate?: number;
 };
@@ -57,6 +59,8 @@ export type Info = {
   queued: number;
   errors: number;
   grouped: number;
+  automatic: number;
+  merged: number;
   pendingDeletions?: number;
   similarityIndex?: SimilarityIndex;
   capabilities?: { permanentDelete?: boolean };
@@ -162,6 +166,15 @@ export async function api<T>(
 }
 export const media = (hash: string, kind = "thumb") =>
   `${base}media/${hash}/${kind}`;
+export function resourceLabel(file: Original) {
+  const labels: Record<string, string> = {
+    originalPhoto: "原始照片", photo: "原始照片", fullSizePhoto: "编辑后照片",
+    originalVideo: "原始视频", fullSizeVideo: "编辑后视频",
+    originalPairedVideo: "原始实况视频", fullSizePairedVideo: "编辑后实况视频",
+    adjustmentData: "编辑记录", alternatePhoto: "备用照片",
+  };
+  return labels[String(file.hints.resourceType)] || (file.mime.startsWith("image/") ? "照片原件" : file.mime.startsWith("video/") ? "视频原件" : "附加资源");
+}
 export function timestamp(value: number) {
   const seconds = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
   return seconds >= 3600

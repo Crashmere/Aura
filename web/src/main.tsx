@@ -96,7 +96,9 @@ const titles: Record<string, string> = {
   albums: "相片集",
   live: "实况照片",
   videos: "视频",
-  grouped: "已归并",
+  grouped: "多版本照片",
+  automatic: "照片版本",
+  merged: "手动归并",
   similar: "相似照片",
   trash: "最近删除",
   jobs: "任务中心",
@@ -704,7 +706,8 @@ function App() {
           <div className="nav-label">整理</div>
           {(
             [
-              ["grouped", Layers3],
+              ["automatic", Layers3],
+              ["merged", Copy],
               ["similar", Copy],
               ["trash", Trash2],
               ["jobs", ListChecks],
@@ -718,8 +721,8 @@ function App() {
             >
               <Icon size={18} />
               <span>{titles[id]}</span>
-              {id === "grouped" && !!info?.grouped && (
-                <small>{info.grouped}</small>
+              {(id === "automatic" || id === "merged") && !!info?.[id] && (
+                <small>{info[id]}</small>
               )}
               {id === "jobs" && !!(info?.queued || info?.errors) && <small>{(info?.queued || 0) + (info?.errors || 0)}</small>}
             </button>
@@ -914,11 +917,12 @@ function App() {
               <button className="clear-filters" onClick={clearFilters}>清除筛选</button>
             </div>
           )}
-          {view === "grouped" && (
+          {view === "automatic" && (
             <p className="view-note">
-              相同照片只展示一个主版本，所有原件与来源信息均可在详情中查看。
+              同一照片的原始与编辑版本，或像素完全一致的原件，会在上传时自动组合。
             </p>
           )}
+          {view === "merged" && <p className="view-note">这里显示你手动归并的照片，所有原件均可在详情中查看或分离。</p>}
           {view === "trash" && (
             <p className="view-note">
               项目在永久删除前可恢复。永久删除会清理全部原件与对应预览。
@@ -1060,7 +1064,7 @@ function App() {
                               await api(`assets/${a.id}/merge`, {
                                 other: b.id,
                               });
-                              notify("已归并，所有原件均已保留");
+                              notify("已手动归并，所有原件均已保留");
                               void loadSimilar();
                             } catch (e) {
                               notify(String(e), true);
@@ -1205,7 +1209,8 @@ function App() {
             {(
               [
                 ["videos", Video],
-                ["grouped", Layers3],
+                ["automatic", Layers3],
+                ["merged", Copy],
                 ["similar", Copy],
                 ["trash", Trash2],
                 ["jobs", ListChecks],
@@ -1220,6 +1225,7 @@ function App() {
               >
                 <Icon size={19} />
                 <span>{titles[id]}</span>
+                {(id === "automatic" || id === "merged") && !!info?.[id] && <small>{info[id]}</small>}
                 <ChevronRight size={15} />
               </button>
             ))}
@@ -1305,7 +1311,7 @@ function App() {
               EXIF、定位、色彩配置和实况资源。预览与播放文件独立生成。
             </p>
             <p>
-              字节或完整像素一致的照片会自动归并。仅仅看起来相似的照片需要手动核对。原件可在详情中下载或分离；只有在“最近删除”中确认永久删除才会清理原件。
+              “照片版本”显示上传时自动组合的原始、编辑版本和完全相同的照片。“手动归并”只显示你主动归并的照片。原件可在详情中下载或分离；永久删除需要在“最近删除”中确认。
             </p>
             <a
               href="https://github.com/Crashmere/Aura"

@@ -103,7 +103,7 @@ export function FilterPanel({ value, anchor, apply, close }: {
         <div className="filter-panel-content">
           <section className="filter-section"><h3><FileImage size={15} />照片内容</h3><div className="filter-fields">
             {select("kind", "媒体类型")}{select("format", "原件格式")}{select("orientation", "构图")}{select("location", "定位信息")}
-            {select("versions", "照片版本")}{select("albumState", "相片集归属")}
+            {select("versions", "照片版本")}{select("grouping", "组合方式")}{select("albumState", "相片集归属")}
           </div></section>
           <section className="filter-section"><h3><CalendarDays size={15} />日期</h3>
             <div className="filter-presets"><button type="button" onClick={() => quickDate(7)}>最近 7 天</button><button type="button" onClick={() => quickDate(30)}>最近 30 天</button><button type="button" onClick={() => quickDate()}>今年</button></div>

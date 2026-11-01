@@ -54,20 +54,21 @@ func (l *Library) filterOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []any, bool) {
-	for _, name := range strings.Fields("view album excludeAlbum excludeAlbums q from to kind format orientation status location versions albumState camera cameraMatch lens lensMatch minSize maxSize minMP maxMP addedFrom addedTo") {
+	for _, name := range strings.Fields("view album excludeAlbum excludeAlbums q from to kind format orientation status location versions grouping albumState camera cameraMatch lens lensMatch minSize maxSize minMP maxMP addedFrom addedTo") {
 		if len(q[name]) > 1 {
 			fail(w, 400, name+" 只能指定一个值")
 			return "", nil, false
 		}
 	}
 	for _, enum := range []struct{ name, values string }{
-		{"view", "all albums favorites live videos grouped trash"},
+		{"view", "all albums favorites live videos grouped automatic merged trash"},
 		{"kind", "photo live video"},
 		{"format", "jpeg heic png gif webp tiff raw avif mov mp4"},
 		{"orientation", "landscape portrait square panorama"},
 		{"status", "ready queued processing error"},
 		{"location", "with without"},
 		{"versions", "single multiple"},
+		{"grouping", "automatic manual"},
 		{"albumState", "in none"},
 		{"cameraMatch", "exact contains"},
 		{"lensMatch", "exact contains"},
@@ -95,7 +96,14 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 	case "trash":
 		where = "WHERE a.trashed_at!=''"
 	case "grouped":
-		where += " AND (SELECT count(*) FROM files v WHERE v.asset_id=a.id AND v.mime LIKE 'image/%')>1"
+		where += " AND " + imageVersionsSQL + ">1"
+	case "automatic":
+		where += " AND " + groupingFilterSQL("automatic")
+	case "merged":
+		where += " AND " + groupingFilterSQL("manual")
+	}
+	if grouping := q.Get("grouping"); grouping != "" {
+		where += " AND " + groupingFilterSQL(grouping)
 	}
 	for _, field := range []struct{ name, column string }{{"kind", "a.kind"}, {"status", "f.status"}} {
 		if value := q.Get(field.name); value != "" {
@@ -120,7 +128,7 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		where += " AND EXISTS (SELECT 1 FROM files r WHERE r.asset_id=a.id AND (" + assetFormatSQL(format) + "))"
 	}
 	if versions := q.Get("versions"); versions != "" {
-		where += " AND (SELECT count(*) FROM files v WHERE v.asset_id=a.id AND v.mime LIKE 'image/%')"
+		where += " AND " + imageVersionsSQL
 		if versions == "single" {
 			where += "=1"
 		} else {

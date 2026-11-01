@@ -1,5 +1,5 @@
 export const filterKeys = [
-  "kind", "format", "orientation", "status", "location", "versions", "albumState",
+  "kind", "format", "orientation", "status", "location", "versions", "grouping", "albumState",
   "camera", "lens", "cameraMatch", "lensMatch", "minSize", "maxSize", "minMP", "maxMP", "addedFrom", "addedTo",
 ] as const;
 
@@ -15,6 +15,7 @@ export const filterOptions = {
   status: [["ready", "预览已就绪"], ["queued", "等待处理"], ["processing", "正在处理"], ["error", "处理失败"]],
   location: [["with", "有定位"], ["without", "无定位"]],
   versions: [["single", "单个照片版本"], ["multiple", "多个照片版本"]],
+  grouping: [["automatic", "自动组合的照片版本"], ["manual", "手动归并"]],
   albumState: [["in", "已加入相片集"], ["none", "未加入相片集"]],
 } as const;
 

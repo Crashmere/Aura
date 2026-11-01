@@ -90,10 +90,10 @@ export function Photo({
           {asset.kind === "video" && !!asset.duration && (
             <span className="photo-duration">{timestamp(asset.duration)}</span>
           )}
-          {asset.variants > 1 && asset.kind !== "live" && !asset.deletionPending && (
-            <span className="photo-versions">
+          {asset.imageVersions > 1 && !asset.deletionPending && (
+            <span className="photo-versions" title={`${asset.grouping === "manual" ? "手动归并" : "自动组合"} · ${asset.imageVersions} 个照片版本`}>
               <Layers3 size={13} />
-              {asset.variants}
+              {asset.grouping === "manual" ? "归并" : "版本"} {asset.imageVersions}
             </span>
           )}
           {asset.deletionPending && <span className="photo-deletion-pending"><LoaderCircle className="spin" size={13} />清理中</span>}
