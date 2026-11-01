@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -114,20 +116,21 @@ type File struct {
 }
 
 type Asset struct {
-	ID              string `json:"id"`
-	Primary         string `json:"primary"`
-	Motion          string `json:"motion,omitempty"`
-	CapturedAt      string `json:"capturedAt"`
-	Kind            string `json:"kind"`
-	Favorite        bool   `json:"favorite"`
-	TrashedAt       string `json:"trashedAt,omitempty"`
-	Name            string `json:"name"`
-	Width           int    `json:"width"`
-	Height          int    `json:"height"`
-	Size            int64  `json:"size"`
-	Status          string `json:"status"`
-	Variants        int    `json:"variants"`
-	DeletionPending bool   `json:"deletionPending,omitempty"`
+	ID              string  `json:"id"`
+	Primary         string  `json:"primary"`
+	Motion          string  `json:"motion,omitempty"`
+	CapturedAt      string  `json:"capturedAt"`
+	Kind            string  `json:"kind"`
+	Favorite        bool    `json:"favorite"`
+	TrashedAt       string  `json:"trashedAt,omitempty"`
+	Name            string  `json:"name"`
+	Width           int     `json:"width"`
+	Height          int     `json:"height"`
+	Size            int64   `json:"size"`
+	Status          string  `json:"status"`
+	Variants        int     `json:"variants"`
+	Duration        float64 `json:"duration,omitempty"`
+	DeletionPending bool    `json:"deletionPending,omitempty"`
 }
 
 const schema = `
@@ -245,11 +248,22 @@ func (l *Library) Files(asset string) ([]File, error) {
 const assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind,a.favorite,a.trashed_at,
  f.name,f.width,f.height,f.size,f.status,(SELECT count(*) FROM files v WHERE v.asset_id=a.id),
  EXISTS(SELECT 1 FROM decisions d,json_each(d.detail,'$.ids') p WHERE d.action='purge-request' AND p.value=a.id
- AND NOT EXISTS(SELECT 1 FROM decisions c WHERE c.action='purge-complete' AND json_extract(c.detail,'$.requestId')=d.id))
+ AND NOT EXISTS(SELECT 1 FROM decisions c WHERE c.action='purge-complete' AND json_extract(c.detail,'$.requestId')=d.id)),
+ CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END
  FROM assets a JOIN files f ON f.hash=a.primary_hash `
 
 func scanAsset(row scanner) (a Asset, err error) {
-	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending)
+	var rawMetadata string
+	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata)
+	if err == nil && a.Kind == "video" {
+		var metadata map[string]any
+		if json.Unmarshal([]byte(rawMetadata), &metadata) == nil {
+			duration, _ := strconv.ParseFloat(tag(metadata, "Duration"), 64)
+			if duration > 0 && !math.IsInf(duration, 0) {
+				a.Duration = duration
+			}
+		}
+	}
 	return
 }
 func (l *Library) Asset(id string) (Asset, error) {

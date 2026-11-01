@@ -60,6 +60,8 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `POST /api/files/retry` | `{hashes:[sha256]}`; retry a bounded batch of failed resources |
 | `GET /api/uploads` | Paginated durable incomplete upload sessions with names, sizes, acknowledged offsets, and creation times |
 
+Video assets include an optional `duration` in seconds from the primary original's stored `Duration` metadata, including group-prefixed tags such as `QuickTime:Duration`. It is omitted until a positive finite duration is available. Photo and Live Photo assets omit this field. Listing and detail responses use the same asset representation.
+
 ### Shared library filters
 
 `GET /api/assets` and `GET /api/timeline` accept the same optional scalar parameters. Empty values omit a filter; whitespace-only `q`, `camera`, and `lens` also omit it. All supplied filters combine with AND before cursor pagination. Both endpoints return 400 for repeated filter parameters, unknown enum values, malformed dates or numbers, negative or non-finite numeric bounds, and a lower bound greater than its upper bound. Enum values are case-sensitive. Contradictory valid filters return an empty result.

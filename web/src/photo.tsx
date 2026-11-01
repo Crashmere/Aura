@@ -7,7 +7,7 @@ import {
   RefreshCw,
   LoaderCircle,
 } from "lucide-react";
-import { Asset, media } from "./api";
+import { Asset, media, timestamp } from "./api";
 import { preloadPreviews, cancelPreloads } from "./media-loading";
 import { LivePhotoIcon } from "./live-photo-icon";
 
@@ -69,10 +69,13 @@ export function Photo({
             实况
           </span>
         )}
-        {asset.kind === "video" && (
+        {asset.kind === "video" && !asset.duration && (
           <span className="photo-kind">
             <Video size={14} />
           </span>
+        )}
+        {asset.kind === "video" && !!asset.duration && (
+          <span className="photo-duration">{timestamp(asset.duration)}</span>
         )}
         {asset.variants > 1 && asset.kind !== "live" && !asset.deletionPending && (
           <span className="photo-versions">

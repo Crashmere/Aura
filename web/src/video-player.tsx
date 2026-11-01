@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { LoaderCircle, Maximize, Pause, PictureInPicture2, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
-import { media, type Asset } from "./api";
-
-function timestamp(value: number) {
-  const seconds = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
-  return seconds >= 3600
-    ? `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
-    : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
+import { media, timestamp, type Asset } from "./api";
 let volumePreference = 1;
 let mutePreference = false;
 type SafariVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };

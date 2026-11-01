@@ -137,12 +137,14 @@
 
 .timeline.aura-gallery .photo.selected img { border-radius: 3px; }
 .timeline.aura-gallery .photo-kind { left: 4px; bottom: 4px; border-radius: 3px; padding: 3px 4px; }
+.timeline.aura-gallery .photo-duration { right: 4px; bottom: 4px; }
 .timeline.aura-gallery .photo-versions { right: 4px; top: 4px; }
 .timeline.aura-gallery .select-photo { left: 4px; top: 4px; width: 26px; height: 26px; }
 
 /* Card width also covers dense desktop layouts near the sidebar breakpoint. */
 @container (max-width: 72px) {
   .timeline.aura-gallery .photo-kind { font-size: 0; gap: 0; padding: 2px; }
+  .timeline.aura-gallery .photo-duration { right: 2px; bottom: 2px; padding: 2px 3px; font-size: 9px; }
   .timeline.aura-gallery .photo-versions,
   .timeline.aura-gallery .photo-missing > span { display: none; }
   .timeline.aura-gallery .photo-retry,

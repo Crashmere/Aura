@@ -13,6 +13,7 @@ export type Asset = {
   size: number;
   status: string;
   variants: number;
+  duration?: number;
 };
 export type Original = {
   hash: string;
@@ -147,6 +148,12 @@ export async function api<T>(
 }
 export const media = (hash: string, kind = "thumb") =>
   `${base}media/${hash}/${kind}`;
+export function timestamp(value: number) {
+  const seconds = Math.max(0, Math.floor(Number.isFinite(value) ? value : 0));
+  return seconds >= 3600
+    ? `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
+    : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
 export function bytes(n: number) {
   if (!n) return "0 B";
   const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), 4);

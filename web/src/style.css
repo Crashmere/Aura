@@ -541,6 +541,21 @@ input {
   font-size: 10px;
   text-shadow: 0 1px 2px #0005;
 }
+.photo-duration {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 3px 5px;
+  border-radius: 3px;
+  background: #14200e80;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
 .photo-versions {
   position: absolute;
   right: 10px;
