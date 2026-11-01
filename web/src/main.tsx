@@ -740,7 +740,6 @@ function App() {
               {id === "jobs" && !!(info?.queued || info?.errors) && <small>{(info?.queued || 0) + (info?.errors || 0)}</small>}
             </button>
           ))}
-          <button onClick={() => setHistoryKind("split")}><History size={18} /><span>整理记录</span></button>
         </nav>
         <div className="sidebar-bottom">
           {uploading.items.length > 0 || info?.queued ? (
@@ -937,7 +936,7 @@ function App() {
             </p>
           )}
           {view === "merged" && <p className="view-note">这里显示你手动归并的照片，所有原件均可在详情中查看或分离。</p>}
-          {(view === "automatic" || view === "merged" || view === "grouped") && <Button className="subtle" onClick={() => setHistoryKind("split")}><History size={15} />分离记录</Button>}
+          {view === "automatic" && <Button className="subtle" onClick={() => setHistoryKind("split")}><History size={15} />分离记录</Button>}
           {view === "trash" && (
             <p className="view-note">
               项目在永久删除前可恢复。永久删除会清理全部原件与对应预览。
@@ -1246,7 +1245,6 @@ function App() {
                 <ChevronRight size={15} />
               </button>
             ))}
-            <button onClick={() => { setHistoryKind("split"); setMobileMenu(false); }}><History size={19} /><span>整理记录</span><ChevronRight size={15} /></button>
             <a href="/portal/">
               <ArrowLeft size={19} />
               <span>返回门户</span>
