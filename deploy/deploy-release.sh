@@ -11,9 +11,13 @@ if [[ $EUID -eq 0 && $# -eq 3 && ( $1 == portal || $1 == portal-check ) && $2 =~
   exec timeout 45 /opt/serverportal/bin/portal "$portal_action" --app aura --commit "$2" --sha256 "$3"
 fi
 
-if [[ $EUID -ne 0 || $# -ne 2 || ! $1 =~ ^[0-9a-f]{40}$ || ! $2 =~ ^[0-9a-f]{64}$ ]]; then echo 'Usage: deploy-release.sh <commit> <sha256> < binary' >&2; exit 64; fi
+if [[ $EUID -ne 0 || $# -lt 2 || $# -gt 3 || ! $1 =~ ^[0-9a-f]{40}$ || ! $2 =~ ^[0-9a-f]{64}$ ]]; then echo 'Usage: deploy-release.sh <commit> <sha256> < binary' >&2; exit 64; fi
 commit=$1
 expected=$2
+plan_token=${3:-}
+if [[ -n $plan_token && ( ! $plan_token =~ ^[A-Za-z0-9_-]+$ || ${#plan_token} -gt 4096 ) ]]; then
+  echo 'Invalid database protection plan.' >&2; exit 64
+fi
 app=/opt/aura
 nas=false
 upgrade=/opt/server-context/scripts/upgrade-state.py
@@ -23,6 +27,7 @@ if [[ -r /etc/server-maintenance-host && $(< /etc/server-maintenance-host) == na
   exec 8>/run/lock/server-maintenance.lock
   flock -s -n 8 || { printf 'A full backup or maintenance operation is running.\n' >&2; exit 75; }
 fi
+if [[ -n $plan_token && $nas != true ]]; then echo 'Database plans require the NAS release flow.' >&2; exit 64; fi
 exec 9>/run/lock/aura-deploy.lock
 flock -n 9 || { echo 'Another release is running.' >&2; exit 75; }
 test -f "$app/data/aura.sqlite"
@@ -68,7 +73,7 @@ backup="$app/backups/before-deploy-$(basename "$release")"
 stopped=true
 systemctl stop aura
 if [[ $nas == true ]]; then
-  candidate_data=$(python3 "$upgrade" begin --app aura --release "$(basename "$release")")
+  candidate_data=$(python3 "$upgrade" begin --app aura --release "$(basename "$release")" --plan-token "$plan_token")
   backup="/var/lib/server-upgrades/aura/$(basename "$release")"
   runuser -u aura -- timeout 60 "$release/aura" check --data "$candidate_data"
 else
@@ -80,7 +85,7 @@ replaced=true
 mv -f "$app/bin/aura.next" "$app/bin/aura"
 systemctl start aura
 wait_healthy
-if [[ $nas == true ]]; then
+if [[ $nas == true && -d $backup ]]; then
   systemctl stop aura
   python3 "$upgrade" verify --app aura --release "$(basename "$release")"
   systemctl start aura
