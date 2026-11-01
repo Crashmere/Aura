@@ -717,6 +717,7 @@ final class AuraModel: NSObject, ObservableObject, PHPhotoLibraryChangeObserver 
                 showTransferProgress(offset, size: size)
             }
         }
+        guard running && !Task.isCancelled && uploadPauseReason == nil else { throw CancellationError() }
         finishStep(.upload, detail: "\(Self.bytes(size)) · 服务器已接收")
         status = "服务器确认"
         beginStep(.commit, detail: "服务器校验 SHA-256 并保存原件")
@@ -1452,12 +1453,6 @@ struct AuraContent: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { if model.busy { ProgressView().controlSize(.small) }; Text(model.status).font(.subheadline); Spacer() }
                     if !model.current.isEmpty { UploadProgressView(current: model.current, steps: model.uploadSteps, tint: olive) }
-                    HStack {
-                        Button { model.running ? model.pauseUpload() : model.startUpload() } label: {
-                            Label(model.running ? "暂停" : "开始持续上传", systemImage: model.running ? "pause.fill" : "arrow.up.circle.fill").frame(maxWidth: .infinity).padding(.vertical, 7)
-                        }.buttonStyle(.borderedProminent).tint(olive).disabled(model.verifying || (model.busy && !model.running))
-                        if model.connected, let url = model.origin?.appendingPathComponent("aura/") { Link(destination: url) { Image(systemName: "arrow.up.right.square").padding(9) }.buttonStyle(.bordered) }
-                    }
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     Text("服务器原件核对").font(.headline)
@@ -1491,6 +1486,17 @@ struct AuraContent: View {
                 #endif
             }.padding(30).frame(maxWidth: 520)
         }.background(Color(red: 0.97, green: 0.98, blue: 0.95)).tint(olive)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack {
+                Button { model.running ? model.pauseUpload() : model.startUpload() } label: {
+                    Label(model.running ? "暂停" : model.busy ? "正在暂停…" : "开始持续上传",
+                          systemImage: model.running || model.busy ? "pause.fill" : "arrow.up.circle.fill")
+                        .frame(maxWidth: .infinity).padding(.vertical, 7)
+                }.buttonStyle(.borderedProminent).tint(olive).disabled(model.verifying || (model.busy && !model.running))
+                if model.connected, let url = model.origin?.appendingPathComponent("aura/") { Link(destination: url) { Image(systemName: "arrow.up.right.square").padding(9) }.buttonStyle(.bordered) }
+            }.padding(.horizontal, 30).padding(.vertical, 14).frame(maxWidth: 520)
+                .frame(maxWidth: .infinity).background(.regularMaterial)
+        }
         .sheet(isPresented: $model.showLogin) {
             VStack(spacing: 0) {
                 HStack { Text("门户设备授权").font(.headline); Spacer(); Button("完成") { Task { await model.loginFinished() } }; Button("关闭") { model.showLogin = false } }.padding()
