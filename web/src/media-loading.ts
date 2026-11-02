@@ -52,14 +52,14 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 export function rememberPreview(image: HTMLImageElement) {
   if (!image.complete || !image.naturalWidth) return;
   const key = new URL(image.src);
-  key.search = "";
+  key.searchParams.delete("retry");
   previews.delete(key.href);
   previews.set(key.href, image);
   while (previews.size > 3) previews.delete(previews.keys().next().value!);
 }
 export function cachedPreviewSource(source: string) {
   const key = new URL(source, location.href);
-  key.search = "";
+  key.searchParams.delete("retry");
   return previews.get(key.href)?.src;
 }
 export function previewReady(source: string) {
@@ -79,7 +79,7 @@ export function preloadPreviews(assets: Asset[], delay = 220) {
   if (!mediaPolicy().prefetch || document.hidden) return;
   const key = generation;
   const sources = [...new Set(assets.filter(a => a.kind !== "video" && a.status === "ready" && !a.deletionPending)
-    .map(a => media(a.primary, "preview")))].filter(src => !previewReady(src)).slice(0, 2);
+    .map(a => media(a.primary, "preview", a.rotation)))].filter(src => !previewReady(src)).slice(0, 2);
   function next() {
     if (key !== generation || !mediaPolicy().prefetch || document.hidden) return;
     const source = sources.shift();

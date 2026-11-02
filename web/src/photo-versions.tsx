@@ -15,13 +15,13 @@ export function versionAsset(asset: Asset, file: Original, files: Original[]): A
     const value = key ? parseFloat(String(file.metadata[key])) : NaN;
     return Number.isFinite(value) && value > 0 ? value : undefined;
   };
-  return { ...asset, primary: file.hash, motion: video ? undefined : motion, kind: video ? "video" : motion ? "live" : "photo", name: file.name, width: file.width, height: file.height, size: file.size, capturedAt: file.capturedAt || asset.capturedAt, status: file.status, duration: video ? number("Duration") : undefined, frameRate: video ? number("VideoFrameRate") : undefined };
+  return { ...asset, primary: file.hash, motion: video ? undefined : motion, rotation: file.rotation || 0, motionRotation: video ? undefined : paired.length === 1 ? paired[0].rotation || 0 : undefined, kind: video ? "video" : motion ? "live" : "photo", name: file.name, width: file.width, height: file.height, size: file.size, capturedAt: file.capturedAt || asset.capturedAt, status: file.status, duration: video ? number("Duration") : undefined, frameRate: video ? number("VideoFrameRate") : undefined };
 }
 
 export function VersionPicker({ files, selected, primary, select, locked }: { files: Original[]; selected: string; primary: string; select: (hash: string) => void; locked: boolean }) {
   return <div className="viewer-version-menu" role="group" aria-label="照片版本">
     {files.map((file, index) => <button key={file.hash} className={file.hash === selected ? "is-selected" : ""} aria-pressed={file.hash === selected} disabled={locked} onClick={() => select(file.hash)} title={file.name}>
-      <img src={media(file.hash)} alt="" loading="lazy" decoding="async" />
+      <img src={media(file.hash, "thumb", file.rotation)} alt="" loading="lazy" decoding="async" />
       <span><strong>{resourceLabel(file)}{files.filter(candidate => candidate.hints.resourceType === file.hints.resourceType).length > 1 ? ` ${index + 1}` : ""}</strong><small>{file.name}{file.hash === primary ? " · 主版本" : ""}</small></span>
       {file.hash === selected && <Layers3 size={15} />}
     </button>)}

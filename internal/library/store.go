@@ -116,6 +116,7 @@ type File struct {
 	Mime       string          `json:"mime"`
 	Width      int             `json:"width"`
 	Height     int             `json:"height"`
+	Rotation   int             `json:"rotation"`
 	CapturedAt string          `json:"capturedAt"`
 	ContentID  string          `json:"contentId,omitempty"`
 	PixelHash  string          `json:"pixelHash,omitempty"`
@@ -139,6 +140,8 @@ type Asset struct {
 	Name            string  `json:"name"`
 	Width           int     `json:"width"`
 	Height          int     `json:"height"`
+	Rotation        int     `json:"rotation"`
+	MotionRotation  int     `json:"motionRotation,omitempty"`
 	Size            int64   `json:"size"`
 	Status          string  `json:"status"`
 	Variants        int     `json:"variants"`
@@ -245,13 +248,13 @@ func (l *Library) Notify() {
 }
 func marshal(v any) string { b, _ := json.Marshal(v); return string(b) }
 
-const fileColumns = "hash,asset_id,name,size,mime,width,height,captured_at,content_id,pixel_hash,dhash,metadata,score,status,error,hints,created_at"
+const fileColumns = "hash,asset_id,name,size,mime,width,height,captured_at,content_id,pixel_hash,dhash,metadata,score,status,error,hints,created_at," + fileRotationSQL
 
 type scanner interface{ Scan(...any) error }
 
 func scanFile(row scanner) (f File, err error) {
 	var meta, hints string
-	err = row.Scan(&f.Hash, &f.AssetID, &f.Name, &f.Size, &f.Mime, &f.Width, &f.Height, &f.CapturedAt, &f.ContentID, &f.PixelHash, &f.DHash, &meta, &f.Score, &f.Status, &f.Error, &hints, &f.CreatedAt)
+	err = row.Scan(&f.Hash, &f.AssetID, &f.Name, &f.Size, &f.Mime, &f.Width, &f.Height, &f.CapturedAt, &f.ContentID, &f.PixelHash, &f.DHash, &meta, &f.Score, &f.Status, &f.Error, &hints, &f.CreatedAt, &f.Rotation)
 	f.Metadata = json.RawMessage(meta)
 	_ = json.Unmarshal([]byte(hints), &f.Hints)
 	return
@@ -260,7 +263,11 @@ func (l *Library) File(hash string) (File, error) {
 	return scanFile(l.DB.QueryRow("SELECT "+fileColumns+" FROM files WHERE hash=?", hash))
 }
 func (l *Library) Files(asset string) ([]File, error) {
-	rows, err := l.DB.Query("SELECT "+fileColumns+" FROM files WHERE asset_id=? ORDER BY score DESC,created_at", asset)
+	return filesForAsset(l.DB, asset)
+}
+
+func filesForAsset(q queryer, asset string) ([]File, error) {
+	rows, err := q.Query("SELECT "+fileColumns+" FROM files WHERE asset_id=? ORDER BY score DESC,created_at", asset)
 	if err != nil {
 		return nil, err
 	}
@@ -276,15 +283,16 @@ func (l *Library) Files(asset string) ([]File, error) {
 	return out, rows.Err()
 }
 
-const assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind,a.favorite,a.trashed_at,
+var assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind,a.favorite,a.trashed_at,
  f.name,f.width,f.height,f.size,f.status,(SELECT count(*) FROM files v WHERE v.asset_id=a.id),
  EXISTS(SELECT 1 FROM deletion_pending p WHERE p.asset_id=a.id),
- CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END, ` + imageVersionsSQL + `, ` + groupingSQL + `
+ CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END, ` + imageVersionsSQL + `, ` + groupingSQL + `,
+ ` + rotationSQL("f.hash") + `, ` + rotationSQL("a.motion_hash") + `
  FROM assets a JOIN files f ON f.hash=a.primary_hash `
 
 func scanAsset(row scanner) (a Asset, err error) {
 	var rawMetadata string
-	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata, &a.ImageVersions, &a.Grouping)
+	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata, &a.ImageVersions, &a.Grouping, &a.Rotation, &a.MotionRotation)
 	if err == nil && a.Kind == "video" {
 		var metadata map[string]any
 		if json.Unmarshal([]byte(rawMetadata), &metadata) == nil {

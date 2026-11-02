@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { LoaderCircle, Maximize, Pause, PictureInPicture2, Play, StepBack, StepForward, Volume2, VolumeX } from "lucide-react";
 import { media, timestamp, type Asset } from "./api";
+import { useRotationPreview } from "./rotation-preview";
 let volumePreference = 1;
 let mutePreference = false;
 type SafariVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
@@ -16,12 +17,13 @@ function SkipIcon({ forward = false }: { forward?: boolean }) {
   </svg>;
 }
 
-export function VideoPlayer({ asset, live = false, locked, toggleChrome, activity, onPlayback, onEnded, previous, next, close }: {
-  asset: Asset; live?: boolean; locked: boolean; toggleChrome: () => void; activity: () => void;
+export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, toggleChrome, activity, onPlayback, onEnded, previous, next, close }: {
+  asset: Asset; live?: boolean; rotationPreview?: number; locked: boolean; toggleChrome: () => void; activity: () => void;
   onPlayback: (playing: boolean) => void; onEnded?: () => void; previous: () => void; next: () => void; close: () => void;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const container = useRef<HTMLDivElement>(null);
+  const rotationStyle = useRotationPreview(container, rotationPreview);
   const [started, setStarted] = useState(live);
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(live);
@@ -45,7 +47,7 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
   const observedFrameDuration = useRef<number | undefined>(undefined);
   const callbacks = useRef({ onPlayback, onEnded });
   callbacks.current = { onPlayback, onEnded };
-  const source = media(live ? asset.motion! : asset.primary, "play");
+  const source = media(live ? asset.motion! : asset.primary, "play", live ? asset.motionRotation : asset.rotation);
   useEffect(() => {
     const element = video.current;
     mounted.current = true;
@@ -151,7 +153,7 @@ export function VideoPlayer({ asset, live = false, locked, toggleChrome, activit
   const shownDuration = duration || (!live && Number.isFinite(asset.duration) ? Math.max(0, asset.duration || 0) : 0);
   const progress = shownDuration ? Math.min(100, shownTime / shownDuration * 100) : 0;
   return <div ref={container} className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""}`}>
-    <video ref={video} className="player-video" playsInline preload="none" poster={media(asset.primary)} aria-label={live ? `${asset.name} · 实况` : asset.name}
+    <video ref={video} className="player-video" style={rotationStyle} playsInline preload="none" poster={media(asset.primary, "thumb", asset.rotation)} aria-label={live ? `${asset.name} · 实况` : asset.name}
       onPointerDown={event => { if (event.pointerType === "touch" && !locked) { swipe.current = { x: event.clientX, y: event.clientY }; suppressClick.current = false; } }}
       onPointerMove={event => { if (swipe.current && Math.hypot(event.clientX - swipe.current.x, event.clientY - swipe.current.y) > 8) suppressClick.current = true; }}
       onPointerUp={event => {

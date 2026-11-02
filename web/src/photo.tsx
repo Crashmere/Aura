@@ -10,6 +10,7 @@ import {
 import { Asset, media, timestamp } from "./api";
 import { preloadPreviews, cancelPreloads } from "./media-loading";
 import { LivePhotoIcon } from "./live-photo-icon";
+import { displayDimensions } from "./rotation-preview";
 
 export function Photo({
   asset,
@@ -33,16 +34,17 @@ export function Photo({
   const [broken, setBroken] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [previewAspect, setPreviewAspect] = useState<{ source: string; ratio: number } | null>(null);
-  const source = media(asset.primary) + (attempt ? `&retry=${attempt}` : "");
+  const source = media(asset.primary, "thumb", asset.rotation) + (attempt ? `&retry=${attempt}` : "");
+  const dimensions = displayDimensions(asset);
   // Decoded previews include EXIF rotation; catalog dimensions can precede it.
-  const ratio = previewAspect?.source === source ? previewAspect.ratio : asset.width > 0 && asset.height > 0 ? asset.width / asset.height : 1;
+  const ratio = previewAspect?.source === source ? previewAspect.ratio : dimensions.width > 0 && dimensions.height > 0 ? dimensions.width / dimensions.height : 1;
   const geometry = {
     "--photo-aspect": ratio,
     "--photo-natural-width": `${Math.min(1, ratio) * 100}%`,
     "--photo-natural-height": `${Math.min(1, 1 / ratio) * 100}%`,
     "--photo-crop-scale": Math.max(ratio, 1 / ratio),
   } as CSSProperties;
-  useEffect(() => { setBroken(false); }, [asset.primary, asset.status]);
+  useEffect(() => { setBroken(false); }, [source, asset.status]);
   useEffect(() => { setLoaded(!!image.current?.complete && !!image.current?.naturalWidth); }, [source]);
   useEffect(() => {
     if (!broken) return;

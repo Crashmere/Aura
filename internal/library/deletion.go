@@ -603,7 +603,14 @@ func (l *Library) runDeletion(ctx context.Context, id string, plan deletionPlan)
 		if e := l.removeOriginalWork(hash); e != nil {
 			return e
 		}
-		for _, path := range []string{l.Object(hash), l.Derived(hash, "-thumb.jpg"), l.Derived(hash, "-preview.jpg"), l.Derived(hash, "-play.mp4"), l.Derived(hash, dinoSuffix), filepath.Join(l.Root, "incoming", hash)} {
+		paths := []string{l.Object(hash), l.Derived(hash, "-thumb.jpg"), l.Derived(hash, "-preview.jpg"), l.Derived(hash, "-play.mp4"), l.Derived(hash, dinoSuffix), filepath.Join(l.Root, "incoming", hash)}
+		for _, rotation := range []int{90, 180, 270} {
+			for _, kind := range []string{"thumb", "preview", "play"} {
+				path := l.rotationPath(hash, kind, rotation)
+				paths = append(paths, path, path+".source")
+			}
+		}
+		for _, path := range paths {
 			if e := removeDurably(path); e != nil {
 				return e
 			}
@@ -625,6 +632,9 @@ func (l *Library) runDeletion(ctx context.Context, id string, plan deletionPlan)
 			}
 		}
 		if _, e = tx.Exec("DELETE FROM uploads WHERE id=?", hash); e != nil {
+			return e
+		}
+		if _, e = tx.Exec("DELETE FROM decisions WHERE id=? AND action='rotation'", "rotation:"+hash); e != nil {
 			return e
 		}
 	}
@@ -675,8 +685,8 @@ func (l *Library) removeOriginalWork(hash string) error {
 			continue
 		}
 		path := filepath.Join(l.Root, "work", entry.Name())
-		owned := false
-		if strings.HasPrefix(entry.Name(), hash+"-") || strings.HasPrefix(entry.Name(), hash[:8]+"-") {
+		owned := strings.HasPrefix(entry.Name(), hash+"-rotation-")
+		if !owned && (strings.HasPrefix(entry.Name(), hash+"-") || strings.HasPrefix(entry.Name(), hash[:8]+"-")) {
 			children, err := os.ReadDir(path)
 			if err != nil {
 				return err

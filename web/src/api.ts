@@ -17,6 +17,8 @@ export type Asset = {
   grouping?: "automatic" | "manual";
   duration?: number;
   frameRate?: number;
+  rotation?: number;
+  motionRotation?: number;
 };
 export type Original = {
   hash: string;
@@ -33,6 +35,7 @@ export type Original = {
   status: string;
   error?: string;
   hints: Record<string, unknown>;
+  rotation?: number;
 };
 export type Detail = {
   asset: Asset;
@@ -178,8 +181,8 @@ export async function api<T>(
   }
   return r.json();
 }
-export const media = (hash: string, kind = "thumb") =>
-  `${base}media/${hash}/${kind}${kind === "thumb" ? "?v=2" : ""}`;
+export const media = (hash: string, kind = "thumb", rotation = 0) =>
+  `${base}media/${hash}/${kind}${kind === "original" ? "" : `?${kind === "thumb" ? "v=2&" : ""}rotation=${rotation}`}`;
 export function resourceLabel(file: Original) {
   const labels: Record<string, string> = {
     originalPhoto: "原始照片", photo: "原始照片", fullSizePhoto: "编辑后照片",

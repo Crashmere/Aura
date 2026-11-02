@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Delete("/api/albums/{id}/assets", l.changeAlbumAssets)
 	r.Get("/api/assets/{id}", l.detail)
 	r.Patch("/api/assets/{id}", l.updateAsset)
+	r.Patch("/api/assets/{id}/rotation", l.rotate)
 	r.Post("/api/assets/{id}/merge", l.merge)
 	r.Post("/api/assets/{id}/split", l.split)
 	r.Get("/api/assets/{id}/download", l.download)
@@ -141,7 +143,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "Aura", "version": "0.3.0", "chunkSize": chunkSize, "processingConcurrency": l.ProcessingLimits,
 		"similarityIndex": l.dinoSnapshot(),
-		"capabilities":    map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true}}
+		"capabilities":    map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true, "rotation": true}}
 	value, err := l.cachedCatalog(r.Context(), "info", "library", func() (any, error) {
 		values := map[string]int64{}
 		counts := map[string]string{
@@ -591,6 +593,20 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := ""
+	rotation := f.Rotation
+	if kind != "original" {
+		if values, present := r.URL.Query()["rotation"]; present {
+			if len(values) != 1 {
+				fail(w, 400, "旋转方向无效")
+				return
+			}
+			rotation, e = strconv.Atoi(values[0])
+			if e != nil || !validRotation(rotation) {
+				fail(w, 400, "旋转方向无效")
+				return
+			}
+		}
+	}
 	switch kind {
 	case "original":
 		path = l.Object(hash)
@@ -608,6 +624,18 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 		return
+	}
+	if kind != "original" && rotation != 0 {
+		unlock := l.lockUpload(hash)
+		current, err := l.File(hash)
+		if err == nil {
+			path, err = l.rotatedDerivative(r.Context(), current, kind, rotation)
+		}
+		unlock()
+		if err != nil && !os.IsNotExist(err) && !errors.Is(err, errRotationNotReady) {
+			originalFailure(w, err)
+			return
+		}
 	}
 	file, e := os.Open(path)
 	if e != nil {
@@ -655,7 +683,7 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 	// opened representation so revalidation and If-Range never identify old bytes.
 	etag := `"` + hash + `"`
 	if kind != "original" {
-		etag = fmt.Sprintf(`"%s-%s-%x-%x"`, hash, kind, stat.Size(), stat.ModTime().UnixNano())
+		etag = fmt.Sprintf(`"%s-%s-%d-%x-%x"`, hash, kind, rotation, stat.Size(), stat.ModTime().UnixNano())
 	}
 	w.Header().Set("ETag", etag)
 	http.ServeContent(w, r, stat.Name(), stat.ModTime(), file)

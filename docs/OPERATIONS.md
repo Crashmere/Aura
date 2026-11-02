@@ -10,9 +10,9 @@ Aura's application target is `nas` at `/aura/`, with loopback listener `127.0.0.
 | `/opt/aura/bin/deploy-{ssh,release}.sh` | Root-maintained restricted release entry points |
 | `/opt/aura/bin/dino/` | Pinned DINO source, weights, dependency manifest and isolated Python environment |
 | `/opt/aura/config/` | systemd units, Nginx location, Portal declaration and source receipt |
-| `/opt/aura/data/aura.sqlite` | Catalog, albums/memberships, uploads, media jobs, deletion requests and hash/source guards |
+| `/opt/aura/data/aura.sqlite` | Catalog, albums/memberships, uploads, media jobs, saved rotations, deletion requests and hash/source guards |
 | `/opt/aura/data/assets/` | Immutable SHA-256 originals until confirmed permanent deletion |
-| `/opt/aura/data/derived/` | Rebuildable JPEG/MP4 previews and versioned DINO vectors/candidates; included in NAS full cold backups |
+| `/opt/aura/data/derived/` | Rebuildable JPEG/MP4 previews, metadata-only rotation variants/source markers and versioned DINO vectors/candidates; included in NAS full cold backups |
 | `/opt/aura/data/incoming/` | Durable acknowledged upload chunks; included in NAS full cold backups |
 | `/opt/aura/data/work/` | Decoder work state; included in NAS full cold backups |
 | `/opt/aura/backups/` | Native archive compatibility directory; no scheduled NAS snapshots |
@@ -20,6 +20,8 @@ Aura's application target is `nas` at `/aura/`, with loopback listener `127.0.0.
 | `/opt/aura/docs/` | Synchronized maintenance documentation |
 
 Go and Node are build dependencies on the maintenance computer only. Production uses official Ubuntu `libvips-tools`, `libheif-plugin-libde265`, `libimage-exiftool-perl`, and `ffmpeg`. Native libraries process files as the unprivileged application user. The service uses persistent disk for work files rather than `/tmp` capacity. TZ is `Asia/Shanghai`; update the unit for a different default interpretation of timezone-free capture dates.
+
+Saved rotation uses the existing decision log without a schema migration. JPEG variants receive ExifTool orientation metadata; playback variants use FFmpeg's input `-display_rotation` option with stream copy, supported by the current `nas` FFmpeg 8 runtime. No GPU environment or media codec changes are required. Missing variants rebuild from their unedited derivatives and saved catalog direction; selected permanent deletion includes their files, source markers and interrupted rotation work. A rotation-unaware rollback preserves decisions but does not display them or remove these new variants during cleanup, so prefer a rotation-aware program when editing or purging the library.
 
 ### NVIDIA acceleration on NAS
 

@@ -118,16 +118,19 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		}
 	}
 	if orientation := q.Get("orientation"); orientation != "" {
+		rotated := rotationSQL("f.hash") + " IN (90,270)"
+		width := "(CASE WHEN " + rotated + " THEN f.height ELSE f.width END)"
+		height := "(CASE WHEN " + rotated + " THEN f.width ELSE f.height END)"
 		where += " AND f.width>0 AND f.height>0 AND "
 		switch orientation {
 		case "landscape":
-			where += "f.width>f.height"
+			where += width + ">" + height
 		case "portrait":
-			where += "f.width<f.height"
+			where += width + "<" + height
 		case "square":
 			where += "f.width=f.height"
 		case "panorama":
-			where += "f.width>=2.0*f.height"
+			where += width + ">=2.0*" + height
 		}
 	}
 	if format := q.Get("format"); format != "" {

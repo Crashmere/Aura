@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from "react";
-import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, FileText, Image as ImageIcon, ImagePlus, Info as InfoIcon, Layers3, LoaderCircle, RefreshCw, ScanLine, Trash2, Video, Wifi, X, Ellipsis, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, FileText, Image as ImageIcon, ImagePlus, Info as InfoIcon, Layers3, LoaderCircle, RefreshCw, RotateCcw, RotateCw, ScanLine, Trash2, Undo2, Video, Wifi, X, Ellipsis, ZoomIn, ZoomOut } from "lucide-react";
 import { api, Asset, Detail, base, media, bytes, displayDate, resourceLabel } from "./api";
 import { LivePhotoIcon } from "./live-photo-icon";
 import { useImageGestures, useWheelNavigation } from "./image-gestures";
@@ -8,16 +8,17 @@ import { ProgressiveImage } from "./progressive-image";
 import { VideoPlayer, VIDEO_SKIP_SECONDS } from "./video-player";
 import { cancelPreloads, preloadPreviews, setMediaMode, useMediaPolicy, type MediaMode } from "./media-loading";
 import { PhotoEdits, VersionPicker, versionAsset } from "./photo-versions";
+import { displayDimensions, normalizeRotation } from "./rotation-preview";
 import "./viewer.css";
 
-function PhotoSurface({ asset, locked, previous, next, close, toggleChrome, hasPrevious, hasNext, onReady }: {
-  asset: Asset; locked: boolean; previous: () => void; next: () => void; close: () => void; toggleChrome: () => void; hasPrevious: boolean; hasNext: boolean; onReady: () => void;
+function PhotoSurface({ asset, rotationPreview = 0, locked, previous, next, close, toggleChrome, hasPrevious, hasNext, onReady }: {
+  asset: Asset; rotationPreview?: number; locked: boolean; previous: () => void; next: () => void; close: () => void; toggleChrome: () => void; hasPrevious: boolean; hasNext: boolean; onReady: () => void;
 }) {
   const gestures = useImageGestures(`${asset.id}:${asset.primary}`, !locked && !asset.deletionPending, previous, next, close, toggleChrome, hasPrevious, hasNext);
   const { scale, x, y } = gestures.transform;
   return <div ref={gestures.stage} className={`media-stage image-gesture-stage ${gestures.dragging ? "is-dragging" : ""} ${scale > 1 ? "is-zoomed" : ""}`} {...gestures.handlers}>
     <div className="viewer-image-transform" style={{ "--image-transform": `translate3d(${x}px, ${y}px, 0) scale(${scale})` } as React.CSSProperties}>
-      <ProgressiveImage key={`${asset.primary}:${asset.status}`} asset={asset} zoomed={scale > 1} onReady={onReady} />
+      <ProgressiveImage key={`${asset.primary}:${asset.status}:${asset.rotation || 0}`} asset={asset} zoomed={scale > 1} rotationPreview={rotationPreview} onReady={onReady} />
     </div>
     <div className="viewer-zoom-controls">
       <button title={scale > 1 ? "适合屏幕" : "放大（双击照片）"} aria-label={scale > 1 ? "适合屏幕" : "放大照片"} disabled={locked} onClick={() => gestures.toggle()}>{scale > 1 ? <ZoomOut size={19} /> : <ZoomIn size={19} />}</button>
@@ -29,7 +30,7 @@ function PhotoSurface({ asset, locked, previous, next, close, toggleChrome, hasP
 function ViewerThumbnail({ asset }: { asset: Asset }) {
   const [failed, setFailed] = useState(false);
   return <>
-    {failed ? <ImageIcon size={18} aria-hidden="true" /> : <img src={media(asset.primary)} alt="" decoding="async" loading="lazy" draggable={false} onError={() => setFailed(true)} />}
+    {failed ? <ImageIcon size={18} aria-hidden="true" /> : <img src={media(asset.primary, "thumb", asset.rotation)} alt="" decoding="async" loading="lazy" draggable={false} onError={() => setFailed(true)} />}
     {asset.kind === "video" && <Video className="viewer-thumbnail-kind" size={12} aria-hidden="true" />}
     {asset.kind === "live" && <span className="viewer-thumbnail-kind"><LivePhotoIcon size={12} /></span>}
   </>;
@@ -71,6 +72,7 @@ export function Viewer({
   const [showActions, setShowActions] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [selectedVersions, setSelectedVersions] = useState<Record<string, string>>({});
+  const [rotationDraft, setRotationDraft] = useState<{ assetId: string; hash: string; base: number; rotation: number } | null>(null);
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [readyAsset, setReadyAsset] = useState("");
   const [activityTick, setActivityTick] = useState(0);
@@ -100,6 +102,7 @@ export function Viewer({
     setError("");
     setShowActions(false);
     setShowVersions(false);
+    setRotationDraft(null);
     setControlsHidden(false);
     setVideoPlaying(false);
     return () => { ++request.current; detailAbort.current?.abort(); };
@@ -124,9 +127,12 @@ export function Viewer({
   const catalog = scopedDetail?.asset || items?.find(item => item.id === asset.id) || asset;
   const primary = scopedDetail?.files.find(file => file.hash === selectedVersions[asset.id]) || scopedDetail?.files.find(file => file.hash === catalog.primary);
   const a = primary ? versionAsset(catalog, primary, scopedDetail!.files) : catalog;
+  const rotationEdit = rotationDraft?.assetId === a.id && rotationDraft.hash === a.primary ? rotationDraft : null;
+  const rotationPreview = rotationEdit ? normalizeRotation(rotationEdit.rotation - (a.rotation || 0)) : 0;
+  const dimensions = displayDimensions(a);
   const versions = scopedDetail?.files.filter(file => file.mime.startsWith(catalog.kind === "video" ? "video/" : "image/")) || [];
   function selectVersion(hash: string) {
-    if (modalOpen || updateLock.current || catalog.deletionPending) return;
+    if (modalOpen || updateLock.current || rotationEdit || catalog.deletionPending) return;
     setSelectedVersions(previous => ({ ...previous, [catalog.id]: hash }));
     setPlayingAsset(undefined);
     setVideoPlaying(false);
@@ -140,22 +146,23 @@ export function Viewer({
   const hasPrevious = items === undefined || !!before;
   const hasNext = items === undefined || !!after;
   const locked = updating || modalOpen;
+  const browsingLocked = locked || !!rotationEdit;
   const stripStart = Math.max(0, Math.min(index - Math.floor(stripCount / 2), (items?.length ?? 0) - stripCount));
   const nearby = index >= 0 && openAsset ? items?.slice(stripStart, stripStart + stripCount) ?? [] : [];
   function goPrevious() {
-    if (modalOpen || updateLock.current || !hasPrevious) return;
+    if (modalOpen || updateLock.current || rotationEdit || !hasPrevious) return;
     if (before && openAsset) openAsset(before); else previous();
   }
   function goNext() {
-    if (modalOpen || updateLock.current || !hasNext) return;
+    if (modalOpen || updateLock.current || rotationEdit || !hasNext) return;
     if (after && openAsset) openAsset(after); else next();
   }
-  useWheelNavigation(root, !locked && !a.deletionPending, goPrevious, goNext);
+  useWheelNavigation(root, !browsingLocked && !a.deletionPending, goPrevious, goNext);
   useEffect(() => {
-    if (videoPlaying || (a.kind !== "video" && readyAsset !== `${a.id}:${a.primary}`)) return;
+    if (rotationEdit || videoPlaying || (a.kind !== "video" && readyAsset !== `${a.id}:${a.primary}:${a.rotation || 0}`)) return;
     preloadPreviews([after, before].filter((item): item is Asset => !!item), 400);
     return cancelPreloads;
-  }, [a.id, a.primary, readyAsset, videoPlaying, before?.primary, after?.primary, policy.prefetch]);
+  }, [a.id, a.primary, a.rotation, readyAsset, videoPlaying, !!rotationEdit, before?.primary, before?.rotation, after?.primary, after?.rotation, policy.prefetch]);
   useEffect(() => {
     const strip = filmstrip.current;
     const selected = strip?.querySelector<HTMLElement>('[aria-current="true"]');
@@ -190,6 +197,10 @@ export function Viewer({
       if (!["Escape", "ArrowLeft", "ArrowRight", "i", " ", "f", "m", "j", "l", ",", "."].includes(e.key)) return;
       e.preventDefault();
       if (updateLock.current) return;
+      if (rotationEdit) {
+        if (!e.repeat && e.key === "Escape") setRotationDraft(null);
+        return;
+      }
       if (e.key === "ArrowLeft") goPrevious();
       if (e.key === "ArrowRight") goNext();
       if (!e.repeat && e.key === "Escape") { if (showVersions) setShowVersions(false); else if (showActions) setShowActions(false); else if (showInfo) setShowInfo(false); else close(); }
@@ -205,7 +216,7 @@ export function Viewer({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [previous, next, openAsset, before, after, hasPrevious, hasNext, modalOpen, close, showInfo, showActions, showVersions]);
+  }, [previous, next, openAsset, before, after, hasPrevious, hasNext, modalOpen, close, showInfo, showActions, showVersions, !!rotationEdit]);
   const meta = primary?.metadata || scopedDetail?.metadata || {};
   const field = (...names: string[]) => {
     for (const name of names) {
@@ -236,15 +247,50 @@ export function Viewer({
     }
   }
   const update = (p: unknown) => mutate("assets/" + a.id, p);
+  function startRotation() {
+    if (locked || updateLock.current || a.deletionPending || a.trashedAt || a.status !== "ready") return;
+    setRotationDraft({ assetId: a.id, hash: a.primary, base: a.rotation || 0, rotation: a.rotation || 0 });
+    root.current?.querySelector("video")?.pause();
+    setPlayingAsset(undefined);
+    setVideoPlaying(false);
+    setShowInfo(false);
+    setShowActions(false);
+    setShowVersions(false);
+    activity();
+  }
+  async function saveRotation() {
+    if (!rotationEdit || locked || updateLock.current || a.deletionPending) return;
+    updateLock.current = true;
+    setUpdating(true);
+    setError("");
+    detailAbort.current?.abort();
+    ++request.current;
+    try {
+      const data = await api<Detail>(`assets/${rotationEdit.assetId}/rotation`, {
+        hash: rotationEdit.hash,
+        rotation: rotationEdit.rotation,
+        expectedRotation: rotationEdit.base,
+      }, "PATCH");
+      if (currentAsset.current === rotationEdit.assetId) { setDetail(data); setRotationDraft(null); }
+      notify("旋转已保存");
+      await changed().catch(() => notify("旋转已保存，但图库刷新失败，请重新加载", true));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error), true);
+      await refresh();
+    } finally {
+      updateLock.current = false;
+      setUpdating(false);
+    }
+  }
   const start = () => {
     if (modalOpen || updateLock.current || a.deletionPending || !a.motion) return;
     setPlayingAsset(a.id);
   };
   return (
-    <div ref={root} className={`viewer aura-viewer ${showInfo ? "with-info" : ""} ${controlsHidden && !showInfo && !showActions && !showVersions ? "controls-hidden" : ""} ${a.kind === "video" || playing ? "has-video" : ""}`} onPointerMove={event => { if (event.pointerType === "mouse" && videoPlaying) activity(); }} role="dialog" aria-modal={!modalOpen} aria-label={`媒体查看器 · ${a.name}`} tabIndex={-1} inert={modalOpen}>
+    <div ref={root} className={`viewer aura-viewer ${showInfo ? "with-info" : ""} ${rotationEdit ? "is-rotating" : ""} ${controlsHidden && !showInfo && !showActions && !showVersions && !rotationEdit ? "controls-hidden" : ""} ${a.kind === "video" || playing ? "has-video" : ""}`} onPointerMove={event => { if (event.pointerType === "mouse" && videoPlaying) activity(); }} role="dialog" aria-modal={!modalOpen} aria-label={`媒体查看器 · ${a.name}`} tabIndex={-1} inert={modalOpen}>
       <div className="viewer-main">
         <header className="viewer-toolbar">
-          <IconButton title="关闭查看器（Esc）" disabled={locked} onClick={close}>
+          <IconButton title={rotationEdit ? "取消旋转（Esc）" : "关闭查看器（Esc）"} disabled={locked} onClick={() => rotationEdit ? setRotationDraft(null) : close()}>
             <X size={23} />
           </IconButton>
           <div className="viewer-date">
@@ -252,13 +298,14 @@ export function Viewer({
             <small>{a.name}</small>
           </div>
           <div className="viewer-actions">
-            {(catalog.imageVersions > 1 || versions.length > 1) && <button title="切换版本" aria-label="切换版本" aria-expanded={showVersions} className={`icon-button version-toggle ${showVersions ? "active" : ""}`} disabled={locked || !!a.deletionPending} onClick={() => { setShowVersions(!showVersions); setShowActions(false); if (!scopedDetail) void refresh(); activity(); }}>
+            {(catalog.imageVersions > 1 || versions.length > 1) && <button title="切换版本" aria-label="切换版本" aria-expanded={showVersions} className={`icon-button version-toggle ${showVersions ? "active" : ""}`} disabled={browsingLocked || !!a.deletionPending} onClick={() => { setShowVersions(!showVersions); setShowActions(false); if (!scopedDetail) void refresh(); activity(); }}>
               <Layers3 size={20} /><small>{versions.length && !versions.some(file => file.hash === a.primary) ? "视频" : `${Math.max(0, versions.findIndex(file => file.hash === a.primary)) + 1}/${versions.length || catalog.imageVersions}`}</small>
             </button>}
             {showVersions && (versions.length ? <VersionPicker files={versions} selected={a.primary} primary={catalog.primary} select={selectVersion} locked={locked} /> : <div className="viewer-version-menu version-pending">{error ? <><p>{error}</p><button onClick={() => void refresh()}>重新加载版本</button></> : <p><LoaderCircle size={16} className="spin" />正在读取版本</p>}</div>)}
-            <button title="照片信息（I）" aria-label="照片信息" aria-expanded={showInfo} aria-controls={infoId} className={`icon-button ${showInfo ? "active" : ""}`} disabled={locked} onClick={() => { setShowInfo(!showInfo); setShowActions(false); activity(); }}><InfoIcon size={21} /></button>
-            <button title="更多操作" aria-label="更多操作" aria-expanded={showActions} className={`icon-button ${showActions ? "active" : ""}`} disabled={locked} onClick={() => { setShowActions(!showActions); setShowVersions(false); activity(); }}><Ellipsis size={23} /></button>
+            <button title="照片信息（I）" aria-label="照片信息" aria-expanded={showInfo} aria-controls={infoId} className={`icon-button ${showInfo ? "active" : ""}`} disabled={browsingLocked} onClick={() => { setShowInfo(!showInfo); setShowActions(false); activity(); }}><InfoIcon size={21} /></button>
+            <button title="更多操作" aria-label="更多操作" aria-expanded={showActions} className={`icon-button ${showActions ? "active" : ""}`} disabled={browsingLocked} onClick={() => { setShowActions(!showActions); setShowVersions(false); activity(); }}><Ellipsis size={23} /></button>
             {showActions && <div className="viewer-action-menu">
+              <button disabled={locked || !!a.trashedAt || !!a.deletionPending || a.status !== "ready"} onClick={startRotation}><RotateCw size={18} />旋转并保存</button>
               <button disabled={locked || !!a.trashedAt || !!a.deletionPending} onClick={() => { setShowActions(false); addToAlbum(); }}><ImagePlus size={18} />添加到相片集</button>
               {!a.deletionPending && <a href={`${base}api/assets/${a.id}/download`}><ArrowDownToLine size={18} />下载全部原件</a>}
               <label className="viewer-network-mode"><span>画质与流量</span><select aria-label="画质与流量" value={policy.mode} onChange={event => setMediaMode(event.target.value as MediaMode)}><option value="auto">自动</option><option value="save">节省流量</option><option value="quality">优先清晰</option></select></label>
@@ -273,20 +320,28 @@ export function Viewer({
           <button
             className="viewer-prev"
             onClick={goPrevious}
-            disabled={locked || !hasPrevious}
+            disabled={browsingLocked || !hasPrevious}
             aria-label="上一张"
             title="上一张（←）"
           >
             <ChevronLeft />
           </button>
           {a.kind === "video" || playing ? <div className="media-stage">
-            <VideoPlayer key={`${a.id}:${playing ? a.motion : a.primary}`} asset={a} live={playing} locked={locked} previous={goPrevious} next={goNext} close={close} toggleChrome={() => setControlsHidden(value => !value)} activity={activity} onPlayback={value => { setVideoPlaying(value); if (!value) setControlsHidden(false); }} onEnded={playing ? () => setPlayingAsset(undefined) : undefined} />
-          </div> : <PhotoSurface key={`${a.id}:${a.primary}`} asset={a} locked={locked} previous={goPrevious} next={goNext} close={() => { if (showInfo) setShowInfo(false); else close(); }} toggleChrome={() => setControlsHidden(value => !value)} hasPrevious={hasPrevious} hasNext={hasNext} onReady={() => setReadyAsset(`${a.id}:${a.primary}`)} />}
-          <button className="viewer-next" onClick={goNext} disabled={locked || !hasNext} aria-label="下一张" title="下一张（→）">
+            <VideoPlayer key={`${a.id}:${playing ? a.motion : a.primary}:${a.rotation || 0}:${a.motionRotation || 0}`} asset={a} live={playing} rotationPreview={rotationPreview} locked={browsingLocked} previous={goPrevious} next={goNext} close={close} toggleChrome={() => setControlsHidden(value => !value)} activity={activity} onPlayback={value => { setVideoPlaying(value); if (!value) setControlsHidden(false); }} onEnded={playing ? () => setPlayingAsset(undefined) : undefined} />
+          </div> : <PhotoSurface key={`${a.id}:${a.primary}:${a.rotation || 0}`} asset={a} rotationPreview={rotationPreview} locked={browsingLocked} previous={goPrevious} next={goNext} close={() => { if (showInfo) setShowInfo(false); else close(); }} toggleChrome={() => setControlsHidden(value => !value)} hasPrevious={hasPrevious} hasNext={hasNext} onReady={() => setReadyAsset(`${a.id}:${a.primary}:${a.rotation || 0}`)} />}
+          <button className="viewer-next" onClick={goNext} disabled={browsingLocked || !hasNext} aria-label="下一张" title="下一张（→）">
             <ChevronRight />
           </button>
         </div>
         <footer className="viewer-footer">
+          {rotationEdit ? <div className="viewer-rotation-editor" role="group" aria-label="旋转编辑">
+            <button className="rotation-icon" title="向左旋转 90°" aria-label="向左旋转 90 度" disabled={locked} onClick={() => setRotationDraft(value => value && { ...value, rotation: normalizeRotation(value.rotation - 90) })}><RotateCcw size={20} /></button>
+            <button className="rotation-icon" title="向右旋转 90°" aria-label="向右旋转 90 度" disabled={locked} onClick={() => setRotationDraft(value => value && { ...value, rotation: normalizeRotation(value.rotation + 90) })}><RotateCw size={20} /></button>
+            <span className="rotation-angle" role="status" aria-live="polite">{rotationEdit.rotation}°</span>
+            <button className="rotation-icon" title="还原方向" aria-label="还原方向" disabled={locked || !rotationEdit.rotation} onClick={() => setRotationDraft(value => value && { ...value, rotation: 0 })}><Undo2 size={19} /></button>
+            <button className="rotation-cancel" disabled={locked} onClick={() => setRotationDraft(null)}>取消</button>
+            <button className="rotation-save" disabled={locked || rotationEdit.rotation === rotationEdit.base} onClick={() => void saveRotation()}>{updating ? <><LoaderCircle size={15} className="spin" />保存中</> : "保存"}</button>
+          </div> : <>
           <div className="viewer-status-row">
             {items && index >= 0 && <span className="viewer-position" role="status" aria-live="polite" aria-atomic="true" aria-label={`已加载 ${items.length} 项，第 ${index + 1} 项`} title="当前已加载的照片">
               <strong>{index + 1}</strong><span aria-hidden="true">/</span><span>{items.length}</span>
@@ -314,9 +369,10 @@ export function Viewer({
               disabled={locked}
               onClick={() => { if (!modalOpen && !updateLock.current && item.id !== a.id) openAsset?.(item); }}
             >
-              <ViewerThumbnail key={item.primary} asset={item} />
+              <ViewerThumbnail key={`${item.primary}:${item.rotation || 0}`} asset={item} />
             </button>)}
           </nav>}
+          </>}
         </footer>
       </div>
       {showInfo && (
@@ -343,7 +399,7 @@ export function Viewer({
               <span>
                 <strong>{a.name}</strong>
                 <small>
-                  {a.width} × {a.height} · {bytes(a.size)}
+                  {dimensions.width} × {dimensions.height} · {bytes(a.size)}{a.rotation ? ` · 旋转 ${a.rotation}°` : ""}
                 </small>
               </span>
             </div>

@@ -17,7 +17,7 @@
       "id": "data",
       "name": "业务数据",
       "path": "/opt/aura/data",
-      "purpose": "元数据、相片集及照片关联、分片和处理状态、资源分组与导入来源；保留主版本、相似忽略、Apple 相册映射及永久删除意图、清理状态和最小防重导入标记。",
+      "purpose": "元数据、相片集及照片关联、分片和处理状态、资源分组与导入来源；保留主版本、旋转方向、相似忽略、Apple 相册映射及永久删除意图、清理状态和最小防重导入标记。",
       "kind": "data",
       "browse": true,
       "cleanup": false
@@ -35,7 +35,7 @@
       "id": "derived",
       "name": "预览缓存",
       "path": "/opt/aura/data/derived",
-      "purpose": "可再生缩略图、浏览预览、兼容播放视频及 DINO 特征和推荐候选；nas 手工全量备份和升级冷副本完整收录，原生工具仍不收录。",
+      "purpose": "可再生缩略图、浏览预览、兼容播放视频、无损方向副本及 DINO 特征和推荐候选；nas 手工全量备份完整收录，原生工具仍不收录。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -190,6 +190,11 @@
       "method": "POST",
       "path": "/api/assets/{id}/merge",
       "description": "手工归并照片，保留所有原件"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/assets/{id}/rotation",
+      "description": "保存照片、视频与准确配对实况资源的旋转方向；仅改浏览副本方向标记，不改写或重新压缩原件"
     },
     {
       "method": "POST",
