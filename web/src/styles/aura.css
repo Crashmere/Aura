@@ -780,7 +780,6 @@
   min-height: 0;
   position: relative;
   display: flex;
-  animation: aura-scrim-fade 0.2s var(--ease-out);
 }
 
 .comparison-side section {
@@ -794,7 +793,6 @@
 .comparison-overlay section {
   position: absolute;
   inset: 0;
-  transition: opacity 0.16s var(--ease-out);
 }
 
 .comparison-single section[aria-hidden="true"] {
