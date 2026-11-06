@@ -11,18 +11,22 @@ import (
 	"time"
 )
 
-func (l *Library) nvidiaAvailable(ctx context.Context) bool {
+func (l *Library) nvidiaAvailable(_ context.Context) bool {
 	l.gpuOnce.Do(func() {
 		if os.Getenv("AURA_GPU") == "cpu" {
 			return
 		}
-		release, err := l.acquireGPU(ctx)
+		ctx := l.runtimeCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		probe, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		release, err := l.acquirePlaybackGPU(probe)
 		if err != nil {
 			return
 		}
 		defer release()
-		probe, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
 		_, err = l.command(probe, "ffmpeg", "-nostdin", "-v", "error", "-filter_threads", "1", "-threads", "2", "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu", "-f", "lavfi", "-i", "color=size=640x480:rate=1", "-vf", "format=nv12,hwupload,scale_cuda=320:240", "-c:v", "h264_nvenc", "-frames:v", "1", "-f", "null", "-")
 		l.gpuAvailable = err == nil
 		if err != nil {
@@ -66,65 +70,33 @@ func ffmpegProgress(ctx context.Context, args []string, duration float64, update
 	return nil
 }
 
-func (l *Library) videoDerivative(ctx context.Context, input, output, step string, duration float64, p *jobTracker) error {
-	const dimensions = "w='min(1920,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
-	thumbnail := step == "thumbnail"
-	if thumbnail {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
-		defer cancel()
-	}
+func (l *Library) videoThumbnail(ctx context.Context, input, output string, duration float64, p *jobTracker) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
 	modes := []string{"CPU"}
 	if l.nvidiaAvailable(ctx) {
-		modes = []string{"NVIDIA GPU", "NVIDIA GPU · 软件解码", "CPU"}
-		if thumbnail {
-			// CUDA frames retain the display matrix without applying it. JPEG
-			// cannot retain that matrix, so orient decoded pixels before upload.
-			modes = modes[1:]
-		}
+		// CUDA frames retain the display matrix without applying it. JPEG
+		// cannot retain that matrix, so orient decoded pixels before upload.
+		modes = []string{"NVIDIA GPU · 软件解码", "CPU"}
 	}
 	var err error
 	for _, mode := range modes {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		p.encoding(step, mode, 0)
+		p.encoding("thumbnail", mode, 0)
 		args := []string{"-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-filter_complex_threads", "1"}
 		gpu := mode != "CPU"
 		if gpu {
 			args = append(args, "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu")
-			if mode == "NVIDIA GPU" {
-				args = append(args, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
-			}
 		}
 		args = append(args, "-i", input, "-map", "0:v:0")
-		filter := "scale=" + dimensions
-		if thumbnail {
-			filter = "scale=640:640:force_original_aspect_ratio=decrease"
-		}
+		filter := "scale=640:640:force_original_aspect_ratio=decrease"
 		if gpu {
 			filter = strings.Replace(filter, "scale=", "scale_cuda=", 1)
-			if mode != "NVIDIA GPU" {
-				filter = "format=nv12,hwupload," + filter
-			}
-			if thumbnail {
-				filter += ":format=yuv420p,hwdownload,format=yuv420p"
-			} else {
-				filter += ":format=nv12"
-			}
+			filter = "format=nv12,hwupload," + filter + ":format=yuv420p,hwdownload,format=yuv420p"
 		}
-		args = append(args, "-vf", filter)
-		if thumbnail {
-			args = append(args, "-frames:v", "1", "-map_metadata", "-1")
-		} else {
-			args = append(args, "-map", "0:a?")
-			if gpu {
-				args = append(args, "-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "20", "-b:v", "0")
-			} else {
-				args = append(args, "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p")
-			}
-			args = append(args, "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart")
-		}
+		args = append(args, "-vf", filter, "-frames:v", "1", "-map_metadata", "-1")
 		args = append(args, "-threads", "2", "-y", output)
 		var release func()
 		if gpu {
@@ -138,7 +110,7 @@ func (l *Library) videoDerivative(ctx context.Context, input, output, step strin
 				return err
 			}
 		}
-		err = ffmpegProgress(ctx, args, duration, func(percent float64) { p.encoding(step, mode, percent) })
+		err = ffmpegProgress(ctx, args, duration, func(percent float64) { p.encoding("thumbnail", mode, percent) })
 		if release != nil {
 			release()
 		}
@@ -146,7 +118,7 @@ func (l *Library) videoDerivative(ctx context.Context, input, output, step strin
 			return nil
 		}
 		if gpu {
-			slog.Info("retry media with fallback engine", "step", step, "engine", mode, "error", err)
+			slog.Info("retry video cover with fallback engine", "engine", mode, "error", err)
 		}
 	}
 	return err

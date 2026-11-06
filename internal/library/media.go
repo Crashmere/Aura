@@ -340,22 +340,12 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 	} else if strings.HasPrefix(f.Mime, "video/") {
 		duration, _ := strconv.ParseFloat(tag(meta, "Duration"), 64)
 		progress.step("thumbnail", "processing", nil)
-		mediaErr = l.videoDerivative(ctx, input, filepath.Join(work, "thumb.jpg"), "thumbnail", duration, progress)
+		mediaErr = l.videoThumbnail(ctx, input, filepath.Join(work, "thumb.jpg"), duration, progress)
 		progress.result("thumbnail", mediaErr)
 		if mediaErr == nil {
 			if e = os.Rename(filepath.Join(work, "thumb.jpg"), l.Derived(f.Hash, "-thumb.jpg")); e != nil {
 				return e
 			}
-		}
-		progress.step("playback", "processing", nil)
-		videoErr := l.videoDerivative(ctx, input, filepath.Join(work, "play.mp4"), "playback", duration, progress)
-		progress.result("playback", videoErr)
-		if videoErr == nil {
-			if e = os.Rename(filepath.Join(work, "play.mp4"), l.Derived(f.Hash, "-play.mp4")); e != nil {
-				return e
-			}
-		} else if mediaErr == nil {
-			mediaErr = videoErr
 		}
 	}
 	f.Status = "ready"

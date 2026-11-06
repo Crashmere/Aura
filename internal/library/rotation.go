@@ -3,7 +3,6 @@ package library
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -183,7 +181,7 @@ func (l *Library) saveRotation(ctx context.Context, id, hash string, rotation, e
 		rotations[i] = (file.Rotation + rotation - expected + 360) % 360
 		kinds := []string{"thumb", "preview"}
 		if strings.HasPrefix(file.Mime, "video/") {
-			kinds = []string{"thumb", "play"}
+			kinds = []string{"thumb"}
 			if file.Cover != nil {
 				kinds = append(kinds, "preview")
 			}
@@ -220,9 +218,6 @@ func (l *Library) saveRotation(ctx context.Context, id, hash string, rotation, e
 }
 
 func derivativeSuffix(kind string) string {
-	if kind == "play" {
-		return "-play.mp4"
-	}
 	return "-" + kind + ".jpg"
 }
 
@@ -230,8 +225,8 @@ func (l *Library) rotationPath(hash, kind string, rotation int) string {
 	return l.Derived(hash, fmt.Sprintf("-rotation%d%s", rotation, derivativeSuffix(kind)))
 }
 
-// Variants are always made from unedited derivatives, without decoding or
-// recompressing pixels/streams. Canonical fingerprints remain source-derived.
+// JPEG variants retain compressed pixels from unedited derivatives.
+// Canonical fingerprints remain source-derived.
 // The caller holds the original lock, excluding new processing attempts and
 // permanent cleanup; save also rechecks the durable processing state.
 func (l *Library) rotatedDerivative(ctx context.Context, file File, kind string, rotation int) (string, error) {
@@ -275,14 +270,10 @@ func (l *Library) rotatedDerivative(ctx context.Context, file File, kind string,
 	}
 	defer os.RemoveAll(work)
 	output := filepath.Join(work, "rotated"+filepath.Ext(base))
-	if kind == "play" {
-		err = l.rotatePlayback(ctx, base, output, rotation)
-	} else {
-		err = copyRotationImage(base, output)
-		if err == nil {
-			orientation := map[int]string{90: "6", 180: "3", 270: "8"}[rotation]
-			_, err = l.command(ctx, "exiftool", "-n", "-EXIF:Orientation="+orientation, "-overwrite_original", output)
-		}
+	err = copyRotationImage(base, output)
+	if err == nil {
+		orientation := map[int]string{90: "6", 180: "3", 270: "8"}[rotation]
+		_, err = l.command(ctx, "exiftool", "-n", "-EXIF:Orientation="+orientation, "-overwrite_original", output)
 	}
 	if err != nil {
 		return "", err
@@ -325,35 +316,4 @@ func copyRotationImage(source, output string) error {
 		return err
 	}
 	return closeErr
-}
-
-func (l *Library) rotatePlayback(ctx context.Context, input, output string, rotation int) error {
-	probe, err := l.command(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream_side_data=rotation", "-of", "json", input)
-	if err != nil {
-		return err
-	}
-	var metadata struct {
-		Streams []struct {
-			SideData []struct {
-				Rotation float64 `json:"rotation"`
-			} `json:"side_data_list"`
-		} `json:"streams"`
-	}
-	if err = json.Unmarshal(probe, &metadata); err != nil {
-		return err
-	}
-	if len(metadata.Streams) != 1 {
-		return errRotationNotReady
-	}
-	angle := float64(-rotation)
-	for _, data := range metadata.Streams[0].SideData {
-		angle += data.Rotation
-	}
-	release, err := l.acquireCPU(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	_, err = l.command(ctx, "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-display_rotation:v:0", strconv.FormatFloat(angle, 'f', -1, 64), "-i", input, "-map", "0", "-c", "copy", "-movflags", "+faststart", "-y", output)
-	return err
 }

@@ -470,6 +470,7 @@ func planDeletion(tx *sql.Tx, ids []string) (deletionPlan, error) {
 
 func (l *Library) cancelProcessing(hashes []string) {
 	l.cancelDINO(hashes)
+	l.cancelPlayback(hashes)
 	l.processingMu.Lock()
 	defer l.processingMu.Unlock()
 	for _, hash := range hashes {
@@ -480,6 +481,9 @@ func (l *Library) cancelProcessing(hashes []string) {
 }
 
 func (l *Library) waitProcessing(ctx context.Context, hashes []string) error {
+	if err := l.waitPlayback(ctx, hashes); err != nil {
+		return err
+	}
 	l.processingMu.Lock()
 	jobs := []*processingJob{}
 	for _, hash := range hashes {
@@ -605,10 +609,12 @@ func (l *Library) runDeletion(ctx context.Context, id string, plan deletionPlan)
 		}
 		paths := []string{l.Object(hash), l.Derived(hash, "-thumb.jpg"), l.Derived(hash, "-preview.jpg"), l.Derived(hash, "-play.mp4"), l.Derived(hash, dinoSuffix), filepath.Join(l.Root, "incoming", hash)}
 		for _, rotation := range []int{90, 180, 270} {
-			for _, kind := range []string{"thumb", "preview", "play"} {
+			for _, kind := range []string{"thumb", "preview"} {
 				path := l.rotationPath(hash, kind, rotation)
 				paths = append(paths, path, path+".source")
 			}
+			legacy := l.Derived(hash, fmt.Sprintf("-rotation%d-play.mp4", rotation))
+			paths = append(paths, legacy, legacy+".source")
 		}
 		for _, path := range paths {
 			if e := removeDurably(path); e != nil {

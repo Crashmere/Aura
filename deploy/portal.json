@@ -35,7 +35,7 @@
       "id": "derived",
       "name": "预览缓存",
       "path": "/opt/aura/data/derived",
-      "purpose": "可再生缩略图、浏览预览、兼容播放视频、自选视频封面与实况关键照片帧、无损方向副本及 DINO 特征和推荐候选；nas 手工全量备份完整收录，原生工具仍不收录。",
+      "purpose": "可再生缩略图、浏览预览、自选视频封面与实况关键照片帧、无损 JPEG 方向副本及 DINO 特征和推荐候选；视频使用原件或按需短片段，不保存整段播放副本。nas 手工全量备份收录已存图片与特征，原生工具仍不收录。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -44,7 +44,7 @@
       "id": "incoming",
       "name": "上传暂存",
       "path": "/opt/aura/data/incoming",
-      "purpose": "已确认写入但尚未提交的持久化分片；nas 手工全量备份和升级冷副本完整收录。恢复旧状态后用 Apple 客户端核对回执，仅补传确认缺失且不在最近删除中的原件。",
+      "purpose": "已确认写入但尚未提交的持久化分片，nas 手工全量备份收录。恢复旧状态后用 Apple 客户端核对回执，仅补传确认缺失且不在最近删除中的原件。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -105,6 +105,11 @@
       "method": "GET",
       "path": "/api/info",
       "description": "版本、能力声明、照片库数量、原件体积与处理状态"
+    },
+    {
+      "method": "GET",
+      "path": "/api/playback/{hash}",
+      "description": "原件优先播放描述、编码能力提示与按需分段播放地址"
     },
     {
       "method": "GET",
@@ -194,7 +199,7 @@
     {
       "method": "PATCH",
       "path": "/api/assets/{id}/rotation",
-      "description": "保存照片、视频与准确配对实况资源的旋转方向；仅改浏览副本方向标记，不改写或重新压缩原件"
+      "description": "保存照片、视频与准确配对实况资源的方向；JPEG 写入方向标记，视频按需片段应用方向，不改写原件"
     },
     {
       "method": "GET",
@@ -284,12 +289,32 @@
     {
       "method": "GET",
       "path": "/media/{hash}/{kind}",
-      "description": "鉴权读取原件、缩略图、预览或实况视频；支持 Range"
+      "description": "鉴权下载原件、直接播放视频原件或读取 JPEG 预览；支持 Range。play 别名转到 HLS，不生成整段 MP4"
     },
     {
       "method": "HEAD",
       "path": "/media/{hash}/{kind}",
       "description": "读取媒体响应头"
+    },
+    {
+      "method": "GET",
+      "path": "/media/{hash}/stream/index.m3u8",
+      "description": "按保存方向返回有限视频时间线，不预先转码整段视频"
+    },
+    {
+      "method": "HEAD",
+      "path": "/media/{hash}/stream/index.m3u8",
+      "description": "读取按需播放列表响应头"
+    },
+    {
+      "method": "GET",
+      "path": "/media/{hash}/stream/{segment}.ts",
+      "description": "仅生成请求位置的短 H.264/AAC 片段；3070 优先转码，内存缓存有容量和并发上限"
+    },
+    {
+      "method": "HEAD",
+      "path": "/media/{hash}/stream/{segment}.ts",
+      "description": "验证原件和片段位置并读取响应头，不启动转码"
     }
   ]
 }

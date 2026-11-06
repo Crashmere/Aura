@@ -27,6 +27,7 @@ import {
   orientedDimensions,
 } from "../core/client";
 import type { CatalogAsset } from "../core/types";
+import { VideoPlayback } from "../core/video-playback";
 import {
   cacheDecodedPreview,
   isPreviewCached,
@@ -382,6 +383,8 @@ export function StageVideoPlayer({
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(live || !!framePicker);
   const [errorMsg, setErrorMsg] = useState("");
+  const [sourceReady, setSourceReady] = useState(false);
+  const [sourceFrameRate, setSourceFrameRate] = useState<number | undefined>(undefined);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [scrubTime, setScrubTime] = useState<number | null>(null);
@@ -402,6 +405,18 @@ export function StageVideoPlayer({
   const isMounted = useRef(true);
   const lastObservedMediaTime = useRef<number | undefined>(undefined);
   const measuredFrameInterval = useRef<number | undefined>(undefined);
+  const playbackRef = useRef<VideoPlayback | null>(null);
+  const retainedPlaybackRef = useRef<{
+    hash: string;
+    time: number;
+    rate: number;
+    started: boolean;
+  } | null>(null);
+  const pendingPausedFrameRef = useRef<{ source: VideoPlayback; time: number } | null>(null);
+  const startedRef = useRef(started);
+  startedRef.current = started;
+  const availabilityRef = useRef({ locked, isPresent });
+  availabilityRef.current = { locked, isPresent };
 
   const callbacksRef = useRef({
     onPlaybackChange,
@@ -414,38 +429,108 @@ export function StageVideoPlayer({
     onFrame: framePicker?.onChange,
   };
 
-  const playUrl = buildMediaUrl(
-    live ? asset.motion! : asset.primary,
-    "play",
-    live ? asset.motionRotation : asset.rotation,
-  );
-  const nominalFps = (live ? asset.motionFrameRate : asset.frameRate) || 30;
+  const sourceHash = live ? asset.motion! : asset.primary;
+  const sourceRotation = (live ? asset.motionRotation : asset.rotation) || 0;
+  const isFramePicker = !!framePicker;
+  const initialFrameTime = framePicker?.initialTime || 0;
+  const nominalFps = (live ? asset.motionFrameRate : asset.frameRate) || sourceFrameRate || 30;
+  const frameRateRef = useRef(nominalFps);
+  frameRateRef.current = nominalFps;
 
   function emitFrameState() {
     const el = videoRef.current;
     if (!el || !callbacksRef.current.onFrame) return;
     const totalLen = Number.isFinite(el.duration) ? el.duration : 0;
+    const fps = frameRateRef.current;
     const observed = lastObservedMediaTime.current;
     const effectiveNow =
       !el.seeking &&
       observed !== undefined &&
-      Math.abs(observed - el.currentTime) < 1 / nominalFps
+      Math.abs(observed - el.currentTime) < 1 / fps
         ? observed
         : el.currentTime;
     callbacksRef.current.onFrame({
-      time: Math.max(0, Math.min(Math.max(0, totalLen - 0.5 / nominalFps), effectiveNow)),
+      time: Math.max(0, Math.min(Math.max(0, totalLen - 0.5 / fps), effectiveNow)),
       duration: totalLen,
       ready: el.paused && !el.seeking && el.readyState >= 2,
     });
   }
 
+  function restorePausedFrame() {
+    const request = pendingPausedFrameRef.current;
+    const el = videoRef.current;
+    if (!request || !el || playbackRef.current !== request.source) return;
+    if (!availabilityRef.current.isPresent || availabilityRef.current.locked) return;
+    if (document.hidden && document.pictureInPictureElement !== el) return;
+    pendingPausedFrameRef.current = null;
+    request.source.loadFrame(request.time);
+  }
+
   useEffect(() => {
     const el = videoRef.current;
     isMounted.current = true;
-    if (el) {
-      el.volume = savedVolume;
-      el.muted = savedMuted;
+    if (!el) return;
+    el.volume = savedVolume;
+    el.muted = savedMuted;
+    const previous = retainedPlaybackRef.current;
+    // A saved direction changes the representation, not the viewed moment.
+    const retained = previous?.hash === sourceHash ? previous : null;
+    el.playbackRate = retained?.rate || 1;
+    setPlaybackSpeed(retained?.rate || 1);
+    setCurrentTime(retained?.time || 0);
+    setPlaying(false);
+    setErrorMsg("");
+    setBufferedRanges([]);
+    setBuffering(isFramePicker || live || !!retained?.started);
+    if (!retained) {
+      setDuration(0);
+      setStarted(isFramePicker || live);
     }
+    setSourceReady(false);
+    setSourceFrameRate(undefined);
+    lastObservedMediaTime.current = undefined;
+    measuredFrameInterval.current = undefined;
+    const source = new VideoPlayback(el, sourceHash, sourceRotation, {
+      onReady: setSourceReady,
+      onDescriptor: (descriptor) => {
+        if (descriptor.frameRate && Number.isFinite(descriptor.frameRate) && descriptor.frameRate > 0) {
+          setSourceFrameRate(descriptor.frameRate);
+        }
+      },
+      onSwitch: (time) => {
+        setErrorMsg("");
+        setBuffering(true);
+        setPlaying(false);
+        setCurrentTime(time);
+        setBufferedRanges([]);
+        lastObservedMediaTime.current = undefined;
+        measuredFrameInterval.current = undefined;
+        callbacksRef.current.onFrame?.({ time, duration: el.duration || 0, ready: false });
+      },
+      onError: (message) => {
+        setErrorMsg(message);
+        setBuffering(false);
+        setPlaying(false);
+        callbacksRef.current.onPlaybackChange(false);
+      },
+    }, retained || undefined);
+    playbackRef.current = source;
+    void source.prepare()
+      .then(() => {
+        if (playbackRef.current !== source) return;
+        if (isFramePicker || retained?.started) {
+          pendingPausedFrameRef.current = {
+            source,
+            time: isFramePicker ? initialFrameTime : retained?.time || 0,
+          };
+          restorePausedFrame();
+        } else if (live) void startPlayback();
+      })
+      .catch((error: Error) => {
+        if (playbackRef.current !== source || error.name === "AbortError") return;
+        setErrorMsg(error.message || "视频加载失败，请重试");
+        setBuffering(false);
+      });
 
     let vfcHandle = 0;
     const onVideoFrame = (_now: number, meta: VideoFrameCallbackMetadata) => {
@@ -467,17 +552,12 @@ export function StageVideoPlayer({
 
     const onVisibility = () => {
       if (document.hidden && document.pictureInPictureElement !== el) {
-        el?.pause();
+        source.suspend();
+      } else if (!document.hidden) {
+        restorePausedFrame();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
-
-    if (framePicker && el) {
-      el.src = playUrl;
-      el.load();
-    } else if (live) {
-      void startPlayback();
-    }
 
     return () => {
       isMounted.current = false;
@@ -487,33 +567,37 @@ export function StageVideoPlayer({
       if (document.pictureInPictureElement === el) {
         void document.exitPictureInPicture().catch(() => {});
       }
-      if (el) {
-        el.pause();
-        el.removeAttribute("src");
-        el.load();
-      }
+      retainedPlaybackRef.current = {
+        hash: sourceHash,
+        time: el.currentTime,
+        rate: el.playbackRate,
+        started: startedRef.current,
+      };
+      if (pendingPausedFrameRef.current?.source === source) pendingPausedFrameRef.current = null;
+      source.destroy();
+      if (playbackRef.current === source) playbackRef.current = null;
       callbacksRef.current.onPlaybackChange(false);
     };
-  }, []);
+  }, [sourceHash, sourceRotation, live, isFramePicker, initialFrameTime]);
 
   useEffect(() => {
-    if (locked || !isPresent) videoRef.current?.pause();
+    if (locked || !isPresent) playbackRef.current?.suspend();
+    else restorePausedFrame();
   }, [locked, isPresent]);
 
   async function startPlayback() {
     const el = videoRef.current;
-    if (!el || locked || !isPresent) return;
-    if (!el.getAttribute("src")) {
-      el.src = playUrl;
-      el.load();
-    }
+    const source = playbackRef.current;
+    if (!el || !source || availabilityRef.current.locked || !availabilityRef.current.isPresent) return;
+    if (document.hidden && document.pictureInPictureElement !== el) return;
     setStarted(true);
     setBuffering(true);
     setErrorMsg("");
     try {
-      await el.play();
+      await source.play();
     } catch (err) {
       if (!isMounted.current || (err as DOMException).name === "AbortError") return;
+      if ((err as DOMException).name !== "NotAllowedError" && source.handleMediaError()) return;
       setBuffering(false);
       setErrorMsg(
         (err as DOMException).name === "NotAllowedError"
@@ -568,7 +652,7 @@ export function StageVideoPlayer({
     seekRafId.current = 0;
     setScrubTime(null);
 
-    const catalogRate = live ? asset.motionFrameRate : asset.frameRate;
+    const catalogRate = (live ? asset.motionFrameRate : asset.frameRate) || sourceFrameRate;
     const validRate =
       Number.isFinite(catalogRate) && catalogRate && catalogRate > 0 ? catalogRate : 0;
     const stepDt = validRate
@@ -632,7 +716,7 @@ export function StageVideoPlayer({
         className="player-video"
         style={rotationCss}
         playsInline
-        preload={framePicker ? "auto" : "none"}
+        preload={framePicker ? "metadata" : "none"}
         poster={buildMediaUrl(
           asset.primary,
           "thumb",
@@ -672,6 +756,7 @@ export function StageVideoPlayer({
           ignoreNextClick.current = true;
         }}
         onClick={() => {
+          if (!sourceReady) return;
           if (ignoreNextClick.current) {
             ignoreNextClick.current = false;
             return;
@@ -686,16 +771,11 @@ export function StageVideoPlayer({
           setSupportsPip(
             !!document.pictureInPictureEnabled && !el.disablePictureInPicture,
           );
-          if (framePicker) {
-            el.currentTime = Math.max(
-              0,
-              Math.min(Math.max(0, len - 0.5 / nominalFps), framePicker.initialTime),
-            );
-          }
           emitFrameState();
         }}
         onLoadedData={() => {
-          if (framePicker) setBuffering(false);
+          playbackRef.current?.settled();
+          if (framePicker || videoRef.current?.paused) setBuffering(false);
           emitFrameState();
         }}
         onTimeUpdate={(e) => {
@@ -710,26 +790,46 @@ export function StageVideoPlayer({
           }
           setBufferedRanges(list);
         }}
-        onPlay={() => {
+        onPlay={(e) => {
+          const el = e.currentTarget;
+          const source = playbackRef.current;
+          if (!isMounted.current || !source || el.paused) return;
+          if (
+            availabilityRef.current.locked ||
+            !availabilityRef.current.isPresent ||
+            (document.hidden && document.pictureInPictureElement !== el)
+          ) {
+            source.suspend();
+            return;
+          }
+          if (!source.played()) return;
+          setStarted(true);
           setPlaying(true);
           callbacksRef.current.onPlaybackChange(true);
           emitFrameState();
         }}
         onPause={() => {
-          if (isMounted.current) {
+          if (isMounted.current && videoRef.current?.paused) {
+            const source = playbackRef.current;
+            source?.paused();
             setPlaying(false);
-            setBuffering(false);
+            if (!source?.changingSource) setBuffering(false);
             callbacksRef.current.onPlaybackChange(false);
             emitFrameState();
           }
         }}
-        onPlaying={() => setBuffering(false)}
+        onPlaying={() => {
+          playbackRef.current?.settled();
+          setBuffering(false);
+        }}
         onWaiting={() => setBuffering(true)}
         onSeeking={() => {
+          playbackRef.current?.seeking();
           setBuffering(true);
           emitFrameState();
         }}
         onSeeked={() => {
+          playbackRef.current?.settled();
           setBuffering(false);
           schedulePreviewSeek();
           emitFrameState();
@@ -746,7 +846,8 @@ export function StageVideoPlayer({
           setMuted(savedMuted);
         }}
         onError={() => {
-          if (isMounted.current) {
+          if (isMounted.current && videoRef.current?.error) {
+            if (playbackRef.current?.handleMediaError()) return;
             setErrorMsg("视频加载失败，请重试");
             setBuffering(false);
             setPlaying(false);
@@ -761,7 +862,7 @@ export function StageVideoPlayer({
           <button
             type="button"
             className="player-big-play"
-            disabled={locked}
+            disabled={locked || !sourceReady}
             aria-label={
               currentTime >= duration && duration > 0 ? "重新播放" : "播放视频"
             }
@@ -787,9 +888,21 @@ export function StageVideoPlayer({
             <button
               type="button"
               disabled={locked}
-              onClick={() => {
-                videoRef.current?.removeAttribute("src");
-                void startPlayback();
+              onClick={async () => {
+                const source = playbackRef.current;
+                if (!source) return;
+                setErrorMsg("");
+                setBuffering(true);
+                try {
+                  await source.retry();
+                  if (!isMounted.current || playbackRef.current !== source) return;
+                  if (framePicker) source.loadFrame();
+                  else void startPlayback();
+                } catch (error) {
+                  if (!isMounted.current || (error as Error).name === "AbortError") return;
+                  setErrorMsg((error as Error).message || "视频加载失败，请重试");
+                  setBuffering(false);
+                }
               }}
             >
               重试
@@ -938,7 +1051,7 @@ export function StageVideoPlayer({
               data-player-toggle
               aria-label={playing ? "暂停" : "播放"}
               title="播放 / 暂停（空格）"
-              disabled={locked}
+              disabled={locked || !sourceReady}
               onClick={togglePlayPause}
             >
               <span key={playing ? "pause" : "play"} className="player-state-icon" aria-hidden="true">
@@ -989,7 +1102,7 @@ export function StageVideoPlayer({
                 const steps = [0.5, 1, 1.5, 2];
                 const next = steps[(steps.indexOf(playbackSpeed) + 1) % steps.length];
                 setPlaybackSpeed(next);
-                if (videoRef.current) videoRef.current.playbackRate = next;
+                playbackRef.current?.setRate(next);
               }}
             >
               <span key={playbackSpeed} className="player-state-icon">{playbackSpeed}×</span>

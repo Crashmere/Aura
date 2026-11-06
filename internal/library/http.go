@@ -59,6 +59,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 		writeJSON(w, 200, map[string]string{"status": "ok", "service": "Aura"})
 	})
 	r.Get("/api/info", l.info)
+	r.Get("/api/playback/{hash}", l.playbackInfo)
 	r.Get("/api/assets", l.list)
 	r.Get("/api/filter-options", l.filterOptions)
 	r.Patch("/api/assets", l.batchUpdateAssets)
@@ -94,6 +95,10 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Get("/api/uploads/{id}", l.uploadStatus)
 	r.Put("/api/uploads/{id}", l.chunk)
 	r.Post("/api/uploads/{id}/complete", l.commitUpload)
+	r.Get("/media/{hash}/stream/index.m3u8", l.streamPlaylist)
+	r.Head("/media/{hash}/stream/index.m3u8", l.streamPlaylist)
+	r.Get("/media/{hash}/stream/{segment}.ts", l.streamSegment)
+	r.Head("/media/{hash}/stream/{segment}.ts", l.streamSegment)
 	r.Get("/media/{hash}/{kind}", l.media)
 	r.Head("/media/{hash}/{kind}", l.media)
 	static := http.FileServer(http.FS(frontend))
@@ -594,6 +599,15 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if kind == "play" {
+		query := r.URL.Query().Encode()
+		target := "/aura/media/" + hash + "/stream/index.m3u8"
+		if query != "" {
+			target += "?" + query
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+		return
+	}
 	path := ""
 	rotation := f.Rotation
 	if kind != "original" {
@@ -628,20 +642,33 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		path = l.Object(hash)
 		w.Header().Set("Content-Type", f.Mime)
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": f.Name}))
+	case "source":
+		if !strings.HasPrefix(f.Mime, "video/") {
+			http.NotFound(w, r)
+			return
+		}
+		if rotation != 0 {
+			fail(w, 409, "此播放方向需要按需转码")
+			return
+		}
+		path = l.Object(hash)
+		sourceMime := f.Mime
+		if sourceMime == "video/quicktime" {
+			sourceMime = "video/mp4"
+		}
+		w.Header().Set("Content-Type", sourceMime)
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Name}))
 	case "thumb":
 		path = l.Derived(hash, "-thumb.jpg")
 		w.Header().Set("Content-Type", "image/jpeg")
 	case "preview":
 		path = l.Derived(hash, "-preview.jpg")
 		w.Header().Set("Content-Type", "image/jpeg")
-	case "play":
-		path = l.Derived(hash, "-play.mp4")
-		w.Header().Set("Content-Type", "video/mp4")
 	default:
 		http.NotFound(w, r)
 		return
 	}
-	if kind != "original" && (rotation != 0 || f.Cover != nil && (kind == "thumb" || kind == "preview")) {
+	if kind != "original" && kind != "source" && (rotation != 0 || f.Cover != nil && (kind == "thumb" || kind == "preview")) {
 		targets := []File{f}
 		if f.Cover != nil && f.Cover.Motion != hash && (kind == "thumb" || kind == "preview") {
 			targets = append(targets, File{Hash: f.Cover.Motion})
@@ -688,11 +715,11 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 			originalFailure(w, e)
 			return
 		}
-		if kind == "original" {
+		if kind == "original" || kind == "source" {
 			writeJSON(w, 503, map[string]string{"error": "原件暂不可读，请检查存储或重新选择源文件修复", "code": "original_missing"})
 			return
 		}
-		if kind != "original" && f.Status == "ready" {
+		if f.Status == "ready" {
 			tx, err := l.DB.Begin()
 			if err == nil {
 				err = originalDeletion(tx, hash, "")
@@ -727,7 +754,7 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 	// Derivatives can be rebuilt without changing the original's hash. Validate the
 	// opened representation so revalidation and If-Range never identify old bytes.
 	etag := `"` + hash + `"`
-	if kind != "original" {
+	if kind != "original" && kind != "source" {
 		etag = fmt.Sprintf(`"%s-%s-%d-%x-%x"`, hash, kind, rotation, stat.Size(), stat.ModTime().UnixNano())
 	}
 	w.Header().Set("ETag", etag)

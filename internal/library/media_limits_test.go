@@ -37,7 +37,7 @@ func TestNativeMediaConcurrencyAndCancellation(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		data, _ := os.ReadFile(started)
-		if len(data) >= 4 {
+		if len(data) >= 3 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -45,9 +45,9 @@ func TestNativeMediaConcurrencyAndCancellation(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// All eight callers are active while the four running decoders are blocked.
+	// Three background decoders leave one shared CPU slot for foreground playback.
 	time.Sleep(100 * time.Millisecond)
-	if data, _ := os.ReadFile(started); len(data) != 4 {
+	if data, _ := os.ReadFile(started); len(data) != 3 {
 		t.Fatalf("native commands exceeded the shared bound: %d", len(data))
 	}
 	cancel()
@@ -66,7 +66,7 @@ func TestNativeMediaConcurrencyAndCancellation(t *testing.T) {
 	if _, err := l.command(probe, "vips", "unused"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("blocked decoder deadline: %v", err)
 	}
-	if data, _ := os.ReadFile(started); len(data) != 5 {
+	if data, _ := os.ReadFile(started); len(data) != 4 {
 		t.Fatal("cancellation did not release the native command slots")
 	}
 }

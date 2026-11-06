@@ -29,6 +29,9 @@ type Library struct {
 	processing       map[string]*processingJob
 	deletionMu       sync.Mutex
 	deletionAttempts map[string]time.Time
+	playbackMu       sync.Mutex
+	playback         *playbackCache
+	runtimeCtx       context.Context
 	Wake             chan struct{}
 	gpuOnce          sync.Once
 	gpuAvailable     bool
@@ -37,6 +40,8 @@ type Library struct {
 	ProcessingLimits ProcessingLimits
 	gpuSlots         chan struct{}
 	cpuSlots         chan struct{}
+	backgroundGPU    chan struct{}
+	backgroundCPU    chan struct{}
 	dinoMu           sync.RWMutex
 	dinoStatus       dinoStatus
 	dinoRecords      map[string]dinoRecord

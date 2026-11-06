@@ -51,6 +51,17 @@ export interface StoredFile {
   cover?: CoverChoice;
 }
 
+export interface PlaybackDescriptor {
+  source?: {
+    url: string;
+    mime: string;
+    codecs?: string;
+  };
+  stream: { url: string };
+  duration?: number;
+  frameRate?: number;
+}
+
 export interface AdjustmentEntry {
   identifier?: string;
   enabled?: boolean;

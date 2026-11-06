@@ -32,28 +32,53 @@ func (l *Library) ConfigureProcessing(workers, gpuOperations int) error {
 	l.ProcessingLimits.CPUOperations = min(4, workers)
 	l.gpuSlots = make(chan struct{}, gpuOperations)
 	l.cpuSlots = make(chan struct{}, l.ProcessingLimits.CPUOperations)
+	// Keep foreground playback from waiting behind every background media job.
+	l.backgroundGPU = make(chan struct{}, max(1, gpuOperations-1))
+	l.backgroundCPU = make(chan struct{}, max(1, l.ProcessingLimits.CPUOperations-1))
 	return nil
 }
 
 func (l *Library) acquireCPU(ctx context.Context) (func(), error) {
-	if err := ctx.Err(); err != nil {
+	background, err := acquireMediaSlot(ctx, l.backgroundCPU)
+	if err != nil {
 		return nil, err
 	}
-	select {
-	case l.cpuSlots <- struct{}{}:
-		return func() { <-l.cpuSlots }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	foreground, err := l.acquirePlaybackCPU(ctx)
+	if err != nil {
+		background()
+		return nil, err
 	}
+	return func() { foreground(); background() }, nil
+}
+
+func (l *Library) acquirePlaybackCPU(ctx context.Context) (func(), error) {
+	return acquireMediaSlot(ctx, l.cpuSlots)
 }
 
 func (l *Library) acquireGPU(ctx context.Context) (func(), error) {
+	background, err := acquireMediaSlot(ctx, l.backgroundGPU)
+	if err != nil {
+		return nil, err
+	}
+	foreground, err := l.acquirePlaybackGPU(ctx)
+	if err != nil {
+		background()
+		return nil, err
+	}
+	return func() { foreground(); background() }, nil
+}
+
+func (l *Library) acquirePlaybackGPU(ctx context.Context) (func(), error) {
+	return acquireMediaSlot(ctx, l.gpuSlots)
+}
+
+func acquireMediaSlot(ctx context.Context, slots chan struct{}) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	select {
-	case l.gpuSlots <- struct{}{}:
-		return func() { <-l.gpuSlots }, nil
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

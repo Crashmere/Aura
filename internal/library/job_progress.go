@@ -37,7 +37,7 @@ func processingSteps(mime string) []jobStep {
 	if strings.HasPrefix(mime, "image/") {
 		steps = append(steps, jobStep{ID: "decode", Label: "解码与校正方向", Status: "queued"}, jobStep{ID: "preview", Label: "生成高清预览", Status: "queued"}, jobStep{ID: "thumbnail", Label: "生成缩略图", Status: "queued"}, jobStep{ID: "fingerprint", Label: "计算图像指纹", Status: "queued"})
 	} else if strings.HasPrefix(mime, "video/") {
-		steps = append(steps, jobStep{ID: "thumbnail", Label: "生成视频封面", Status: "queued"}, jobStep{ID: "playback", Label: "生成播放版本", Status: "queued"})
+		steps = append(steps, jobStep{ID: "thumbnail", Label: "生成视频封面", Status: "queued"})
 	}
 	return append(steps, jobStep{ID: "catalog", Label: "归并与更新照片库", Status: "queued"})
 }

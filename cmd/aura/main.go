@@ -86,6 +86,10 @@ func run() error {
 		if e = l.ConfigureProcessing(*workers, min(*gpuOperations, *workers)); e != nil {
 			return e
 		}
+		if e = l.StartPlayback(ctx); e != nil {
+			return e
+		}
+		defer l.ClosePlayback()
 		assets, e := fs.Sub(web.Files, "dist")
 		if e != nil {
 			return e

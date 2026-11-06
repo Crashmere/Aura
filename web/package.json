@@ -12,7 +12,8 @@
     "react-dom": "^19.2.0",
     "lucide-react": "^0.468.0",
     "hash-wasm": "^4.12.0",
-    "exifr": "^7.1.3"
+    "exifr": "^7.1.3",
+    "hls.js": "1.7.4"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",
