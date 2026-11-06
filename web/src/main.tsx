@@ -801,6 +801,22 @@ function AuraApplication() {
     }
   }
 
+  async function setSelectedAlbumCover() {
+    if (route.view !== "albums" || !route.album || selectedIds.size !== 1 || batchBusy) return;
+    const assetId = [...selectedIds][0];
+    if (!assets.some((asset) => asset.id === assetId && !asset.deletionPending)) return;
+    setBatchBusy(true);
+    try {
+      await requestJson(`albums/${route.album}/cover`, { assetId }, "PATCH");
+      showToast("相片集封面已更新");
+      await refreshBoundedCatalog();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), true);
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
   // Permanent deletion tracker
   const purgeTracker = usePurgeTracker(
     route.view === "trash" || (telemetry?.pendingDeletions || 0) > 0,
@@ -1110,12 +1126,6 @@ function AuraApplication() {
                   <Plus size={15} />
                   <span>添加照片</span>
                 </ActionButton>
-                <RoundIconButton
-                  title="选择相片集封面"
-                  onClick={() => setAlbumModal({ kind: "cover", album: activeAlbumDetail })}
-                >
-                  <Images size={16} />
-                </RoundIconButton>
                 <RoundIconButton
                   title="删除相片集"
                   onClick={() => setAlbumModal({ kind: "delete", album: activeAlbumDetail })}
@@ -1501,6 +1511,15 @@ function AuraApplication() {
                     </ActionButton>
                     {route.view === "albums" && route.album && (
                       <ActionButton
+                        disabled={batchBusy || selectedIds.size !== 1}
+                        onClick={() => void setSelectedAlbumCover()}
+                      >
+                        <Images size={15} />
+                        <span>设为相片集封面</span>
+                      </ActionButton>
+                    )}
+                    {route.view === "albums" && route.album && (
+                      <ActionButton
                         disabled={batchBusy || !selectedIds.size}
                         onClick={() => void batchRemoveFromCurrentAlbum()}
                       >
@@ -1657,9 +1676,6 @@ function AuraApplication() {
                 updateRoute((prev) => ({ ...prev, view: "albums", album: savedAlbum.id }), "push");
               } else if (kind === "rename" && savedAlbum) {
                 showToast("相片集已重命名");
-                setActiveAlbumDetail(savedAlbum);
-              } else if (kind === "cover" && savedAlbum) {
-                showToast("相片集封面已更新");
                 setActiveAlbumDetail(savedAlbum);
               } else {
                 showToast("相片集已更新");

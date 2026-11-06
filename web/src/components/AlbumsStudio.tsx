@@ -18,7 +18,6 @@ export type AlbumModalState =
   | { kind: "rename"; album: AlbumItem }
   | { kind: "add"; assets: string[] }
   | { kind: "pick"; album: AlbumItem }
-  | { kind: "cover"; album: AlbumItem }
   | { kind: "delete"; album: AlbumItem };
 
 function AlbumCoverThumb({
@@ -151,20 +150,18 @@ export function AlbumActionModal({
   const [pendingAlbumId, setPendingAlbumId] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const isPhotoPicker = state.kind === "pick" || state.kind === "cover";
+  const isPhotoPicker = state.kind === "pick";
 
   const modalTitle =
-    state.kind === "cover"
-      ? "选择相片集封面"
-      : state.kind === "pick"
-        ? "添加照片"
-        : state.kind === "rename"
-          ? "重命名相片集"
-          : state.kind === "delete"
-            ? "删除相片集"
-            : isCreatingNew
-              ? "新建相片集"
-              : "添加到相片集";
+    state.kind === "pick"
+      ? "添加照片"
+      : state.kind === "rename"
+        ? "重命名相片集"
+        : state.kind === "delete"
+          ? "删除相片集"
+          : isCreatingNew
+            ? "新建相片集"
+            : "添加到相片集";
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -269,10 +266,9 @@ export function AlbumActionModal({
           </button>
         </header>
 
-        {state.kind === "pick" || state.kind === "cover" ? (
+        {state.kind === "pick" ? (
           <AlbumPhotoPickerBody
             album={state.album}
-            mode={state.kind === "cover" ? "cover" : "add"}
             busy={busy}
             setBusy={setBusy}
             onClose={onClose}
@@ -414,14 +410,12 @@ export function AlbumActionModal({
 
 function AlbumPhotoPickerBody({
   album,
-  mode,
   busy,
   setBusy,
   onClose,
   onSaved,
 }: {
   album: AlbumItem;
-  mode: "add" | "cover";
   busy: boolean;
   setBusy: (b: boolean) => void;
   onClose: () => void;
@@ -431,9 +425,7 @@ function AlbumPhotoPickerBody({
   const [searchInput, setSearchInput] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [nextCursor, setNextCursor] = useState("");
-  const [chosenIds, setChosenIds] = useState<Set<string>>(
-    () => new Set(mode === "cover" && album.cover ? [album.cover.id] : []),
-  );
+  const [chosenIds, setChosenIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const reqIdRef = useRef(0);
@@ -452,7 +444,7 @@ function AlbumPhotoPickerBody({
         `assets?${new URLSearchParams({
           q: debouncedQuery,
           cursor,
-          ...(mode === "cover" ? { album: album.id } : { excludeAlbum: album.id }),
+          excludeAlbum: album.id,
         }).toString()}`,
       );
       if (reqId !== reqIdRef.current) return;
@@ -478,11 +470,10 @@ function AlbumPhotoPickerBody({
     return () => {
       ++reqIdRef.current;
     };
-  }, [debouncedQuery, album.id, mode]);
+  }, [debouncedQuery, album.id]);
 
   function togglePick(id: string) {
     setChosenIds((prev) => {
-      if (mode === "cover") return new Set(prev.has(id) ? [] : [id]);
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else if (next.size < 1000) next.add(id);
@@ -490,20 +481,14 @@ function AlbumPhotoPickerBody({
     });
   }
 
-  async function submitPicked(automatic = false) {
+  async function submitPicked() {
     if (busy) return;
     setBusy(true);
     setErrorMsg("");
     try {
-      const updated = mode === "cover"
-        ? await requestJson<AlbumItem>(
-            `albums/${album.id}/cover`,
-            { assetId: automatic ? null : [...chosenIds][0] },
-            "PATCH",
-          )
-        : await requestJson<AlbumItem>(`albums/${album.id}/assets`, {
-            assets: [...chosenIds],
-          });
+      const updated = await requestJson<AlbumItem>(`albums/${album.id}/assets`, {
+        assets: [...chosenIds],
+      });
       onSaved(updated);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -515,11 +500,11 @@ function AlbumPhotoPickerBody({
     <>
       <div className="modal-body photo-picker-body">
         <div className="picker-toolbar">
-          <p>{mode === "cover" ? "选择一项作为封面" : `选择照片加入“${album.name}”`}</p>
+          <p>选择照片加入“{album.name}”</p>
           <div className="search-box">
             <Search size={16} />
             <input
-              aria-label={mode === "cover" ? "搜索封面照片或视频" : "搜索可添加的照片"}
+              aria-label="搜索可添加的照片"
               placeholder="搜索文件名、相机…"
               value={searchInput}
               disabled={busy}
@@ -546,9 +531,7 @@ function AlbumPhotoPickerBody({
           <p className="album-modal-note">
             {debouncedQuery
               ? "没有符合条件的照片"
-              : mode === "cover"
-                ? "相片集暂无照片"
-                : "没有可添加的照片，已有项目不会重复显示。"}
+              : "没有可添加的照片，已有项目不会重复显示。"}
           </p>
         )}
 
@@ -589,35 +572,24 @@ function AlbumPhotoPickerBody({
         )}
       </div>
 
-      <footer className={`modal-footer ${mode === "cover" ? "album-cover-picker-footer" : ""}`}>
-        {mode === "cover" ? (
-          <button
-            type="button"
-            className="btn btn-subtle"
-            disabled={busy}
-            onClick={() => void submitPicked(true)}
-          >
-            使用自动封面
-          </button>
-        ) : (
-          <span className="picker-selection-summary">
-            <Check size={15} />
-            <span>
-              已选 {chosenIds.size} 项
-              {chosenIds.size === 1000 ? "，已达单次上限" : ""}
-            </span>
-            {chosenIds.size > 0 && (
-              <button
-                type="button"
-                className="picker-clear-btn"
-                disabled={busy}
-                onClick={() => setChosenIds(new Set())}
-              >
-                清空选择
-              </button>
-            )}
+      <footer className="modal-footer">
+        <span className="picker-selection-summary">
+          <Check size={15} />
+          <span>
+            已选 {chosenIds.size} 项
+            {chosenIds.size === 1000 ? "，已达单次上限" : ""}
           </span>
-        )}
+          {chosenIds.size > 0 && (
+            <button
+              type="button"
+              className="picker-clear-btn"
+              disabled={busy}
+              onClick={() => setChosenIds(new Set())}
+            >
+              清空选择
+            </button>
+          )}
+        </span>
         <div className="modal-footer-actions">
           <button
             type="button"
@@ -633,15 +605,11 @@ function AlbumPhotoPickerBody({
             disabled={busy || !chosenIds.size}
             onClick={() => void submitPicked()}
           >
-            {mode === "cover"
-              ? busy
-                ? "正在保存"
-                : "设为封面"
-              : busy
-                ? "正在添加"
-                : chosenIds.size
-                  ? `添加 ${chosenIds.size} 项`
-                  : "添加"}
+            {busy
+              ? "正在添加"
+              : chosenIds.size
+                ? `添加 ${chosenIds.size} 项`
+                : "添加"}
           </button>
         </div>
       </footer>

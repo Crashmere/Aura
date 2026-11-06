@@ -486,17 +486,29 @@ export function PhotoTile({
         className="photo-open"
         disabled={disabled}
         onPointerEnter={(e) => {
-          if (e.pointerType === "mouse" && !selecting && !disabled) {
+          if (
+            e.pointerType === "mouse" && !selecting && !disabled &&
+            !e.ctrlKey && !e.metaKey && !e.shiftKey
+          ) {
             schedulePreviewWarmup([asset], 180);
           }
         }}
         onPointerLeave={abortSpeculativePreloads}
-        onPointerDown={() => {
-          if (!selecting && !disabled) {
+        onPointerDown={(e) => {
+          if (e.ctrlKey || e.metaKey || e.shiftKey) {
+            abortSpeculativePreloads();
+          } else if (!selecting && !disabled) {
             schedulePreviewWarmup([asset], 0);
           }
         }}
         onClick={onClick}
+        onContextMenu={(e) => {
+          // macOS reports Ctrl-left-click as a context menu instead of a click.
+          if (e.ctrlKey && e.button === 0 && !disabled) {
+            e.preventDefault();
+            onClick(e);
+          }
+        }}
         aria-label={
           selecting ? `${selected ? "取消选择" : "选择"} ${asset.name}` : `查看 ${asset.name}`
         }
@@ -593,6 +605,12 @@ export function PhotoTile({
           aria-pressed={selected}
           disabled={disabled || !!asset.deletionPending}
           onClick={onToggleSelect}
+          onContextMenu={(e) => {
+            if (e.ctrlKey && e.button === 0 && !disabled && !asset.deletionPending) {
+              e.preventDefault();
+              onToggleSelect(e);
+            }
+          }}
         >
           <Check size={14} aria-hidden="true" />
         </button>
@@ -847,11 +865,14 @@ export function VirtualizedTimelineCanvas({
                   selecting={selecting}
                   disabled={busy}
                   onToggleSelect={(e) => onToggleAsset(asset.id, e.shiftKey)}
-                  onClick={(e) =>
-                    selecting || e.shiftKey
-                      ? onToggleAsset(asset.id, e.shiftKey)
-                      : onOpenAsset(asset)
-                  }
+                  onClick={(e) => {
+                    if (selecting || e.shiftKey || e.ctrlKey || e.metaKey) {
+                      e.preventDefault();
+                      if (!asset.deletionPending) onToggleAsset(asset.id, e.shiftKey);
+                    } else {
+                      onOpenAsset(asset);
+                    }
+                  }}
                 />
               ))}
             </div>
