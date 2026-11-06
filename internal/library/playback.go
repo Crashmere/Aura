@@ -36,6 +36,7 @@ type playbackSpec struct {
 	width, height              int
 	nativeRotation             float64
 	hdr                        bool
+	hdrPeak                    float64
 	transfer                   string
 	colorPrimaries, colorSpace string
 	sourceCodecs               string
@@ -130,7 +131,7 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 			Primaries string `json:"color_primaries"`
 			Space     string `json:"color_space"`
 			SideData  []struct {
-				Rotation float64 `json:"rotation"`
+				Rotation *float64 `json:"rotation"`
 			} `json:"side_data_list"`
 		} `json:"streams"`
 		Format struct {
@@ -143,10 +144,12 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 		return nil, err
 	}
 	spec := &playbackSpec{hash: hash, stamp: stamp, path: l.Object(hash)}
-	video, audio, audioCompatible := false, false, true
+	video, audio, audioCompatible, audioAAC := false, false, true, false
 	for _, stream := range raw.Streams {
 		if stream.Type == "audio" && !audio {
-			audio, audioCompatible = true, stream.Codec == "aac" && stream.Profile == "LC"
+			audioAAC = stream.Codec == "aac" && stream.Profile == "LC"
+			// PCM16 QuickTime Live Photos can play without converting the video.
+			audio, audioCompatible = true, audioAAC || stream.Codec == "pcm_s16le"
 		}
 		if stream.Type != "video" || video {
 			continue
@@ -169,9 +172,11 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 		spec.colorPrimaries, spec.colorSpace = stream.Primaries, stream.Space
 		spec.hdr = stream.Transfer == "smpte2084" || stream.Transfer == "arib-std-b67"
 		for _, data := range stream.SideData {
-			spec.nativeRotation = data.Rotation
+			if data.Rotation != nil {
+				spec.nativeRotation = *data.Rotation
+			}
 		}
-		if stream.Codec == "h264" && (stream.Tag == "avc1" || stream.Tag == "avc3") && (stream.Profile == "Constrained Baseline" || stream.Profile == "Baseline" || stream.Profile == "Main" || stream.Profile == "High") && stream.Pixels == "yuv420p" {
+		if stream.Codec == "h264" && (stream.Tag == "avc1" || stream.Tag == "avc3") && (stream.Profile == "Constrained Baseline" || stream.Profile == "Baseline" || stream.Profile == "Main" || stream.Profile == "High") && (stream.Pixels == "yuv420p" || stream.Pixels == "yuvj420p") {
 			spec.sourceCodecs = stream.Tag
 		}
 		if stream.Codec == "hevc" && (stream.Tag == "hvc1" || stream.Tag == "hev1") && (stream.Profile == "Main" || stream.Profile == "Main 10") {
@@ -192,8 +197,11 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 	// Native playback exposes the original PTS, while frame APIs use time from the first frame.
 	if !iso || !audioCompatible || math.Abs(spec.start) > 0.001 {
 		spec.sourceCodecs = ""
-	} else if audio && spec.sourceCodecs != "" {
+	} else if audioAAC && spec.sourceCodecs != "" {
 		spec.sourceCodecs += ", mp4a.40.2"
+	}
+	if spec.hdr {
+		spec.hdrPeak = l.probePlaybackHDRPeak(ctx, spec.path, spec.transfer)
 	}
 	if err = originalDeletion(l.DB, hash, ""); err != nil {
 		return nil, err

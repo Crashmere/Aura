@@ -119,7 +119,7 @@ func (l *Library) encodePlaybackSegment(ctx context.Context, scratch string, spe
 		args = append(args, "-seek_timestamp", "1", "-ss", playbackTime(spec.start+start), "-i", spec.path, "-t", playbackTime(duration), "-map", "0:v:0", "-map", "0:a:0?")
 		filters := []string{}
 		if spec.hdr {
-			filters = append(filters, "zscale=t=linear:npl=100", "format=gbrpf32le", "tonemap=tonemap=mobius:desat=0", "zscale=p=bt709:t=bt709:m=bt709:r=tv", "format=yuv420p")
+			filters = append(filters, playbackHDRFilters(spec)...)
 		}
 		switch rotation {
 		case 90:
