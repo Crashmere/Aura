@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -189,6 +190,27 @@ export function LightboxStudio({
   const zoomScale = hasCurrentTransients ? zoomScaleState : 1;
   const panOffset = hasCurrentTransients ? panOffsetState : { x: 0, y: 0 };
 
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    const rootOverflow = root.style.overflow;
+    const bodyOverflow = body.style.overflow;
+    const { scrollX, scrollY } = window;
+    root.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      root.style.overflow = rootOverflow;
+      body.style.overflow = bodyOverflow;
+      window.scrollTo({ left: scrollX, top: scrollY, behavior: "instant" });
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (zoomScale <= 1.01) {
+      setPanOffset(previous => previous.x || previous.y ? { x: 0, y: 0 } : previous);
+    }
+  }, [zoomScale]);
+
   // Reset per-asset transient state when switching asset
   useLayoutEffect(() => {
     setTransientAssetId(asset.id);
@@ -302,6 +324,22 @@ export function LightboxStudio({
     effectiveAsset.kind === "video" ||
     (effectiveAsset.kind === "live" && !!effectiveAsset.motion);
   const hasRotationChange = normalizeQuarterAngle(rotationDelta) !== 0;
+
+  const handleStageWheel = useEffectEvent((event: WheelEvent) => {
+    if (!isPresent || isVideoStage) return;
+    event.preventDefault();
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stageRef.current!.clientHeight : 1);
+    clearTimeout(wheelZoomTimer.current);
+    setWheelZooming(true);
+    wheelZoomTimer.current = setTimeout(() => setWheelZooming(false), 120);
+    setZoomScale(previous => Math.max(1, Math.min(5, previous * Math.exp(-delta * 0.002))));
+  });
+  useEffect(() => {
+    const stage = stageRef.current!;
+    // A native non-passive listener can suppress the browser's default wheel action.
+    stage.addEventListener("wheel", handleStageWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", handleStageWheel);
+  }, []);
 
   // Rotate handler
   const rotateBy = (step: -90 | 90) => {
@@ -970,18 +1008,6 @@ export function LightboxStudio({
           onPointerMove={handleStagePointerMove}
           onPointerUp={handleStagePointerUp}
           onPointerCancel={handleStagePointerUp}
-          onWheel={(e) => {
-            if (isVideoStage) return;
-            if (e.ctrlKey || e.metaKey) {
-              e.preventDefault();
-              clearTimeout(wheelZoomTimer.current);
-              setWheelZooming(true);
-              wheelZoomTimer.current = setTimeout(() => setWheelZooming(false), 120);
-              const next = Math.max(1, Math.min(5, zoomScale - e.deltaY * 0.01));
-              setZoomScale(next);
-              if (next <= 1.01) setPanOffset({ x: 0, y: 0 });
-            }
-          }}
         >
           {!coverPickerOpen && canNavigatePrev && (
             <button
