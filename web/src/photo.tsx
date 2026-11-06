@@ -34,7 +34,7 @@ export function Photo({
   const [broken, setBroken] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [previewAspect, setPreviewAspect] = useState<{ source: string; ratio: number } | null>(null);
-  const source = media(asset.primary, "thumb", asset.rotation) + (attempt ? `&retry=${attempt}` : "");
+  const source = media(asset.primary, "thumb", asset.rotation, asset.cover?.revision) + (attempt ? `&retry=${attempt}` : "");
   const dimensions = displayDimensions(asset);
   // Decoded previews include EXIF rotation; catalog dimensions can precede it.
   const ratio = previewAspect?.source === source ? previewAspect.ratio : dimensions.width > 0 && dimensions.height > 0 ? dimensions.width / dimensions.height : 1;

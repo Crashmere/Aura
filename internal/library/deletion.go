@@ -615,6 +615,15 @@ func (l *Library) runDeletion(ctx context.Context, id string, plan deletionPlan)
 				return e
 			}
 		}
+		coverFiles, e := filepath.Glob(l.Derived(hash, "-cover-*"))
+		if e != nil {
+			return e
+		}
+		for _, path := range coverFiles {
+			if e = removeDurably(path); e != nil {
+				return e
+			}
+		}
 	}
 	tx, e := l.DB.Begin()
 	if e != nil {
@@ -635,6 +644,9 @@ func (l *Library) runDeletion(ctx context.Context, id string, plan deletionPlan)
 			return e
 		}
 		if _, e = tx.Exec("DELETE FROM decisions WHERE id=? AND action='rotation'", "rotation:"+hash); e != nil {
+			return e
+		}
+		if _, e = tx.Exec("DELETE FROM decisions WHERE id=? AND action='cover'", "cover:"+hash); e != nil {
 			return e
 		}
 	}
@@ -685,7 +697,7 @@ func (l *Library) removeOriginalWork(hash string) error {
 			continue
 		}
 		path := filepath.Join(l.Root, "work", entry.Name())
-		owned := strings.HasPrefix(entry.Name(), hash+"-rotation-")
+		owned := strings.HasPrefix(entry.Name(), hash+"-rotation-") || strings.HasPrefix(entry.Name(), hash+"-cover-") || strings.HasPrefix(entry.Name(), hash+"-frame-")
 		if !owned && (strings.HasPrefix(entry.Name(), hash+"-") || strings.HasPrefix(entry.Name(), hash[:8]+"-")) {
 			children, err := os.ReadDir(path)
 			if err != nil {

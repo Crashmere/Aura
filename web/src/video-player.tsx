@@ -6,6 +6,7 @@ let volumePreference = 1;
 let mutePreference = false;
 type SafariVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
 export const VIDEO_SKIP_SECONDS = 5;
+export type PlayerFrame = { time: number; duration: number; ready: boolean };
 
 function SkipIcon({ forward = false }: { forward?: boolean }) {
   return <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -17,16 +18,17 @@ function SkipIcon({ forward = false }: { forward?: boolean }) {
   </svg>;
 }
 
-export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, toggleChrome, activity, onPlayback, onEnded, previous, next, close }: {
+export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, toggleChrome, activity, onPlayback, onEnded, previous, next, close, framePicker }: {
   asset: Asset; live?: boolean; rotationPreview?: number; locked: boolean; toggleChrome: () => void; activity: () => void;
   onPlayback: (playing: boolean) => void; onEnded?: () => void; previous: () => void; next: () => void; close: () => void;
+  framePicker?: { initialTime: number; onChange: (frame: PlayerFrame) => void };
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const container = useRef<HTMLDivElement>(null);
   const rotationStyle = useRotationPreview(container, rotationPreview);
-  const [started, setStarted] = useState(live);
+  const [started, setStarted] = useState(live || !!framePicker);
   const [playing, setPlaying] = useState(false);
-  const [waiting, setWaiting] = useState(live);
+  const [waiting, setWaiting] = useState(live || !!framePicker);
   const [failed, setFailed] = useState("");
   const [duration, setDuration] = useState(0);
   const [time, setTime] = useState(0);
@@ -45,9 +47,19 @@ export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, 
   const mounted = useRef(true);
   const frameTime = useRef<number | undefined>(undefined);
   const observedFrameDuration = useRef<number | undefined>(undefined);
-  const callbacks = useRef({ onPlayback, onEnded });
-  callbacks.current = { onPlayback, onEnded };
+  const callbacks = useRef({ onPlayback, onEnded, onFrame: framePicker?.onChange });
+  callbacks.current = { onPlayback, onEnded, onFrame: framePicker?.onChange };
   const source = media(live ? asset.motion! : asset.primary, "play", live ? asset.motionRotation : asset.rotation);
+  const rate = (live ? asset.motionFrameRate : asset.frameRate) || 30;
+  function reportFrame() {
+    const element = video.current;
+    if (!element || !callbacks.current.onFrame) return;
+    const length = Number.isFinite(element.duration) ? element.duration : 0;
+    const observed = frameTime.current;
+    const current = !element.seeking && observed !== undefined && Math.abs(observed - element.currentTime) < 1 / rate
+      ? observed : element.currentTime;
+    callbacks.current.onFrame({ time: Math.max(0, Math.min(Math.max(0, length - .5 / rate), current)), duration: length, ready: element.paused && !element.seeking && element.readyState >= 2 });
+  }
   useEffect(() => {
     const element = video.current;
     mounted.current = true;
@@ -59,12 +71,14 @@ export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, 
         if (delta > 0 && delta < .2) observedFrameDuration.current = delta;
       }
       frameTime.current = metadata.mediaTime;
+      reportFrame();
       frameCallback = element?.requestVideoFrameCallback(observeFrame) || 0;
     };
     if (element?.requestVideoFrameCallback) frameCallback = element.requestVideoFrameCallback(observeFrame);
     const visibility = () => { if (document.hidden && document.pictureInPictureElement !== element) element?.pause(); };
     document.addEventListener("visibilitychange", visibility);
-    if (live) void play();
+    if (framePicker && element) { element.src = source; element.load(); }
+    else if (live) void play();
     return () => {
       mounted.current = false;
       document.removeEventListener("visibilitychange", visibility);
@@ -123,9 +137,10 @@ export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, 
     previewSeek.current = null;
     cancelAnimationFrame(seekFrame.current); seekFrame.current = 0;
     setSeeking(null);
-    const rate = !live && Number.isFinite(asset.frameRate) && asset.frameRate && asset.frameRate > 0 ? asset.frameRate : 0;
-    const interval = rate ? 1 / rate : observedFrameDuration.current || 1 / 30;
-    const current = rate ? Math.floor((element.currentTime + interval * .01) / interval) * interval :
+    const sourceRate = live ? asset.motionFrameRate : asset.frameRate;
+    const knownRate = Number.isFinite(sourceRate) && sourceRate && sourceRate > 0 ? sourceRate : 0;
+    const interval = knownRate ? 1 / knownRate : observedFrameDuration.current || 1 / 30;
+    const current = knownRate ? Math.floor((element.currentTime + interval * .01) / interval) * interval :
       !element.seeking && frameTime.current !== undefined && Math.abs(frameTime.current - element.currentTime) < interval ? frameTime.current : element.currentTime;
     // Seek inside the target frame; exact boundary rounding can show its predecessor.
     const target = Math.max(0, Math.min(Math.max(0, duration - interval / 2), current + (direction + .1) * interval));
@@ -152,9 +167,9 @@ export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, 
   const shownTime = seeking ?? time;
   const shownDuration = duration || (!live && Number.isFinite(asset.duration) ? Math.max(0, asset.duration || 0) : 0);
   const progress = shownDuration ? Math.min(100, shownTime / shownDuration * 100) : 0;
-  return <div ref={container} className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""}`}>
-    <video ref={video} className="player-video" style={rotationStyle} playsInline preload="none" poster={media(asset.primary, "thumb", asset.rotation)} aria-label={live ? `${asset.name} · 实况` : asset.name}
-      onPointerDown={event => { if (event.pointerType === "touch" && !locked) { swipe.current = { x: event.clientX, y: event.clientY }; suppressClick.current = false; } }}
+  return <div ref={container} className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""} ${framePicker ? "is-frame-picker" : ""}`}>
+    <video ref={video} className="player-video" style={rotationStyle} playsInline preload={framePicker ? "auto" : "none"} poster={media(asset.primary, "thumb", asset.rotation, asset.cover?.revision)} aria-label={live ? `${asset.name} · 实况` : asset.name}
+      onPointerDown={event => { if (event.pointerType === "touch" && !locked && !framePicker) { swipe.current = { x: event.clientX, y: event.clientY }; suppressClick.current = false; } }}
       onPointerMove={event => { if (swipe.current && Math.hypot(event.clientX - swipe.current.x, event.clientY - swipe.current.y) > 8) suppressClick.current = true; }}
       onPointerUp={event => {
         const start = swipe.current; swipe.current = undefined;
@@ -165,16 +180,23 @@ export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, 
       }}
       onPointerCancel={() => { swipe.current = undefined; suppressClick.current = true; }}
       onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } if (!started || !playing) togglePlay(); else toggleChrome(); }}
-      onLoadedMetadata={event => { setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); setPip(!!document.pictureInPictureEnabled && !event.currentTarget.disablePictureInPicture); }}
-      onTimeUpdate={event => setTime(event.currentTarget.currentTime)}
+      onLoadedMetadata={event => {
+        const element = event.currentTarget;
+        const length = Number.isFinite(element.duration) ? element.duration : 0;
+        setDuration(length); setPip(!!document.pictureInPictureEnabled && !element.disablePictureInPicture);
+        if (framePicker) element.currentTime = Math.max(0, Math.min(Math.max(0, length - .5 / rate), framePicker.initialTime));
+        reportFrame();
+      }}
+      onLoadedData={() => { if (framePicker) setWaiting(false); reportFrame(); }}
+      onTimeUpdate={event => { setTime(event.currentTarget.currentTime); reportFrame(); }}
       onProgress={event => { const element = event.currentTarget; const ranges = []; for (let i = 0; i < element.buffered.length; i++) ranges.push({ start: element.buffered.start(i), end: element.buffered.end(i) }); setBuffered(ranges); }}
-      onPlay={() => { setPlaying(true); callbacks.current.onPlayback(true); }}
-      onPause={() => { if (mounted.current) { setPlaying(false); setWaiting(false); callbacks.current.onPlayback(false); } }}
-      onPlaying={() => setWaiting(false)} onWaiting={() => setWaiting(true)} onSeeking={() => setWaiting(true)} onSeeked={() => { setWaiting(false); queuePreviewSeek(); }}
+      onPlay={() => { setPlaying(true); callbacks.current.onPlayback(true); reportFrame(); }}
+      onPause={() => { if (mounted.current) { setPlaying(false); setWaiting(false); callbacks.current.onPlayback(false); reportFrame(); } }}
+      onPlaying={() => setWaiting(false)} onWaiting={() => setWaiting(true)} onSeeking={() => { setWaiting(true); reportFrame(); }} onSeeked={() => { setWaiting(false); queuePreviewSeek(); reportFrame(); }}
       onEnded={() => { setPlaying(false); callbacks.current.onPlayback(false); callbacks.current.onEnded?.(); }}
       onVolumeChange={event => { volumePreference = event.currentTarget.volume; mutePreference = event.currentTarget.muted; setVolume(volumePreference); setMuted(mutePreference); }}
-      onError={() => { if (mounted.current) { setFailed("视频加载失败，请重试"); setWaiting(false); setPlaying(false); callbacks.current.onPlayback(false); } }} />
-    {!playing && !waiting && !failed && <button className="player-big-play" disabled={locked} aria-label={time >= duration && duration > 0 ? "重新播放" : "播放视频"} onClick={togglePlay}><Play size={32} fill="currentColor" strokeWidth={1} /></button>}
+      onError={() => { if (mounted.current) { setFailed("视频加载失败，请重试"); setWaiting(false); setPlaying(false); callbacks.current.onPlayback(false); callbacks.current.onFrame?.({ time: 0, duration: 0, ready: false }); } }} />
+    {!framePicker && !playing && !waiting && !failed && <button className="player-big-play" disabled={locked} aria-label={time >= duration && duration > 0 ? "重新播放" : "播放视频"} onClick={togglePlay}><Play size={32} fill="currentColor" strokeWidth={1} /></button>}
     {waiting && <div className="player-waiting" role="status" aria-label="视频缓冲中"><LoaderCircle className="spin" size={28} /></div>}
     {failed && <div className="player-error" role="status"><span>{failed}</span><button disabled={locked} onClick={() => { video.current?.removeAttribute("src"); void play(); }}>重试</button></div>}
     <div className="player-controls" onPointerDown={event => { event.stopPropagation(); activity(); }} onPointerMove={event => event.stopPropagation()}>
@@ -182,7 +204,7 @@ export function VideoPlayer({ asset, live = false, rotationPreview = 0, locked, 
         <span className="player-time">{timestamp(shownTime)}</span>
         <div className="player-seek" style={{ "--played": `${progress}%` } as CSSProperties}>
           <div className="player-buffered" aria-hidden="true">{duration > 0 && buffered.map((range, index) => <i key={index} style={{ left: `${range.start / duration * 100}%`, width: `${(range.end - range.start) / duration * 100}%` }} />)}</div>
-          <input type="range" aria-label="播放进度" aria-valuetext={`${timestamp(shownTime)} / ${timestamp(shownDuration)}`} min="0" max={shownDuration || 1} step="0.1" value={shownTime} disabled={locked || !duration}
+          <input type="range" aria-label={framePicker ? "选帧进度" : "播放进度"} aria-valuetext={`${timestamp(shownTime)} / ${timestamp(shownDuration)}`} min="0" max={framePicker && shownDuration ? Math.max(0, shownDuration - .5 / rate) : shownDuration || 1} step={framePicker ? ".001" : ".1"} value={shownTime} disabled={locked || !duration}
             onPointerDown={() => { resumeAfterSeek.current = !!video.current && !video.current.paused; video.current?.pause(); }}
             onChange={event => { const value = Number(event.target.value); seekingValue.current = value; setSeeking(value); previewSeek.current = value; queuePreviewSeek(); }}
             onPointerUp={commitSeek} onPointerCancel={commitSeek} onKeyUp={commitSeek} onBlur={commitSeek} />

@@ -2,10 +2,11 @@ import { useLayoutEffect, useState, type CSSProperties, type RefObject } from "r
 
 export const normalizeRotation = (rotation = 0) => (rotation % 360 + 360) % 360;
 
-export function displayDimensions(media: { width: number; height: number; rotation?: number }) {
+export function displayDimensions(media: { width: number; height: number; rotation?: number; cover?: { width: number; height: number } }) {
+  const { width, height } = media.cover || media;
   return normalizeRotation(media.rotation) % 180
-    ? { width: media.height, height: media.width }
-    : { width: media.width, height: media.height };
+    ? { width: height, height: width }
+    : { width, height };
 }
 
 export function useRotationPreview(frame: RefObject<HTMLElement | null>, rotation: number): CSSProperties | undefined {

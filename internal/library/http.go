@@ -76,6 +76,8 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Get("/api/assets/{id}", l.detail)
 	r.Patch("/api/assets/{id}", l.updateAsset)
 	r.Patch("/api/assets/{id}/rotation", l.rotate)
+	r.Patch("/api/assets/{id}/cover", l.saveCover)
+	r.Get("/api/assets/{id}/frame", l.frame)
 	r.Post("/api/assets/{id}/merge", l.merge)
 	r.Post("/api/assets/{id}/split", l.split)
 	r.Get("/api/assets/{id}/download", l.download)
@@ -143,7 +145,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "Aura", "version": "0.3.0", "chunkSize": chunkSize, "processingConcurrency": l.ProcessingLimits,
 		"similarityIndex": l.dinoSnapshot(),
-		"capabilities":    map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true, "rotation": true}}
+		"capabilities":    map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true, "rotation": true, "coverFrames": true}}
 	value, err := l.cachedCatalog(r.Context(), "info", "library", func() (any, error) {
 		values := map[string]int64{}
 		counts := map[string]string{
@@ -607,6 +609,20 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if kind == "thumb" || kind == "preview" {
+		if values, present := r.URL.Query()["cover"]; present {
+			if len(values) != 1 || values[0] != "original" && !validID.MatchString(values[0]) {
+				fail(w, 400, "封面版本无效")
+				return
+			}
+			if values[0] == "original" {
+				f.Cover = nil
+			} else if coverRevision(f) != values[0] {
+				frameFailure(w, errCoverConflict)
+				return
+			}
+		}
+	}
 	switch kind {
 	case "original":
 		path = l.Object(hash)
@@ -625,13 +641,42 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if kind != "original" && rotation != 0 {
-		unlock := l.lockUpload(hash)
+	if kind != "original" && (rotation != 0 || f.Cover != nil && (kind == "thumb" || kind == "preview")) {
+		targets := []File{f}
+		if f.Cover != nil && f.Cover.Motion != hash && (kind == "thumb" || kind == "preview") {
+			targets = append(targets, File{Hash: f.Cover.Motion})
+		}
+		unlock := l.lockFrameTargets(targets)
 		current, err := l.File(hash)
+		if err == nil && (kind == "thumb" || kind == "preview") {
+			if requested := r.URL.Query().Get("cover"); requested == "original" {
+				current.Cover = nil
+			} else if coverRevision(current) != coverRevision(f) {
+				err = errCoverConflict
+			}
+		}
 		if err == nil {
-			path, err = l.rotatedDerivative(r.Context(), current, kind, rotation)
+			ctx := r.Context()
+			var finish func()
+			if current.Cover != nil && (kind == "thumb" || kind == "preview") && (!readyDerivative(l.coverPath(current, "preview")) || !readyDerivative(l.coverPath(current, "thumb"))) {
+				ctx, finish, err = l.beginFrameWork(ctx, targets)
+			}
+			if err == nil {
+				path, err = l.rotatedDerivative(ctx, current, kind, rotation)
+			}
+			if finish != nil {
+				finish()
+			}
 		}
 		unlock()
+		if errors.Is(err, errCoverConflict) {
+			frameFailure(w, err)
+			return
+		}
+		if err != nil && f.Cover != nil && (kind == "thumb" || kind == "preview") {
+			frameFailure(w, err)
+			return
+		}
 		if err != nil && !os.IsNotExist(err) && !errors.Is(err, errRotationNotReady) {
 			originalFailure(w, err)
 			return

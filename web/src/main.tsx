@@ -780,10 +780,6 @@ function App() {
             </span>
           </div>
           <div className="sidebar-links">
-            <a href="/portal/">
-              <ArrowLeft size={14} />
-              门户
-            </a>
             <button onClick={() => setHelp(true)} aria-label="关于 Aura">
               <CircleHelp size={17} />
             </button>
@@ -1245,10 +1241,6 @@ function App() {
                 <ChevronRight size={15} />
               </button>
             ))}
-            <a href="/portal/">
-              <ArrowLeft size={19} />
-              <span>返回门户</span>
-            </a>
           </div>
         </div>
       )}

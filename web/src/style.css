@@ -192,16 +192,11 @@ input {
 .sidebar-links {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   border-top: 1px solid #e2e5d9;
   padding: 18px 12px 0;
   color: #909681;
   font-size: 12px;
-}
-.sidebar-links a {
-  display: flex;
-  align-items: center;
-  gap: 7px;
 }
 .transfer-mini {
   width: 100%;

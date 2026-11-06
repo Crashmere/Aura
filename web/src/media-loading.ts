@@ -79,7 +79,7 @@ export function preloadPreviews(assets: Asset[], delay = 220) {
   if (!mediaPolicy().prefetch || document.hidden) return;
   const key = generation;
   const sources = [...new Set(assets.filter(a => a.kind !== "video" && a.status === "ready" && !a.deletionPending)
-    .map(a => media(a.primary, "preview", a.rotation)))].filter(src => !previewReady(src)).slice(0, 2);
+    .map(a => media(a.primary, "preview", a.rotation, a.cover?.revision)))].filter(src => !previewReady(src)).slice(0, 2);
   function next() {
     if (key !== generation || !mediaPolicy().prefetch || document.hidden) return;
     const source = sources.shift();

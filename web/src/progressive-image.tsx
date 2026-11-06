@@ -14,8 +14,8 @@ export function ProgressiveImage({ asset, zoomed = false, rotationPreview = 0, o
   const frame = useRef<HTMLDivElement>(null);
   const rotationStyle = useRotationPreview(frame, rotationPreview);
   const dimensions = displayDimensions({ ...asset, rotation: normalizeRotation((asset.rotation || 0) + rotationPreview) });
-  const [initialSource] = useState(() => cachedPreviewSource(media(asset.primary, "preview", asset.rotation)) || media(asset.primary, "preview", asset.rotation));
-  const preview = attempt ? media(asset.primary, "preview", asset.rotation) + `&retry=${attempt}` : initialSource;
+  const [initialSource] = useState(() => cachedPreviewSource(media(asset.primary, "preview", asset.rotation, asset.cover?.revision)) || media(asset.primary, "preview", asset.rotation, asset.cover?.revision));
+  const preview = attempt ? media(asset.primary, "preview", asset.rotation, asset.cover?.revision) + `&retry=${attempt}` : initialSource;
   const [ready, setReady] = useState(() => previewReady(preview));
   useEffect(() => { if (ready) onReady(); }, [ready]);
   const highQuality = !policy.economy || requested || zoomed;
@@ -38,7 +38,7 @@ export function ProgressiveImage({ asset, zoomed = false, rotationPreview = 0, o
   }, [load, preview]);
   return <>
     <div ref={frame} className="viewer-image-frame" role="img" aria-label={asset.name} data-image-width={dimensions.width} data-image-height={dimensions.height}>
-      {!thumbFailed && <img className="viewer-image-placeholder" style={rotationStyle} src={media(asset.primary, "thumb", asset.rotation) + (attempt ? `&retry=${attempt}` : "")} alt="" aria-hidden="true" decoding="async" draggable={false} onError={() => setThumbFailed(true)} />}
+      {!thumbFailed && <img className="viewer-image-placeholder" style={rotationStyle} src={media(asset.primary, "thumb", asset.rotation, asset.cover?.revision) + (attempt ? `&retry=${attempt}` : "")} alt="" aria-hidden="true" decoding="async" draggable={false} onError={() => setThumbFailed(true)} />}
       {load && <img ref={image} className={`viewer-image-detail ${ready ? "is-ready" : ""}`} style={rotationStyle} src={preview} alt="" aria-hidden="true" decoding="async" fetchPriority="high" draggable={false}
         onLoad={async event => {
           const element = event.currentTarget;

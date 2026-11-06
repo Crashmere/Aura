@@ -1,3 +1,10 @@
+export type Cover = {
+  motion: string;
+  time: number;
+  revision: string;
+  width: number;
+  height: number;
+};
 export type Asset = {
   id: string;
   primary: string;
@@ -19,6 +26,9 @@ export type Asset = {
   frameRate?: number;
   rotation?: number;
   motionRotation?: number;
+  motionDuration?: number;
+  motionFrameRate?: number;
+  cover?: Cover;
 };
 export type Original = {
   hash: string;
@@ -36,6 +46,7 @@ export type Original = {
   error?: string;
   hints: Record<string, unknown>;
   rotation?: number;
+  cover?: Cover;
 };
 export type Detail = {
   asset: Asset;
@@ -78,7 +89,7 @@ export type Info = {
   merged: number;
   pendingDeletions?: number;
   similarityIndex?: SimilarityIndex;
-  capabilities?: { permanentDelete?: boolean };
+  capabilities?: { permanentDelete?: boolean; coverFrames?: boolean };
 };
 export type PurgeResponse = {
   requestId: string;
@@ -181,8 +192,14 @@ export async function api<T>(
   }
   return r.json();
 }
-export const media = (hash: string, kind = "thumb", rotation = 0) =>
-  `${base}media/${hash}/${kind}${kind === "original" ? "" : `?${kind === "thumb" ? "v=2&" : ""}rotation=${rotation}`}`;
+export function media(hash: string, kind = "thumb", rotation = 0, cover?: string) {
+  const path = `${base}media/${hash}/${kind}`;
+  if (kind === "original") return path;
+  const query = new URLSearchParams({ rotation: String(rotation) });
+  if (kind === "thumb") query.set("v", "2");
+  if (kind === "thumb" || kind === "preview") query.set("cover", cover || "original");
+  return `${path}?${query}`;
+}
 export function resourceLabel(file: Original) {
   const labels: Record<string, string> = {
     originalPhoto: "原始照片", photo: "原始照片", fullSizePhoto: "编辑后照片",

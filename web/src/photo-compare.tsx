@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { Columns2, Layers3, X } from "lucide-react";
+import { ArrowLeftRight, Columns2, Layers3, X } from "lucide-react";
 import { type Asset } from "./api";
 import { ProgressiveImage } from "./progressive-image";
 import { IconButton } from "./controls";
@@ -10,27 +10,36 @@ export function PhotoCompare({ left, right, close }: { left: Asset; right: Asset
   const root = useRef<HTMLDivElement>(null);
   const closeRef = useRef(close);
   closeRef.current = close;
-  const [mode, setMode] = useState<"side" | "overlay">("side");
+  const [mode, setMode] = useState<"side" | "overlay" | "switch">("side");
+  const [version, setVersion] = useState<"left" | "right">("left");
   const [position, setPosition] = useState(50);
+  const switchVersion = () => { setMode("switch"); setVersion(value => value === "left" ? "right" : "left"); };
   useEffect(() => {
     const previous = document.activeElement;
     root.current?.focus({ preventScroll: true });
     const key = (event: KeyboardEvent) => {
-      if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.key === "Escape") { event.preventDefault(); closeRef.current(); }
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      if (event.key === "Escape" && !event.repeat) { event.preventDefault(); closeRef.current(); return; }
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target?.isContentEditable || target?.closest('input, textarea, select, [role="textbox"], [role="combobox"], [role="slider"]')) return;
+      if (event.key.toLowerCase() === "v" && !event.repeat) { event.preventDefault(); switchVersion(); }
     };
     window.addEventListener("keydown", key);
     return () => { window.removeEventListener("keydown", key); if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true }); };
   }, []);
-  const image = (asset: Asset) => <div className="compare-image"><ProgressiveImage key={`${asset.primary}:${asset.rotation || 0}`} asset={asset} onReady={() => {}} /></div>;
+  const image = (asset: Asset) => <div className="compare-image"><ProgressiveImage key={`${asset.primary}:${asset.rotation || 0}:${asset.cover?.revision || ""}`} asset={asset} onReady={() => {}} /></div>;
   const leftDimensions = displayDimensions(left), rightDimensions = displayDimensions(right);
   return <div ref={root} className={`photo-comparison ${mode === "overlay" ? "is-overlay" : ""}`} role="dialog" aria-modal="true" aria-label="照片对比" tabIndex={-1}>
     <header className="comparison-header"><h2>照片对比</h2><div className="comparison-modes" role="group" aria-label="对比方式">
       <button aria-pressed={mode === "side"} onClick={() => setMode("side")}><Columns2 size={16} />并排</button>
       <button aria-pressed={mode === "overlay"} onClick={() => setMode("overlay")}><Layers3 size={16} />叠加</button>
+      <button aria-pressed={mode === "switch"} aria-keyshortcuts="V" title="切换显示照片 A / B（V）" onClick={switchVersion}><ArrowLeftRight size={16} />切换版本<kbd>V</kbd></button>
     </div><IconButton title="关闭对比（Esc）" onClick={close}><X size={21} /></IconButton></header>
-    <div className="comparison-labels"><span><strong>A · {left.name}</strong><small>{leftDimensions.width} × {leftDimensions.height}</small></span><span><strong>B · {right.name}</strong><small>{rightDimensions.width} × {rightDimensions.height}</small></span></div>
-    {mode === "side" ? <div className="comparison-side"><section aria-label={`照片 A：${left.name}`}>{image(left)}</section><section aria-label={`照片 B：${right.name}`}>{image(right)}</section></div> : <div className="comparison-overlay" style={{ "--compare-position": `${position}%` } as CSSProperties}>
+    <div className={`comparison-labels ${mode === "switch" ? "is-switch" : ""}`}><span className={version === "left" ? "is-current" : ""}><strong>A · {left.name}</strong><small>{leftDimensions.width} × {leftDimensions.height}</small></span><span className={version === "right" ? "is-current" : ""}><strong>B · {right.name}</strong><small>{rightDimensions.width} × {rightDimensions.height}</small></span></div>
+    {mode === "switch" ? <div className="comparison-single">
+      <section aria-label={`照片 A：${left.name}`} aria-hidden={version !== "left"}>{image(left)}</section>
+      <section aria-label={`照片 B：${right.name}`} aria-hidden={version !== "right"}>{image(right)}</section>
+    </div> : mode === "side" ? <div className="comparison-side"><section aria-label={`照片 A：${left.name}`}>{image(left)}</section><section aria-label={`照片 B：${right.name}`}>{image(right)}</section></div> : <div className="comparison-overlay" style={{ "--compare-position": `${position}%` } as CSSProperties}>
       <section aria-label={`照片 B：${right.name}`}>{image(right)}</section><section className="comparison-reveal" aria-label={`照片 A：${left.name}`}>{image(left)}</section>
       <div className="comparison-divider" aria-hidden="true" onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={event => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;

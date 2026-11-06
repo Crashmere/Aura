@@ -167,12 +167,26 @@ func (l *Library) saveRotation(ctx context.Context, id, hash string, rotation, e
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	for _, file := range targets {
+		if file.Cover != nil && (!readyDerivative(l.coverPath(file, "preview")) || !readyDerivative(l.coverPath(file, "thumb"))) {
+			var finish func()
+			ctx, finish, err = l.beginFrameWork(ctx, targets)
+			if err != nil {
+				return err
+			}
+			defer finish()
+			break
+		}
+	}
 	rotations := make([]int, len(targets))
 	for i, file := range targets {
 		rotations[i] = (file.Rotation + rotation - expected + 360) % 360
 		kinds := []string{"thumb", "preview"}
 		if strings.HasPrefix(file.Mime, "video/") {
 			kinds = []string{"thumb", "play"}
+			if file.Cover != nil {
+				kinds = append(kinds, "preview")
+			}
 		}
 		for _, kind := range kinds {
 			if _, err = l.rotatedDerivative(ctx, file, kind, rotations[i]); err != nil {
@@ -222,6 +236,16 @@ func (l *Library) rotationPath(hash, kind string, rotation int) string {
 // permanent cleanup; save also rechecks the durable processing state.
 func (l *Library) rotatedDerivative(ctx context.Context, file File, kind string, rotation int) (string, error) {
 	base := l.Derived(file.Hash, derivativeSuffix(kind))
+	cover := file.Cover != nil && (kind == "thumb" || kind == "preview")
+	if cover {
+		if err := originalDeletion(l.DB, file.Cover.Motion, ""); err != nil {
+			return "", err
+		}
+		if err := l.generateCover(ctx, file); err != nil {
+			return "", err
+		}
+		base = l.coverPath(file, kind)
+	}
 	stat, err := os.Stat(base)
 	if err != nil {
 		return "", err
@@ -233,6 +257,9 @@ func (l *Library) rotatedDerivative(ctx context.Context, file File, kind string,
 		return base, nil
 	}
 	path := l.rotationPath(file.Hash, kind, rotation)
+	if cover {
+		path = l.Derived(file.Hash, fmt.Sprintf("-cover-%s-rotation%d%s", file.Cover.Revision, rotation, derivativeSuffix(kind)))
+	}
 	stamp := fmt.Sprintf("%d:%d", stat.Size(), stat.ModTime().UnixNano())
 	if previous, err := os.ReadFile(path + ".source"); err == nil && string(previous) == stamp {
 		if ready, err := os.Stat(path); err == nil && ready.Mode().IsRegular() && ready.Size() > 0 {

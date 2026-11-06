@@ -117,6 +117,7 @@ type File struct {
 	Width      int             `json:"width"`
 	Height     int             `json:"height"`
 	Rotation   int             `json:"rotation"`
+	Cover      *CoverSelection `json:"cover,omitempty"`
 	CapturedAt string          `json:"capturedAt"`
 	ContentID  string          `json:"contentId,omitempty"`
 	PixelHash  string          `json:"pixelHash,omitempty"`
@@ -130,26 +131,29 @@ type File struct {
 }
 
 type Asset struct {
-	ID              string  `json:"id"`
-	Primary         string  `json:"primary"`
-	Motion          string  `json:"motion,omitempty"`
-	CapturedAt      string  `json:"capturedAt"`
-	Kind            string  `json:"kind"`
-	Favorite        bool    `json:"favorite"`
-	TrashedAt       string  `json:"trashedAt,omitempty"`
-	Name            string  `json:"name"`
-	Width           int     `json:"width"`
-	Height          int     `json:"height"`
-	Rotation        int     `json:"rotation"`
-	MotionRotation  int     `json:"motionRotation,omitempty"`
-	Size            int64   `json:"size"`
-	Status          string  `json:"status"`
-	Variants        int     `json:"variants"`
-	ImageVersions   int     `json:"imageVersions"`
-	Grouping        string  `json:"grouping,omitempty"`
-	Duration        float64 `json:"duration,omitempty"`
-	FrameRate       float64 `json:"frameRate,omitempty"`
-	DeletionPending bool    `json:"deletionPending,omitempty"`
+	ID              string          `json:"id"`
+	Primary         string          `json:"primary"`
+	Motion          string          `json:"motion,omitempty"`
+	CapturedAt      string          `json:"capturedAt"`
+	Kind            string          `json:"kind"`
+	Favorite        bool            `json:"favorite"`
+	TrashedAt       string          `json:"trashedAt,omitempty"`
+	Name            string          `json:"name"`
+	Width           int             `json:"width"`
+	Height          int             `json:"height"`
+	Rotation        int             `json:"rotation"`
+	MotionRotation  int             `json:"motionRotation,omitempty"`
+	Cover           *CoverSelection `json:"cover,omitempty"`
+	Size            int64           `json:"size"`
+	Status          string          `json:"status"`
+	Variants        int             `json:"variants"`
+	ImageVersions   int             `json:"imageVersions"`
+	Grouping        string          `json:"grouping,omitempty"`
+	Duration        float64         `json:"duration,omitempty"`
+	FrameRate       float64         `json:"frameRate,omitempty"`
+	MotionDuration  float64         `json:"motionDuration,omitempty"`
+	MotionFrameRate float64         `json:"motionFrameRate,omitempty"`
+	DeletionPending bool            `json:"deletionPending,omitempty"`
 }
 
 const schema = `
@@ -248,15 +252,16 @@ func (l *Library) Notify() {
 }
 func marshal(v any) string { b, _ := json.Marshal(v); return string(b) }
 
-const fileColumns = "hash,asset_id,name,size,mime,width,height,captured_at,content_id,pixel_hash,dhash,metadata,score,status,error,hints,created_at," + fileRotationSQL
+var fileColumns = "hash,asset_id,name,size,mime,width,height,captured_at,content_id,pixel_hash,dhash,metadata,score,status,error,hints,created_at," + fileRotationSQL + "," + coverSQL("files.hash")
 
 type scanner interface{ Scan(...any) error }
 
 func scanFile(row scanner) (f File, err error) {
-	var meta, hints string
-	err = row.Scan(&f.Hash, &f.AssetID, &f.Name, &f.Size, &f.Mime, &f.Width, &f.Height, &f.CapturedAt, &f.ContentID, &f.PixelHash, &f.DHash, &meta, &f.Score, &f.Status, &f.Error, &hints, &f.CreatedAt, &f.Rotation)
+	var meta, hints, cover string
+	err = row.Scan(&f.Hash, &f.AssetID, &f.Name, &f.Size, &f.Mime, &f.Width, &f.Height, &f.CapturedAt, &f.ContentID, &f.PixelHash, &f.DHash, &meta, &f.Score, &f.Status, &f.Error, &hints, &f.CreatedAt, &f.Rotation, &cover)
 	f.Metadata = json.RawMessage(meta)
 	_ = json.Unmarshal([]byte(hints), &f.Hints)
+	_ = json.Unmarshal([]byte(cover), &f.Cover)
 	return
 }
 func (l *Library) File(hash string) (File, error) {
@@ -287,12 +292,14 @@ var assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind
  f.name,f.width,f.height,f.size,f.status,(SELECT count(*) FROM files v WHERE v.asset_id=a.id),
  EXISTS(SELECT 1 FROM deletion_pending p WHERE p.asset_id=a.id),
  CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END, ` + imageVersionsSQL + `, ` + groupingSQL + `,
- ` + rotationSQL("f.hash") + `, ` + rotationSQL("a.motion_hash") + `
+ ` + rotationSQL("f.hash") + `, ` + rotationSQL("a.motion_hash") + `, ` + coverSQL("f.hash") + `,
+ COALESCE((SELECT m.metadata FROM files m WHERE m.hash=a.motion_hash),'{}')
  FROM assets a JOIN files f ON f.hash=a.primary_hash `
 
 func scanAsset(row scanner) (a Asset, err error) {
-	var rawMetadata string
-	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata, &a.ImageVersions, &a.Grouping, &a.Rotation, &a.MotionRotation)
+	var rawMetadata, cover, motionMetadata string
+	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata, &a.ImageVersions, &a.Grouping, &a.Rotation, &a.MotionRotation, &cover, &motionMetadata)
+	_ = json.Unmarshal([]byte(cover), &a.Cover)
 	if err == nil && a.Kind == "video" {
 		var metadata map[string]any
 		if json.Unmarshal([]byte(rawMetadata), &metadata) == nil {
@@ -306,7 +313,22 @@ func scanAsset(row scanner) (a Asset, err error) {
 			}
 		}
 	}
+	if err == nil && a.Kind == "live" {
+		var metadata map[string]any
+		if json.Unmarshal([]byte(motionMetadata), &metadata) == nil {
+			a.MotionDuration = positiveMetadataNumber(metadata, "Duration")
+			a.MotionFrameRate = positiveMetadataNumber(metadata, "VideoFrameRate")
+		}
+	}
 	return
+}
+
+func positiveMetadataNumber(metadata map[string]any, key string) float64 {
+	value, _ := strconv.ParseFloat(tag(metadata, key), 64)
+	if value > 0 && !math.IsInf(value, 0) && !math.IsNaN(value) {
+		return value
+	}
+	return 0
 }
 func (l *Library) Asset(id string) (Asset, error) {
 	return scanAsset(l.DB.QueryRow(assetSelect+"WHERE a.id=?", id))
