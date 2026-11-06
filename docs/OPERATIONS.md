@@ -35,6 +35,8 @@ The Python worker pool is embedded in the Go program and receives private reques
 
 `AURA_IMAGE_PYTHON` selects a different interpreter when validating an isolated library or a replacement environment. The installer refuses an in-place change to an existing recorded dependency lock: create and validate a new environment, then update the application's configuration to select it. Reinstall from the pinned lock after recovery if the interpreter or OS differs; retain original files and the database independently of runtime compatibility. `AURA_GPU=cpu` disables both image and video acceleration. Restart only Aura after changing process configuration or activating a driver. Missing image dependencies or a failed GPU operation fall back to CPU, with diagnostics in the task and journal.
 
+Curio's deployment unit also selects this read-only image environment through `CURIO_IMAGE_PYTHON=/opt/aura/bin/image-gpu/bin/python`, while embedding its own worker and keeping its catalog and originals independent. Preserve the selected runtime while either application references it. A replacement dependency lock requires a new directory and validation under both runtime users before changing their selections; removing or rebuilding Aura's environment must account for Curio. Shared server context owns this cross-application dependency, and Curio's operations document records its processing limits and CPU fallbacks.
+
 Video covers/playback probe CUDA scaling and NVENC on the first video job, with software-decoded GPU and full CPU fallbacks. Validate media operations with synthetic originals and isolated data under `aura`; production acceptance is read-only.
 
 ### Processing concurrency
