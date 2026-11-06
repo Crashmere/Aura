@@ -151,6 +151,8 @@ export function LightboxStudio({
   // Zoom & Pan state
   const [zoomScale, setZoomScale] = useState(1);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [navDir, setNavDir] = useState<"next" | "prev" | "fade">("fade");
   const stageRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const gestureStartRef = useRef<{
@@ -240,7 +242,10 @@ export function LightboxStudio({
     const idx = neighbors.findIndex((x) => x.id === asset.id);
     if (idx < 0) return;
     const target = neighbors[idx + delta];
-    if (target) onSelectAsset(target);
+    if (target) {
+      setNavDir(delta > 0 ? "next" : "prev");
+      onSelectAsset(target);
+    }
   };
 
   // Warmup adjacent previews when clear photo finishes decoding
@@ -501,6 +506,7 @@ export function LightboxStudio({
 
     if (pts.length === 2 && start.pinchDist > 0) {
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      setIsDragging(true);
       const nextZoom = Math.max(1, Math.min(5, start.startZoom * (dist / start.pinchDist)));
       setZoomScale(nextZoom);
       if (nextZoom <= 1.01) setPanOffset({ x: 0, y: 0 });
@@ -510,7 +516,10 @@ export function LightboxStudio({
     if (pts.length === 1) {
       const dx = e.clientX - start.x;
       const dy = e.clientY - start.y;
-      if (Math.hypot(dx, dy) > 6) start.moved = true;
+      if (Math.hypot(dx, dy) > 6) {
+        start.moved = true;
+        setIsDragging(true);
+      }
       if (zoomScale > 1.01) {
         const maxPanX = ((stageRef.current?.clientWidth || 800) * (zoomScale - 1)) / 2;
         const maxPanY = ((stageRef.current?.clientHeight || 600) * (zoomScale - 1)) / 2;
@@ -527,6 +536,7 @@ export function LightboxStudio({
     const start = gestureStartRef.current;
     if (pointersRef.current.size === 0) {
       gestureStartRef.current = null;
+      setIsDragging(false);
     }
     if (!start || isVideoStage) return;
 
@@ -932,12 +942,13 @@ export function LightboxStudio({
           )}
 
           <div
-            className="lightbox-canvas"
+            key={`${asset.id}:${effectiveAsset.primary}`}
+            className={`lightbox-canvas nav-${navDir} ${isDragging ? "is-dragging" : ""}`}
             style={
               !isVideoStage && zoomScale > 1.01
                 ? ({
                     transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})`,
-                    cursor: "grab",
+                    cursor: isDragging ? "grabbing" : "grab",
                   } as CSSProperties)
                 : undefined
             }
@@ -1041,7 +1052,7 @@ export function LightboxStudio({
               </RoundIconButton>
             </header>
 
-            <div className="inspector-body">
+            <div className="inspector-body" key={infoTab}>
               {detailLoading && !detail && (
                 <div className="loading-inline">
                   <LoaderCircle size={18} className="spin" />
@@ -1378,7 +1389,15 @@ export function LightboxStudio({
                     key={item.id}
                     className={`filmstrip-thumb ${item.id === asset.id ? "is-current" : ""}`}
                     aria-label={item.name}
-                    onClick={() => onSelectAsset(item)}
+                    onClick={() => {
+                      const targetIdx = neighbors.findIndex((x) => x.id === item.id);
+                      if (targetIdx >= 0 && positionIndex >= 0 && targetIdx !== positionIndex) {
+                        setNavDir(targetIdx > positionIndex ? "next" : "prev");
+                      } else {
+                        setNavDir("fade");
+                      }
+                      onSelectAsset(item);
+                    }}
                   >
                     <img
                       src={buildMediaUrl(

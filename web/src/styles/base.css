@@ -23,6 +23,9 @@
   --shadow-lg: 0 24px 60px rgba(18, 18, 16, 0.18);
   --sidebar-width: 248px;
   --header-height: 64px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snappy: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 *,
@@ -33,8 +36,24 @@
 
 /* Global Focus Policy: no control focus outlines, rings, or focus-only borders */
 *:focus,
-*:focus-visible,
-*:focus-within {
+*:focus-visible {
+  outline: none !important;
+}
+
+button:focus,
+button:focus-visible,
+input:focus,
+input:focus-visible,
+select:focus,
+select:focus-visible,
+textarea:focus,
+textarea:focus-visible,
+a:focus,
+a:focus-visible,
+summary:focus,
+summary:focus-visible,
+[tabindex]:focus,
+[tabindex]:focus-visible {
   outline: none !important;
   box-shadow: none !important;
 }
@@ -65,6 +84,7 @@ button {
   background: none;
   border: none;
   padding: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button:disabled {
@@ -75,11 +95,119 @@ button:disabled {
 a {
   color: inherit;
   text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
+/* Shared Keyframes */
 @keyframes aura-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes aura-view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aura-fade-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes aura-bar-slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aura-scrim-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes aura-modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aura-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aura-popover-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+
+@keyframes aura-dock-pop {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aura-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aura-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
   }
 }
 
@@ -102,11 +230,21 @@ a {
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    transform 0.2s var(--ease-spring);
 }
 
 .btn:hover:not(:disabled) {
   background: var(--bg-subtle);
+  transform: translateY(-0.5px);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 0.07s;
 }
 
 .btn-primary {
@@ -148,13 +286,21 @@ a {
   height: 34px;
   border-radius: 50%;
   color: var(--text-secondary);
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    transform 0.2s var(--ease-spring);
 }
 
 .icon-btn:hover:not(:disabled),
 .icon-btn.is-active {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.9);
+  transition-duration: 0.07s;
 }
 
 .chip-counter {
@@ -168,6 +314,7 @@ a {
   background: var(--accent);
   color: #ffffff;
   font-size: 11px;
+  animation: aura-popover-in 0.2s var(--ease-snappy);
 }
 
 /* Application Shell */
@@ -208,6 +355,11 @@ a {
   width: 32px;
   height: 32px;
   border-radius: 8px;
+  transition: transform 0.25s var(--ease-snappy);
+}
+
+.brand-mark:hover img {
+  transform: scale(1.06) rotate(-3deg);
 }
 
 .brand-mark strong {
@@ -252,27 +404,57 @@ a {
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   color: var(--text-secondary);
   font-size: 13.5px;
   font-weight: 500;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-spring);
+}
+
+.nav-item::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--text-primary);
+  transform: scaleY(0);
+  transition: transform 0.22s var(--ease-snappy);
 }
 
 .nav-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+  transform: translateX(2px);
+}
+
+.nav-item:active {
+  transform: scale(0.98);
+  transition-duration: 0.07s;
 }
 
 .nav-item.is-active {
   background: var(--bg-surface);
   color: var(--text-primary);
   font-weight: 600;
-  border: 1px solid var(--border-hairline);
+  border-color: var(--border-hairline);
+  padding-left: 13px;
+}
+
+.nav-item.is-active::before {
+  transform: scaleY(1);
 }
 
 .nav-item-label {
@@ -281,10 +463,24 @@ a {
   gap: 9px;
 }
 
+.nav-item-label svg {
+  transition: transform 0.22s var(--ease-snappy);
+}
+
+.nav-item:hover .nav-item-label svg,
+.nav-item.is-active .nav-item-label svg {
+  transform: scale(1.08);
+}
+
 .nav-badge {
   font-size: 11.5px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+  transition: color 0.18s ease, transform 0.18s var(--ease-spring);
+}
+
+.nav-item.is-active .nav-badge {
+  color: var(--text-primary);
 }
 
 .sidebar-footer {
@@ -305,6 +501,16 @@ a {
   color: var(--accent);
   font-size: 12.5px;
   font-weight: 500;
+  animation: aura-bar-slide-down 0.22s var(--ease-spring);
+  transition: background 0.18s ease, transform 0.18s var(--ease-spring);
+}
+
+.sidebar-upload-pill:hover {
+  background: rgba(29, 78, 216, 0.15);
+}
+
+.sidebar-upload-pill:active {
+  transform: scale(0.97);
 }
 
 .storage-summary {
@@ -360,6 +566,11 @@ a {
   display: none;
 }
 
+.header-title-block,
+.album-breadcrumb {
+  animation: aura-fade-slide-in 0.22s var(--ease-out);
+}
+
 .header-title-block h1,
 .album-breadcrumb h1 {
   margin: 0;
@@ -405,6 +616,7 @@ a {
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
   width: 220px;
+  transition: width 0.24s var(--ease-spring), background 0.18s ease;
 }
 
 .header-search input {
@@ -412,6 +624,26 @@ a {
   background: transparent;
   width: 100%;
   font-size: 13px;
+}
+
+.header-search button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s var(--ease-spring);
+}
+
+.header-search button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.header-search button:active {
+  transform: scale(0.88);
 }
 
 .active-filters-strip {
@@ -422,6 +654,7 @@ a {
   padding: 8px 24px;
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-hairline);
+  animation: aura-bar-slide-down 0.2s var(--ease-out);
 }
 
 .active-filters-strip button {
@@ -433,6 +666,20 @@ a {
   background: var(--bg-surface);
   border: 1px solid var(--border-hairline);
   font-size: 12px;
+  animation: aura-popover-in 0.18s var(--ease-spring);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.16s var(--ease-spring);
+}
+
+.active-filters-strip button:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-0.5px);
+}
+
+.active-filters-strip button:active {
+  transform: scale(0.95);
 }
 
 .active-filters-strip .clear-filters-btn {
@@ -450,6 +697,7 @@ a {
   padding: 8px 24px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-hairline);
+  animation: aura-bar-slide-down 0.22s var(--ease-spring);
 }
 
 .month-scrubber-bar button {
@@ -461,6 +709,19 @@ a {
   background: var(--bg-subtle);
   font-size: 12px;
   white-space: nowrap;
+  transition:
+    background 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-spring);
+}
+
+.month-scrubber-bar button:hover {
+  background: var(--bg-active);
+  transform: translateY(-1px);
+}
+
+.month-scrubber-bar button:active {
+  transform: scale(0.94);
 }
 
 .month-scrubber-bar button.is-active {
@@ -471,4 +732,5 @@ a {
 .aura-content {
   flex: 1;
   padding: 20px 24px 88px;
+  animation: aura-view-enter 0.24s var(--ease-out);
 }

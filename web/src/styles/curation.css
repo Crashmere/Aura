@@ -23,6 +23,21 @@
   background: var(--bg-surface);
   font-size: 13.5px;
   font-weight: 500;
+  transition:
+    background 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-spring);
+}
+
+.similar-tabs button:hover:not(.active) {
+  background: var(--bg-subtle);
+  transform: translateY(-0.5px);
+}
+
+.similar-tabs button:active {
+  transform: scale(0.96);
+  transition-duration: 0.07s;
 }
 
 .similar-tabs button.active {
@@ -52,6 +67,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--border-hairline);
   font-size: 13px;
+  animation: aura-bar-slide-down 0.22s var(--ease-spring);
 }
 
 .index-engine-pill {
@@ -65,6 +81,11 @@
   margin-left: auto;
   color: var(--accent);
   font-weight: 600;
+  transition: transform 0.15s var(--ease-spring);
+}
+
+.similar-undo-banner button:active {
+  transform: scale(0.93);
 }
 
 .similar-pagination {
@@ -79,6 +100,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
+  animation: aura-view-enter 0.24s var(--ease-out);
 }
 
 .similar-pair-card {
@@ -89,6 +111,16 @@
   background: var(--bg-surface);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
+  transition:
+    transform 0.22s var(--ease-spring),
+    border-color 0.2s var(--ease-out),
+    box-shadow 0.22s var(--ease-out);
+}
+
+.similar-pair-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
 }
 
 .pair-actions {
@@ -165,6 +197,23 @@
   border: 1px solid var(--border-hairline);
   background: var(--bg-surface);
   font-size: 13px;
+  transition:
+    background 0.18s var(--ease-out),
+    border-color 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-spring);
+}
+
+.task-tabs button:hover:not(.active):not(:disabled),
+.task-filters button:not(.btn):hover:not(.active):not(:disabled) {
+  background: var(--bg-subtle);
+  transform: translateY(-0.5px);
+}
+
+.task-tabs button:active:not(:disabled),
+.task-filters button:not(.btn):active:not(:disabled) {
+  transform: scale(0.95);
+  transition-duration: 0.07s;
 }
 
 .task-tabs button.active,
@@ -196,6 +245,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  animation: aura-view-enter 0.22s var(--ease-out);
 }
 
 .task-job,
@@ -204,6 +254,15 @@ article.task-row {
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
   overflow: hidden;
+  transition:
+    border-color 0.18s var(--ease-out),
+    box-shadow 0.18s var(--ease-out),
+    transform 0.18s var(--ease-spring);
+}
+
+.task-job:hover,
+article.task-row:hover {
+  border-color: var(--border-strong);
 }
 
 .task-row {
@@ -213,10 +272,25 @@ article.task-row {
   padding: 12px 16px;
   cursor: pointer;
   list-style: none;
+  transition: background 0.15s ease;
+}
+
+.task-row:hover {
+  background: rgba(24, 24, 22, 0.02);
 }
 
 .task-row::-webkit-details-marker {
   display: none;
+}
+
+.task-expand {
+  color: var(--text-muted);
+  transition: transform 0.24s var(--ease-spring), color 0.16s ease;
+}
+
+.task-job[open] .task-expand {
+  transform: rotate(180deg);
+  color: var(--text-primary);
 }
 
 .task-state {
@@ -269,11 +343,13 @@ article.task-row {
   display: block;
   height: 100%;
   background: var(--accent);
+  transition: width 0.35s var(--ease-out);
 }
 
 .task-detail {
   padding: 0 16px 14px 64px;
   border-top: 1px solid var(--border-hairline);
+  animation: aura-bar-slide-down 0.2s var(--ease-out);
 }
 
 .task-steps {
@@ -315,12 +391,22 @@ article.task-row {
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
   font-size: 12px;
+  transition: background 0.15s ease, transform 0.16s var(--ease-spring);
+}
+
+.task-row-actions button:hover:not(:disabled) {
+  background: var(--bg-subtle);
+}
+
+.task-row-actions button:active:not(:disabled) {
+  transform: scale(0.95);
 }
 
 .task-empty {
   padding: 48px 20px;
   text-align: center;
   color: var(--text-secondary);
+  animation: aura-view-enter 0.24s var(--ease-out);
 }
 
 /* Modals, Filter Sheet, Import Hub & Purge Banner */
@@ -335,6 +421,12 @@ article.task-row {
   align-items: center;
   justify-content: center;
   padding: 20px;
+  animation: aura-scrim-fade 0.18s var(--ease-out);
+}
+
+.filter-scrim.is-closing {
+  opacity: 0;
+  transition: opacity 0.14s ease;
 }
 
 .modal-card {
@@ -347,6 +439,7 @@ article.task-row {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  animation: aura-modal-pop 0.24s var(--ease-spring);
 }
 
 .photo-picker-modal,
@@ -379,6 +472,7 @@ article.task-row {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  animation: aura-view-enter 0.2s var(--ease-out);
 }
 
 .modal-footer {
@@ -407,6 +501,23 @@ article.task-row {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
+  transition:
+    background 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    box-shadow 0.18s var(--ease-out),
+    transform 0.18s var(--ease-spring);
+}
+
+.modal-tabs button:hover:not(.active),
+.review-history-tabs button:hover:not([aria-pressed="true"]) {
+  color: var(--text-primary);
+  background: rgba(24, 24, 22, 0.04);
+}
+
+.modal-tabs button:active,
+.review-history-tabs button:active {
+  transform: scale(0.95);
+  transition-duration: 0.07s;
 }
 
 .modal-tabs button.active,
@@ -426,6 +537,12 @@ article.task-row {
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--border-hairline);
   overflow: hidden;
+  transform-origin: top right;
+  animation: aura-popover-in 0.22s var(--ease-spring);
+}
+
+.filter-scrim.is-closing .filter-panel {
+  animation: aura-popover-out 0.14s ease forwards;
 }
 
 .filter-panel form {
@@ -491,6 +608,12 @@ article.task-row {
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
   font-size: 12.5px;
+  transition: border-color 0.16s ease, background 0.16s ease;
+}
+
+.filter-field select:hover:not(:disabled),
+.filter-range input:hover:not(:disabled) {
+  background: #faf9f6;
 }
 
 .filter-range {
@@ -525,6 +648,15 @@ article.task-row {
   border-radius: 999px;
   background: var(--bg-subtle);
   font-size: 12px;
+  transition: background 0.16s ease, transform 0.16s var(--ease-spring);
+}
+
+.filter-presets button:hover {
+  background: var(--bg-active);
+}
+
+.filter-presets button:active {
+  transform: scale(0.94);
 }
 
 .filter-panel footer {
@@ -541,4 +673,13 @@ article.task-row {
   margin-right: auto;
   color: var(--text-secondary);
   font-size: 12.5px;
+  transition: color 0.15s ease, transform 0.15s var(--ease-spring);
+}
+
+.filter-reset:hover {
+  color: var(--text-primary);
+}
+
+.filter-reset:active {
+  transform: scale(0.94);
 }

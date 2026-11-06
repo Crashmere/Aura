@@ -443,7 +443,7 @@ export function CurationHistoryModal({
           </button>
         </nav>
 
-        <div className="modal-body review-history-body">
+        <div className="modal-body review-history-body" key={kind}>
           {errorMsg && (
             <div className="inline-alert">
               <span>{errorMsg}</span>
@@ -700,7 +700,10 @@ export function SimilarWorkspaceView({
           </h2>
         </div>
       ) : (
-        <div className="similar-pairs-grid">
+        <div
+          className="similar-pairs-grid"
+          key={`${source}:${pageIndex}`}
+        >
           {pairs.map((pair) => {
             const left = assetsMap[pair.left];
             const right = assetsMap[pair.right];

@@ -418,7 +418,10 @@ export function PipelineTaskCenter({
         </div>
       )}
 
-      <div className="task-list">
+      <div
+        className="task-list"
+        key={`${activeTab}:${statusFilter}:${pageIdx}`}
+      >
         {activeTab === "processing"
           ? jobsList.map((job) => (
               <PipelineJobAccordion

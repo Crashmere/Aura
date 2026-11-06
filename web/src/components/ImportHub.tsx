@@ -123,7 +123,7 @@ export function ImportHubModal({
           ))}
         </div>
 
-        <div className="modal-body">
+        <div className="modal-body" key={activeTab}>
           {activeTab !== "apple" && (
             <div className="upload-dates">
               <label>

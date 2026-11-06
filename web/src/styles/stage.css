@@ -23,6 +23,28 @@
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  transition:
+    background 0.2s var(--ease-out),
+    border-color 0.2s var(--ease-out),
+    transform 0.22s var(--ease-spring);
+}
+
+.dropzone:hover {
+  background: #e7e5de;
+  border-color: var(--text-secondary);
+  transform: translateY(-1px);
+}
+
+.dropzone:active {
+  transform: scale(0.985);
+}
+
+.dropzone .upload-symbol {
+  transition: transform 0.24s var(--ease-snappy);
+}
+
+.dropzone:hover .upload-symbol {
+  transform: translateY(-2px) scale(1.06);
 }
 
 .upload-options {
@@ -39,12 +61,18 @@
   gap: 6px;
   color: var(--accent);
   font-weight: 500;
+  transition: opacity 0.15s ease, transform 0.16s var(--ease-spring);
+}
+
+.upload-options button:active {
+  transform: scale(0.95);
 }
 
 .upload-queue {
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
   overflow: hidden;
+  animation: aura-bar-slide-down 0.22s var(--ease-out);
 }
 
 .queue-header {
@@ -75,6 +103,11 @@
   padding: 8px 14px;
   border-top: 1px solid var(--border-hairline);
   font-size: 12.5px;
+  transition: background 0.15s ease;
+}
+
+.queue-item:hover {
+  background: rgba(24, 24, 22, 0.02);
 }
 
 .queue-info {
@@ -141,6 +174,20 @@
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-hairline);
   text-align: left;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.18s var(--ease-spring);
+}
+
+.album-choice-list button:hover:not(:disabled) {
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
+  transform: translateX(2px);
+}
+
+.album-choice-list button:active:not(:disabled) {
+  transform: scale(0.985);
 }
 
 .album-choice-list .album-cover {
@@ -191,6 +238,11 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--border-hairline);
   align-items: center;
+  transition: border-color 0.18s ease, transform 0.2s var(--ease-spring);
+}
+
+.review-history-item:hover {
+  border-color: var(--border-strong);
 }
 
 .review-history-photos {
@@ -223,6 +275,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  animation: aura-bar-slide-down 0.22s var(--ease-spring);
 }
 
 .purge-status-row {
@@ -271,9 +324,21 @@
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 13px;
+  animation: aura-bar-slide-down 0.18s var(--ease-out);
 }
 
 /* Lightbox Studio & Video Player */
+@keyframes aura-stage-open {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .lightbox-studio,
 .photo-comparison {
   position: fixed;
@@ -283,6 +348,7 @@
   color: #f5f5f2;
   display: flex;
   flex-direction: column;
+  animation: aura-stage-open 0.22s var(--ease-out);
 }
 
 .lightbox-topbar,
@@ -296,11 +362,18 @@
   backdrop-filter: blur(12px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   z-index: 5;
+  transition: opacity 0.24s var(--ease-out), transform 0.24s var(--ease-out);
 }
 
-.lightbox-studio.is-immersive .lightbox-topbar,
+.lightbox-studio.is-immersive .lightbox-topbar {
+  opacity: 0;
+  transform: translateY(-12px);
+  pointer-events: none;
+}
+
 .lightbox-studio.is-immersive .lightbox-bottom-bar {
   opacity: 0;
+  transform: translateY(12px);
   pointer-events: none;
 }
 
@@ -356,6 +429,19 @@
   background: rgba(255, 255, 255, 0.12);
   color: #ffffff;
   font-size: 12.5px;
+  transition:
+    background 0.18s var(--ease-out),
+    color 0.18s var(--ease-out),
+    transform 0.18s var(--ease-spring);
+}
+
+.lightbox-pill-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.lightbox-pill-btn:active:not(:disabled) {
+  transform: scale(0.94);
+  transition-duration: 0.07s;
 }
 
 .lightbox-pill-btn.is-active {
@@ -382,6 +468,8 @@
   flex-direction: column;
   gap: 2px;
   z-index: 20;
+  transform-origin: top right;
+  animation: aura-popover-in 0.18s var(--ease-spring);
 }
 
 .dropdown-group-label {
@@ -399,10 +487,15 @@
   color: #f5f5f2;
   font-size: 12.5px;
   text-align: left;
+  transition: background 0.14s ease, transform 0.14s var(--ease-spring);
 }
 
 .lightbox-dropdown button:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.lightbox-dropdown button:active {
+  transform: scale(0.97);
 }
 
 .lightbox-dropdown hr {
@@ -420,6 +513,7 @@
   flex-direction: column;
   gap: 10px;
   z-index: 4;
+  animation: aura-bar-slide-down 0.22s var(--ease-spring);
 }
 
 .lightbox-action-bar {
@@ -461,6 +555,15 @@
   border-radius: 4px;
   overflow: hidden;
   background: #272724;
+  transition: transform 0.18s var(--ease-spring), filter 0.16s ease;
+}
+
+.frame-strip button:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.frame-strip button:active:not(:disabled) {
+  transform: scale(0.95);
 }
 
 .frame-strip img {
@@ -477,4 +580,5 @@
   background: #facc15;
   border-radius: 2px;
   pointer-events: none;
+  transition: left 0.12s linear;
 }

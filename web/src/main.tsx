@@ -920,7 +920,7 @@ function AuraApplication() {
             </button>
 
             {route.view === "albums" && route.album ? (
-              <div className="album-breadcrumb">
+              <div className="album-breadcrumb" key={`album:${route.album}`}>
                 <button
                   type="button"
                   className="btn btn-subtle"
@@ -939,7 +939,7 @@ function AuraApplication() {
                 )}
               </div>
             ) : (
-              <div className="header-title-block">
+              <div className="header-title-block" key={`view:${route.view}`}>
                 <h1>{VIEW_TITLES[route.view]}</h1>
                 {currentModule.subtitle && (
                   <p className="header-subtitle">{currentModule.subtitle}</p>
@@ -1160,7 +1160,10 @@ function AuraApplication() {
         )}
 
         {/* Main Workspace Body */}
-        <main className="aura-content">
+        <main
+          className="aura-content"
+          key={`${route.view}:${route.album}`}
+        >
           {route.view === "jobs" ? (
             <PipelineTaskCenter
               info={telemetry}
