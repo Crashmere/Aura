@@ -119,6 +119,8 @@ Permanent deletion applies to the live Aura library, not system Photos, existing
 
 Albums organize logical assets through `albums` and `album_assets` in the existing catalog. One item may belong to multiple albums; adding it again is idempotent. Creating an album with selected assets and changing membership each use a transaction, so an invalid or recently deleted asset rejects the complete addition. Names are trimmed and limited to 100 Unicode characters; each write accepts at most 1000 assets.
 
+Dropping external files inside an album captures that album in each browser queue entry. After publication or exact-duplicate recognition, the browser adds the visible item through the existing membership endpoint before reporting completion. An addition failure remains retryable; retry reuses the accepted original. Filtered and recently deleted items are not added or restored. Queue deduplication includes the target album, so the same file can be added to another album without storing another original. Navigation after the drop does not change the queued target.
+
 Album browsing reuses capture-date pagination, filename/metadata search, and date filters. The cover is the newest visible item. Recently deleted items retain membership but disappear from album counts, covers, and ordinary browsing; restoration makes them visible again. Removing membership or deleting an album leaves the assets and original files unchanged.
 
 All merge paths transfer the union of the two items' album memberships before removing the redundant logical asset. A split inherits the source item's memberships for the new item while retaining the source's memberships. These rules also apply to automatic exact-match and Live Photo grouping.

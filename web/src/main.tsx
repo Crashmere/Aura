@@ -857,7 +857,7 @@ function AuraApplication() {
         if (internalDrag.current) return;
         const files = Array.from(e.dataTransfer.files || []);
         if (files.length > 0) {
-          enqueueUploadFiles(files);
+          enqueueUploadFiles(files, route.view === "albums" ? route.album : "");
           setUploadHubTab("files");
         }
       }}

@@ -22,6 +22,7 @@ export interface UploadQueueEntry {
   id: string;
   file: File;
   name: string;
+  albumId?: string;
   state: UploadTaskPhase;
   progress: number;
   error?: string;
@@ -228,20 +229,21 @@ export function stopDirectoryWatch(): void {
   broadcastState();
 }
 
-export function enqueueUploadFiles(files: File[]): void {
+export function enqueueUploadFiles(files: File[], albumId = ""): void {
   const existingKeys = new Set(
     engineState.items
       .filter((x) => x.state !== "error")
-      .map((x) => `${x.name}|${x.file.size}|${x.file.lastModified}`),
+      .map((x) => `${x.name}|${x.file.size}|${x.file.lastModified}|${x.albumId || ""}`),
   );
   for (const file of files) {
     const relName = file.webkitRelativePath || file.name;
-    const key = `${relName}|${file.size}|${file.lastModified}`;
+    const key = `${relName}|${file.size}|${file.lastModified}|${albumId}`;
     if (SUPPORTED_MEDIA_EXT.test(relName) && !existingKeys.has(key)) {
       engineState.items.push({
         id: crypto.randomUUID(),
         file,
         name: relName,
+        albumId,
         state: "waiting",
         progress: 0,
       });
@@ -323,6 +325,26 @@ function assertValidSession(session: ServerUploadSession, fileSize: number): voi
   }
 }
 
+async function finishUploadEntry(
+  entry: UploadQueueEntry,
+  result: { assetId?: string; filtered?: boolean; trashed?: boolean; trashedAt?: string },
+  state: "done" | "duplicate",
+): Promise<void> {
+  entry.assetId = result.assetId || entry.assetId;
+  entry.trashedAt = result.trashedAt || entry.trashedAt;
+  const unavailable = result.filtered || result.trashed || entry.trashedAt;
+  if (entry.albumId && !unavailable) {
+    if (!entry.assetId) throw new Error("服务器尚未建立照片项目，无法加入相片集");
+    await requestJson(`albums/${entry.albumId}/assets`, { assets: [entry.assetId] });
+  }
+  entry.state = result.filtered ? "skipped" : result.trashed || entry.trashedAt ? "trashed" : state;
+  entry.progress = 1;
+  broadcastState();
+  if (state === "done" || (entry.albumId && !unavailable)) {
+    window.dispatchEvent(new Event("aura-library-changed"));
+  }
+}
+
 async function transferEntry(
   entry: UploadQueueEntry,
   preparation: Promise<{ date: Date; hash: string }>,
@@ -349,13 +371,7 @@ async function transferEntry(
   entry.trashedAt = session.trashedAt;
 
   if (session.complete) {
-    entry.state = session.filtered
-      ? "skipped"
-      : session.trashed || session.trashedAt
-        ? "trashed"
-        : "duplicate";
-    entry.progress = 1;
-    broadcastState();
+    await finishUploadEntry(entry, session, "duplicate");
     return;
   }
 
@@ -431,16 +447,7 @@ async function transferEntry(
     trashedAt?: string;
   }>(`uploads/${hash}/complete`, {});
 
-  entry.assetId = commitResult.assetId || entry.assetId;
-  entry.trashedAt = commitResult.trashedAt || entry.trashedAt;
-  entry.state = commitResult.filtered
-    ? "skipped"
-    : commitResult.trashed || commitResult.trashedAt
-      ? "trashed"
-      : "done";
-  entry.progress = 1;
-  broadcastState();
-  window.dispatchEvent(new Event("aura-library-changed"));
+  await finishUploadEntry(entry, commitResult, "done");
 }
 
 async function driveUploadLoop(): Promise<void> {
