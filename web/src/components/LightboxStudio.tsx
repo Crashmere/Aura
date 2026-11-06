@@ -499,10 +499,10 @@ export function LightboxStudio({
 
       if (inInput) return;
 
-      if (e.key === "ArrowLeft" && !coverPickerOpen) {
+      if ((e.key === "ArrowLeft" || e.key.toLowerCase() === "a") && !coverPickerOpen) {
         e.preventDefault();
         navigateBy(-1);
-      } else if (e.key === "ArrowRight" && !coverPickerOpen) {
+      } else if ((e.key === "ArrowRight" || e.key.toLowerCase() === "d") && !coverPickerOpen) {
         e.preventDefault();
         navigateBy(1);
       } else if (e.key.toLowerCase() === "i") {
