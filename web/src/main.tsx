@@ -194,6 +194,7 @@ function AuraApplication() {
     isError?: boolean;
   } | null>(null);
   const [dragHover, setDragHover] = useState(false);
+  const internalDrag = useRef(false);
 
   useEffect(() => {
     let dragTimeout: number | undefined;
@@ -201,9 +202,20 @@ function AuraApplication() {
       window.clearTimeout(dragTimeout);
       setDragHover(false);
     };
+    // Browsers can expose page images as files during a native drag.
+    const onDragStart = () => {
+      internalDrag.current = true;
+      resetDrag();
+    };
+    const onDragEnd = () => {
+      internalDrag.current = false;
+      resetDrag();
+    };
     const onDragOver = (event: DragEvent) => {
       if (!event.dataTransfer?.types.includes("Files")) return;
       event.preventDefault();
+      event.dataTransfer.dropEffect = internalDrag.current ? "none" : "copy";
+      if (internalDrag.current) return;
       setDragHover(true);
       window.clearTimeout(dragTimeout);
       // Native drag cancellation can omit dragend and keyboard events in the page.
@@ -223,20 +235,22 @@ function AuraApplication() {
       if (document.hidden) resetDrag();
     };
 
+    window.addEventListener("dragstart", onDragStart, true);
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("dragleave", onDragLeave);
     window.addEventListener("drop", resetDrag);
-    window.addEventListener("dragend", resetDrag);
+    window.addEventListener("dragend", onDragEnd);
     window.addEventListener("blur", resetDrag);
     window.addEventListener("pointermove", resetDrag);
     window.addEventListener("keydown", onKeyDown);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.clearTimeout(dragTimeout);
+      window.removeEventListener("dragstart", onDragStart, true);
       window.removeEventListener("dragover", onDragOver);
       window.removeEventListener("dragleave", onDragLeave);
       window.removeEventListener("drop", resetDrag);
-      window.removeEventListener("dragend", resetDrag);
+      window.removeEventListener("dragend", onDragEnd);
       window.removeEventListener("blur", resetDrag);
       window.removeEventListener("pointermove", resetDrag);
       window.removeEventListener("keydown", onKeyDown);
@@ -840,6 +854,7 @@ function AuraApplication() {
       onDrop={(e) => {
         e.preventDefault();
         setDragHover(false);
+        if (internalDrag.current) return;
         const files = Array.from(e.dataTransfer.files || []);
         if (files.length > 0) {
           enqueueUploadFiles(files);
