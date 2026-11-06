@@ -96,6 +96,18 @@
   padding: 8px 0;
 }
 
+.similar-page-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.similar-page-loading {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
 .similar-pairs-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));

@@ -618,14 +618,19 @@ export function SimilarWorkspaceView({
   const dinoPager = (
     <nav className="similar-pagination" aria-label="智能推荐分页">
       <ActionButton
-        disabled={loading || pageIndex === 0}
+        disabled={loading || !!ignoringKey || pageIndex === 0}
         onClick={() => onTurnDinoPage(-1)}
       >
         上一页
       </ActionButton>
-      <span aria-live="polite">第 {pageIndex + 1} 页</span>
+      <span className="similar-page-status" aria-live="polite" aria-busy={loading}>
+        <span>第 {pageIndex + 1} 页</span>
+        <span className="similar-page-loading">
+          {loading && <LoaderCircle size={14} className="spin" aria-label="正在加载" />}
+        </span>
+      </span>
       <ActionButton
-        disabled={loading || !hasNextPage}
+        disabled={loading || !!ignoringKey || !hasNextPage}
         onClick={() => onTurnDinoPage(1)}
       >
         下一页
@@ -706,7 +711,7 @@ export function SimilarWorkspaceView({
             <span>已确认一组候选不同，后续不再提示。</span>
             <button
               type="button"
-              disabled={!!ignoringKey}
+              disabled={loading || !!ignoringKey}
               onClick={() => void onUndoIgnore(lastIgnoredPair)}
             >
               撤销
@@ -739,6 +744,7 @@ export function SimilarWorkspaceView({
         <div
           className="similar-pairs-grid"
           key={`${source}:${pageIndex}`}
+          aria-busy={loading}
         >
           {pairs.map((pair) => {
             const left = assetsMap[pair.left];
@@ -787,7 +793,7 @@ export function SimilarWorkspaceView({
                     </ActionButton>
                     <ActionButton
                       variant="primary"
-                      disabled={!!ignoringKey}
+                      disabled={loading || !!ignoringKey}
                       onClick={() => void onMergePair(left, right)}
                     >
                       <Layers3 size={15} />
@@ -795,7 +801,7 @@ export function SimilarWorkspaceView({
                     </ActionButton>
                     <ActionButton
                       className="similar-ignore-btn"
-                      disabled={!!ignoringKey}
+                      disabled={loading || !!ignoringKey}
                       onClick={() => void onIgnorePair(pair)}
                     >
                       确认不同
@@ -812,7 +818,7 @@ export function SimilarWorkspaceView({
         ? (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager
         : hasNextPage && (
             <div className="similar-more-wrap">
-              <ActionButton disabled={loading} onClick={onAppendDhash}>
+              <ActionButton disabled={loading || !!ignoringKey} onClick={onAppendDhash}>
                 {loading ? "正在加载" : "加载更多候选"}
               </ActionButton>
             </div>
