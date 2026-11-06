@@ -986,6 +986,14 @@ function AuraApplication() {
                   <ArrowLeft size={16} />
                   <span>相片集</span>
                 </button>
+                {activeAlbumDetail && (
+                  <RoundIconButton
+                    title="重命名相片集"
+                    onClick={() => setAlbumModal({ kind: "rename", album: activeAlbumDetail })}
+                  >
+                    <Pencil size={16} />
+                  </RoundIconButton>
+                )}
                 <h1>{activeAlbumDetail?.name || "相片集"}</h1>
                 {activeAlbumDetail && (
                   <small className="header-count-pill">{activeAlbumDetail.count} 项</small>
@@ -1083,10 +1091,10 @@ function AuraApplication() {
                   <span>添加照片</span>
                 </ActionButton>
                 <RoundIconButton
-                  title="重命名相片集"
-                  onClick={() => setAlbumModal({ kind: "rename", album: activeAlbumDetail })}
+                  title="选择相片集封面"
+                  onClick={() => setAlbumModal({ kind: "cover", album: activeAlbumDetail })}
                 >
-                  <Pencil size={16} />
+                  <Images size={16} />
                 </RoundIconButton>
                 <RoundIconButton
                   title="删除相片集"
@@ -1626,6 +1634,9 @@ function AuraApplication() {
                 updateRoute((prev) => ({ ...prev, view: "albums", album: savedAlbum.id }), "push");
               } else if (kind === "rename" && savedAlbum) {
                 showToast("相片集已重命名");
+                setActiveAlbumDetail(savedAlbum);
+              } else if (kind === "cover" && savedAlbum) {
+                showToast("相片集封面已更新");
                 setActiveAlbumDetail(savedAlbum);
               } else {
                 showToast("相片集已更新");

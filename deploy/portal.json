@@ -144,7 +144,7 @@
     {
       "method": "GET",
       "path": "/api/albums",
-      "description": "相片集列表、可见项目数与最新封面"
+      "description": "相片集列表、可见项目数与指定或自动封面"
     },
     {
       "method": "POST",
@@ -165,6 +165,11 @@
       "method": "PATCH",
       "path": "/api/albums/{id}",
       "description": "重命名相片集"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/albums/{id}/cover",
+      "description": "指定可见成员作为相片集封面或恢复自动封面；视频直接使用已有封面，不改动原件和关联"
     },
     {
       "method": "DELETE",

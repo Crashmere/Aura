@@ -590,6 +590,18 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.album-breadcrumb h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-breadcrumb > button,
+.album-breadcrumb .header-count-pill {
+  flex-shrink: 0;
 }
 
 .header-count-pill {

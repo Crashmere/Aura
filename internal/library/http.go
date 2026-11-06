@@ -71,6 +71,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Post("/api/albums/import", l.importAlbum)
 	r.Get("/api/albums/{id}", l.albumDetail)
 	r.Patch("/api/albums/{id}", l.renameAlbum)
+	r.Patch("/api/albums/{id}/cover", l.setAlbumCover)
 	r.Delete("/api/albums/{id}", l.deleteAlbum)
 	r.Post("/api/albums/{id}/assets", l.changeAlbumAssets)
 	r.Delete("/api/albums/{id}/assets", l.changeAlbumAssets)

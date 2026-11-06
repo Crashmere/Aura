@@ -211,6 +211,10 @@
   flex-wrap: wrap;
 }
 
+.album-cover-picker-footer {
+  flex-wrap: wrap;
+}
+
 .search-box {
   display: flex;
   align-items: center;

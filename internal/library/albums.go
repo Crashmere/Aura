@@ -2,6 +2,7 @@ package library
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -21,7 +22,10 @@ type Album struct {
 
 const albumSelect = `SELECT al.id,al.name,al.created_at,al.updated_at,
  (SELECT count(*) FROM album_assets aa JOIN assets a ON a.id=aa.asset_id WHERE aa.album_id=al.id AND a.trashed_at=''),
- COALESCE((SELECT a.id FROM album_assets aa JOIN assets a ON a.id=aa.asset_id
+ COALESCE((SELECT a.id FROM decisions d JOIN files f ON f.hash=json_extract(d.detail,'$.hash')
+ JOIN assets a ON a.id=f.asset_id JOIN album_assets aa ON aa.asset_id=a.id AND aa.album_id=al.id
+ WHERE d.id='album-cover:'||al.id AND d.action='album-cover' AND a.trashed_at=''),
+ (SELECT a.id FROM album_assets aa JOIN assets a ON a.id=aa.asset_id
  WHERE aa.album_id=al.id AND a.trashed_at='' ORDER BY a.captured_at DESC,a.id DESC LIMIT 1),'')
  FROM albums al `
 
@@ -209,6 +213,69 @@ func (l *Library) deleteAlbum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"deleted": true})
+}
+
+func (l *Library) setAlbumCover(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		AssetID json.RawMessage `json:"assetId"`
+	}
+	if !decode(w, r, &p) {
+		return
+	}
+	var asset *string
+	if len(p.AssetID) == 0 || json.Unmarshal(p.AssetID, &asset) != nil || asset != nil && !validID.MatchString(*asset) {
+		fail(w, 400, "请选择封面项目，或使用自动封面")
+		return
+	}
+	tx, err := l.DB.Begin()
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	defer tx.Rollback()
+	id := chi.URLParam(r, "id")
+	var exists bool
+	if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM albums WHERE id=?)", id).Scan(&exists); err != nil {
+		fail(w, 500, err)
+		return
+	}
+	if !exists {
+		fail(w, 404, "相片集不存在")
+		return
+	}
+	hash := ""
+	if asset != nil {
+		if !allowAssetMutation(w, tx, *asset) {
+			return
+		}
+		err = tx.QueryRow(`SELECT a.primary_hash FROM assets a
+ JOIN album_assets aa ON aa.asset_id=a.id
+ WHERE aa.album_id=? AND a.id=? AND a.trashed_at=''`, id, *asset).Scan(&hash)
+		if errors.Is(err, sql.ErrNoRows) {
+			fail(w, 400, "请选择相片集中的照片或视频作为封面")
+			return
+		}
+		if err != nil {
+			fail(w, 500, err)
+			return
+		}
+	}
+	// The original hash follows the chosen item through merges and splits.
+	date := now()
+	_, err = tx.Exec(`INSERT INTO decisions(id,action,detail,created_at) VALUES(?,'album-cover',?,?)
+ ON CONFLICT(id) DO UPDATE SET detail=excluded.detail,created_at=excluded.created_at`,
+		"album-cover:"+id, marshal(map[string]string{"albumId": id, "hash": hash}), date)
+	if err == nil {
+		_, err = tx.Exec("UPDATE albums SET updated_at=? WHERE id=?", date, id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	l.writeAlbum(w, id, 200)
 }
 
 func (l *Library) changeAlbumAssets(w http.ResponseWriter, r *http.Request) {
