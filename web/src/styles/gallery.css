@@ -165,6 +165,7 @@
 .photo-frame img {
   width: 100%;
   height: 100%;
+  /* The frame reaches the natural ratio; one fit mode keeps both morphs continuous. */
   object-fit: cover;
   opacity: 0;
   transform: scale(1.03);
@@ -176,11 +177,6 @@
 .photo-frame img.is-loaded {
   opacity: 1;
   transform: scale(1);
-}
-
-.aura-gallery[data-gallery-layout="original"] .photo-frame img,
-.photo.original-aspect .photo-frame img {
-  object-fit: contain;
 }
 
 .photo:hover:not(.selected) .photo-frame img.is-loaded {
@@ -249,10 +245,8 @@
 }
 
 /* Dense grid suppression */
-.aura-gallery[data-gallery-zoom="0"] .photo-kind span,
-.aura-gallery[data-gallery-zoom="1"] .photo-kind span,
-.aura-gallery[data-gallery-zoom="0"] .photo-versions,
-.aura-gallery[data-gallery-zoom="1"] .photo-versions {
+.aura-gallery[data-gallery-dense="true"] .photo-kind span,
+.aura-gallery[data-gallery-dense="true"] .photo-versions {
   display: none;
 }
 

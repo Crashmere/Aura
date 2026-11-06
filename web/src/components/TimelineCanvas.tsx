@@ -39,12 +39,20 @@ export const DESKTOP_COLUMN_STEPS = [12, 10, 8, 7, 6, 5, 4] as const;
 export const MOBILE_COLUMN_STEPS = [7, 6, 5, 4, 3, 2, 1] as const;
 export const DEFAULT_ZOOM_STEP = 3;
 
-const ZOOM_PREF_KEY = "aura-grid-zoom-v2";
+const LEGACY_ZOOM_PREF_KEY = "aura-grid-zoom-v2";
+const ZOOM_PREF_KEY = "aura-grid-zoom-v3";
+const DESKTOP_COLUMN_OFFSETS = [5, 3, 1, 0, -1, -2, -3] as const;
+const MOBILE_COLUMN_OFFSETS = [3, 2, 1, 0, -1, -2, -3] as const;
 const ASPECT_PREF_KEY = "aura-grid-layout-v1";
 const MAX_FLIP_TILES = 300;
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
 export type GridAspectMode = "square" | "original";
+
+interface GridZoomPreference {
+  baseline: number;
+  zoom: number;
+}
 
 interface FlipCaptureSnapshot {
   container: HTMLDivElement;
@@ -57,14 +65,36 @@ function clampZoomStep(val: number): number {
     : DEFAULT_ZOOM_STEP;
 }
 
-function loadSavedZoomStep(): number {
+function maxZoomStep(baseline: number, mobile: boolean): number {
+  const columns = mobile ? MOBILE_COLUMN_STEPS[baseline] : DESKTOP_COLUMN_STEPS[baseline];
+  return Math.min(6, DEFAULT_ZOOM_STEP + columns - 1);
+}
+
+function loadSavedZoomPreference(): GridZoomPreference {
+  let baseline = DEFAULT_ZOOM_STEP;
   try {
     const raw = localStorage.getItem(ZOOM_PREF_KEY);
-    if (raw !== null && /^[0-6]$/.test(raw)) return Number(raw);
+    if (raw !== null) {
+      const saved = JSON.parse(raw) as GridZoomPreference;
+      if (
+        saved &&
+        Number.isInteger(saved.baseline) && saved.baseline >= 0 && saved.baseline <= 6 &&
+        Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom <= 6
+      ) {
+        return { baseline: saved.baseline, zoom: saved.zoom };
+      }
+    }
   } catch {
     /* Storage optional */
   }
-  return DEFAULT_ZOOM_STEP;
+  try {
+    // Preserve the current size while moving it to the center of the new range.
+    const legacy = localStorage.getItem(LEGACY_ZOOM_PREF_KEY);
+    if (legacy !== null && /^[0-6]$/.test(legacy)) baseline = Number(legacy);
+  } catch {
+    /* Storage optional */
+  }
+  return { baseline, zoom: DEFAULT_ZOOM_STEP };
 }
 
 function loadSavedAspectMode(): GridAspectMode {
@@ -96,7 +126,16 @@ function captureGridSnapshot(container: HTMLDivElement): FlipCaptureSnapshot {
 }
 
 export function useGridDisplayPreferences() {
-  const [zoom, setZoomRaw] = useState(loadSavedZoomStep);
+  const [density, setDensity] = useState(loadSavedZoomPreference);
+  const [mobile, setMobile] = useState(() => window.innerWidth <= 720);
+  const maxZoom = maxZoomStep(density.baseline, mobile);
+  const zoom = Math.min(density.zoom, maxZoom);
+  const desktopColumnSteps = DESKTOP_COLUMN_OFFSETS.map((offset) =>
+    Math.max(1, DESKTOP_COLUMN_STEPS[density.baseline] + offset),
+  );
+  const mobileColumnSteps = MOBILE_COLUMN_OFFSETS.map((offset) =>
+    Math.max(1, MOBILE_COLUMN_STEPS[density.baseline] + offset),
+  );
   const [layout, setLayoutRaw] = useState<GridAspectMode>(loadSavedAspectMode);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const requestedZoom = useRef(zoom);
@@ -145,13 +184,13 @@ export function useGridDisplayPreferences() {
 
   const changeZoom = useCallback(
     (nextValue: number) => {
-      const clamped = clampZoomStep(nextValue);
-      if (clamped === requestedZoom.current) return;
+      const clamped = Math.min(clampZoomStep(nextValue), maxZoom);
+      if (clamped === requestedZoom.current && clamped === density.zoom) return;
       requestedZoom.current = clamped;
       captureNextDisplay(clamped, requestedLayout.current);
-      setZoomRaw(clamped);
+      setDensity((current) => ({ ...current, zoom: clamped }));
     },
-    [captureNextDisplay],
+    [captureNextDisplay, maxZoom, density.zoom],
   );
 
   const changeLayout = useCallback(
@@ -166,11 +205,11 @@ export function useGridDisplayPreferences() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(ZOOM_PREF_KEY, String(zoom));
+      localStorage.setItem(ZOOM_PREF_KEY, JSON.stringify(density));
     } catch {
       /* Optional */
     }
-  }, [zoom]);
+  }, [density]);
 
   useEffect(() => {
     try {
@@ -181,6 +220,7 @@ export function useGridDisplayPreferences() {
   }, [layout]);
 
   useLayoutEffect(() => {
+    requestedZoom.current = zoom;
     committedZoom.current = zoom;
     committedLayout.current = layout;
     const prev = snapshotRef.current;
@@ -255,17 +295,21 @@ export function useGridDisplayPreferences() {
       snapshotRef.current = null;
       stopRunningAnimations();
     };
+    const resize = () => {
+      abort();
+      setMobile(window.innerWidth <= 720);
+    };
     mq.addEventListener("change", abort);
-    window.addEventListener("resize", abort);
+    window.addEventListener("resize", resize);
     return () => {
       mq.removeEventListener("change", abort);
-      window.removeEventListener("resize", abort);
+      window.removeEventListener("resize", resize);
       abort();
     };
   }, [stopRunningAnimations]);
 
-  const columns = DESKTOP_COLUMN_STEPS[zoom];
-  const mobileColumns = MOBILE_COLUMN_STEPS[zoom];
+  const columns = desktopColumnSteps[zoom];
+  const mobileColumns = mobileColumnSteps[zoom];
   const cssVars = {
     "--columns": columns,
     "--mobile-columns": mobileColumns,
@@ -273,6 +317,9 @@ export function useGridDisplayPreferences() {
 
   return {
     zoom,
+    maxZoom,
+    desktopColumnSteps,
+    mobileColumnSteps,
     setZoom: changeZoom,
     layout,
     setLayout: changeLayout,
@@ -284,6 +331,7 @@ export function useGridDisplayPreferences() {
       style: cssVars,
       "data-gallery-zoom": zoom,
       "data-gallery-layout": layout,
+      "data-gallery-dense": mobile ? mobileColumns >= 6 : columns >= 10,
     },
     skeletonProps: {
       className: "skeleton-grid gallery-skeleton",
@@ -294,12 +342,18 @@ export function useGridDisplayPreferences() {
 
 export function GridDensityControls({
   zoom,
+  maxZoom,
+  desktopColumnSteps,
+  mobileColumnSteps,
   onZoomChange,
   layout,
   onLayoutChange,
   disabled = false,
 }: {
   zoom: number;
+  maxZoom: number;
+  desktopColumnSteps: number[];
+  mobileColumnSteps: number[];
   onZoomChange: (next: number) => void;
   layout: GridAspectMode;
   onLayoutChange: (next: GridAspectMode) => void;
@@ -333,20 +387,21 @@ export function GridDensityControls({
       <input
         type="range"
         aria-label="缩略图大小"
-        aria-valuetext={`桌面 ${DESKTOP_COLUMN_STEPS[step]} 列，手机 ${MOBILE_COLUMN_STEPS[step]} 列`}
-        title="缩略图大小（左小右大）"
+        aria-valuetext={`${step === DEFAULT_ZOOM_STEP ? "默认，" : ""}桌面 ${desktopColumnSteps[step]} 列，手机 ${mobileColumnSteps[step]} 列`}
+        title="缩略图大小（左小右大，双击恢复默认）"
         min={0}
-        max={6}
+        max={maxZoom}
         step={1}
         value={step}
         disabled={disabled}
         onChange={(e) => onZoomChange(e.currentTarget.valueAsNumber)}
+        onDoubleClick={() => onZoomChange(DEFAULT_ZOOM_STEP)}
       />
       <button
         type="button"
         aria-label="放大缩略图"
         title="放大缩略图"
-        disabled={disabled || step === 6}
+        disabled={disabled || step === maxZoom}
         onClick={() => onZoomChange(step + 1)}
       >
         <ImageIcon size={19} aria-hidden="true" />

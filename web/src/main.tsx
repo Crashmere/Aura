@@ -1056,6 +1056,9 @@ function AuraApplication() {
 
                 <GridDensityControls
                   zoom={gridPrefs.zoom}
+                  maxZoom={gridPrefs.maxZoom}
+                  desktopColumnSteps={gridPrefs.desktopColumnSteps}
+                  mobileColumnSteps={gridPrefs.mobileColumnSteps}
                   onZoomChange={gridPrefs.setZoom}
                   layout={gridPrefs.layout}
                   onLayoutChange={gridPrefs.setLayout}
