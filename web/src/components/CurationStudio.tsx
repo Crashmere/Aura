@@ -14,6 +14,7 @@ import {
   orientedDimensions,
   requestJson,
 } from "../core/client";
+import { CollapsibleRegion, MotionPresence, useIsPresent, useSlidingIndicator } from "../core/motion";
 import type {
   CandidatePair,
   CatalogAsset,
@@ -39,6 +40,9 @@ export function PhotoComparisonModal({
   right: CatalogAsset;
   onClose: () => void;
 }) {
+  const isPresent = useIsPresent();
+  const presentRef = useRef(isPresent);
+  presentRef.current = isPresent;
   const rootRef = useRef<HTMLDivElement>(null);
   const closeCb = useRef(onClose);
   closeCb.current = onClose;
@@ -46,6 +50,7 @@ export function PhotoComparisonModal({
   const [mode, setMode] = useState<"side" | "overlay" | "switch">("side");
   const [activeSide, setActiveSide] = useState<"left" | "right">("left");
   const [curtainPercent, setCurtainPercent] = useState(50);
+  const modesIndicator = useSlidingIndicator(mode, '[aria-pressed="true"]');
 
   const toggleAbSide = () => {
     setMode("switch");
@@ -58,6 +63,7 @@ export function PhotoComparisonModal({
 
     const onKey = (e: KeyboardEvent) => {
       if (
+        !presentRef.current ||
         e.defaultPrevented ||
         e.isComposing ||
         e.keyCode === 229 ||
@@ -121,7 +127,13 @@ export function PhotoComparisonModal({
     >
       <header className="comparison-header">
         <h2>照片对比</h2>
-        <div className="comparison-modes" role="group" aria-label="对比方式">
+        <div
+          className="comparison-modes motion-tabs"
+          role="group"
+          aria-label="对比方式"
+          ref={modesIndicator.ref}
+          style={modesIndicator.style}
+        >
           <button
             type="button"
             aria-pressed={mode === "side"}
@@ -228,7 +240,7 @@ export function PhotoComparisonModal({
         </div>
       )}
 
-      {mode === "overlay" && (
+      <CollapsibleRegion open={mode === "overlay"} className="comparison-slider-region">
         <footer className="comparison-slider">
           <span>A</span>
           <input
@@ -241,7 +253,7 @@ export function PhotoComparisonModal({
           />
           <span>B</span>
         </footer>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }
@@ -277,6 +289,10 @@ export function CurationHistoryModal({
   const [errorMsg, setErrorMsg] = useState("");
   const [restoringId, setRestoringId] = useState("");
   const [reloadTick, setReloadTick] = useState(0);
+  const isPresent = useIsPresent();
+  const presentRef = useRef(isPresent);
+  presentRef.current = isPresent;
+  const tabsIndicator = useSlidingIndicator<HTMLElement>(kind, '[aria-pressed="true"]');
 
   const abortRef = useRef<AbortController | null>(null);
   const modalRef = useRef<HTMLElement>(null);
@@ -294,6 +310,7 @@ export function CurationHistoryModal({
     const onKey = (e: KeyboardEvent) => {
       if (
         e.key === "Escape" &&
+        presentRef.current &&
         !e.isComposing &&
         !e.defaultPrevented &&
         !blockedRef.current
@@ -424,7 +441,12 @@ export function CurationHistoryModal({
           </RoundIconButton>
         </header>
 
-        <nav className="review-history-tabs" aria-label="记录类型">
+        <nav
+          className="review-history-tabs motion-tabs"
+          aria-label="记录类型"
+          ref={tabsIndicator.ref}
+          style={tabsIndicator.style}
+        >
           <button
             type="button"
             aria-pressed={kind === "similar"}
@@ -463,7 +485,11 @@ export function CurationHistoryModal({
             const leftAsset = pageData.assets[rec.left];
             const rightAsset = pageData.assets[rec.right];
             return (
-              <article className="review-history-item" key={rec.id}>
+              <article
+                className="review-history-item"
+                key={rec.id}
+                aria-busy={restoringId === rec.id}
+              >
                 <div className="review-history-photos">
                   {[leftAsset, rightAsset].map((asset, idx) =>
                     asset ? (
@@ -588,6 +614,7 @@ export function SimilarWorkspaceView({
   onIgnorePair: (pair: CandidatePair) => Promise<void>;
   onUndoIgnore: (pair: CandidatePair) => Promise<void>;
 }) {
+  const tabsIndicator = useSlidingIndicator(source, ".active");
   const dinoPager = (
     <nav className="similar-pagination" aria-label="智能推荐分页">
       <ActionButton
@@ -608,7 +635,12 @@ export function SimilarWorkspaceView({
 
   return (
     <div className="similar-workspace">
-      <div className="similar-tabs" aria-label="相似类型">
+      <div
+        className="similar-tabs motion-tabs"
+        aria-label="相似类型"
+        ref={tabsIndicator.ref}
+        style={tabsIndicator.style}
+      >
         <button
           type="button"
           className={source === "dhash" ? "active" : ""}
@@ -645,39 +677,43 @@ export function SimilarWorkspaceView({
         </button>
       </div>
 
-      {source === "dino" && dinoIndex && (
-        <div className="similar-index-banner">
-          {dinoIndex.state === "processing" && (
-            <LoaderCircle size={14} className="spin" />
-          )}
-          <span>
-            {dinoIndex.state === "unavailable"
-              ? "智能分析暂不可用，稍后自动重试"
-              : dinoIndex.state === "disabled"
-                ? "智能分析已暂停"
-                : dinoIndex.pending
-                  ? `${dinoIndex.state === "processing" ? "正在分析" : "等待批量分析"} · ${dinoIndex.ready} / ${dinoIndex.total}`
-                  : `已分析 ${dinoIndex.ready} 张照片`}
-          </span>
-          {dinoIndex.engine && <span className="index-engine-pill">{dinoIndex.engine}</span>}
-          {!!dinoIndex.errors && <span>{dinoIndex.errors} 张稍后重试</span>}
-        </div>
-      )}
+      <MotionPresence present={source === "dino" && !!dinoIndex} variant="panel">
+        {source === "dino" && dinoIndex && (
+          <div className="similar-index-banner">
+            {dinoIndex.state === "processing" && (
+              <LoaderCircle size={14} className="spin" />
+            )}
+            <span>
+              {dinoIndex.state === "unavailable"
+                ? "智能分析暂不可用，稍后自动重试"
+                : dinoIndex.state === "disabled"
+                  ? "智能分析已暂停"
+                  : dinoIndex.pending
+                    ? `${dinoIndex.state === "processing" ? "正在分析" : "等待批量分析"} · ${dinoIndex.ready} / ${dinoIndex.total}`
+                    : `已分析 ${dinoIndex.ready} 张照片`}
+            </span>
+            {dinoIndex.engine && <span className="index-engine-pill">{dinoIndex.engine}</span>}
+            {!!dinoIndex.errors && <span>{dinoIndex.errors} 张稍后重试</span>}
+          </div>
+        )}
+      </MotionPresence>
 
       {source === "dino" && (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager}
 
-      {lastIgnoredPair && (
-        <div className="similar-undo-banner">
-          <span>已确认一组候选不同，后续不再提示。</span>
-          <button
-            type="button"
-            disabled={!!ignoringKey}
-            onClick={() => void onUndoIgnore(lastIgnoredPair)}
-          >
-            撤销
-          </button>
-        </div>
-      )}
+      <MotionPresence present={!!lastIgnoredPair} variant="panel">
+        {lastIgnoredPair && (
+          <div className="similar-undo-banner">
+            <span>已确认一组候选不同，后续不再提示。</span>
+            <button
+              type="button"
+              disabled={!!ignoringKey}
+              onClick={() => void onUndoIgnore(lastIgnoredPair)}
+            >
+              撤销
+            </button>
+          </div>
+        )}
+      </MotionPresence>
 
       {loading && !pairs.length ? (
         <div className="loading-inline">
@@ -709,7 +745,11 @@ export function SimilarWorkspaceView({
             const right = assetsMap[pair.right];
             if (!left || !right) return null;
             return (
-              <article className="similar-pair-card" key={`${pair.left}:${pair.right}`}>
+              <article
+                className="similar-pair-card"
+                key={`${pair.left}:${pair.right}`}
+                aria-busy={ignoringKey === `${pair.left}:${pair.right}`}
+              >
                 <PhotoTile
                   asset={left}
                   originalAspect
@@ -722,6 +762,9 @@ export function SimilarWorkspaceView({
                 />
                 <div className="pair-actions">
                   <div className="pair-meta">
+                    {ignoringKey === `${pair.left}:${pair.right}` && (
+                      <LoaderCircle size={14} className="spin" aria-label="正在整理" />
+                    )}
                     <strong>
                       {source === "dino" ? "画面内容相近" : "图像指纹相近"}
                     </strong>

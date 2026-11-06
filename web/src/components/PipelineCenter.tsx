@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import {
   Check,
   CheckCheck,
@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { formatByteSize, requestJson } from "../core/client";
+import { CollapsibleRegion, useSlidingIndicator } from "../core/motion";
 import type {
   CursorPage,
   IncompleteUploadSession,
@@ -67,6 +68,8 @@ function PipelineJobAccordion({
   onRetryHashes: (hashes: string[]) => void;
   onLocateAsset: (assetId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const detailId = useId();
   const progress = job.progress;
   const steps = progress?.steps || [];
   const readyCount = steps.filter((s) => s.status === "ready").length;
@@ -75,9 +78,17 @@ function PipelineJobAccordion({
   const finishedSteps = readyCount + skippedCount;
 
   return (
-    <details className={`task-job ${job.status === "error" ? "has-error" : ""}`}>
-      <summary className="task-row">
-        <span className={`task-state ${job.status}`}>
+    <article
+      className={`task-job ${job.status === "error" ? "has-error" : ""} ${expanded ? "is-expanded" : ""}`}
+    >
+      <button
+        type="button"
+        className="task-row task-row-toggle"
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span key={job.status} className={`task-state ${job.status}`}>
           {job.status === "processing" ? (
             <LoaderCircle className="spin" size={20} />
           ) : job.status === "ready" ? (
@@ -119,82 +130,84 @@ function PipelineJobAccordion({
           )}
         </div>
         <ChevronDown className="task-expand" size={17} aria-hidden="true" />
-      </summary>
+      </button>
 
-      <div className="task-detail">
-        {steps.length > 0 ? (
-          <ol className="task-steps">
-            {steps.map((step) => (
-              <li key={step.id} className={step.status}>
-                <span className="task-step-icon">
-                  {step.status === "ready" ? (
-                    <Check size={14} />
-                  ) : step.status === "processing" ? (
-                    <LoaderCircle size={14} className="spin" />
-                  ) : step.status === "error" ? (
-                    <X size={14} />
-                  ) : step.status === "skipped" ? (
-                    <Minus size={14} />
-                  ) : (
-                    <Circle size={11} />
-                  )}
-                </span>
-                <div>
-                  <span>{step.label}</span>
-                  <small>
-                    {STEP_STATUS_LABELS[step.status]}
-                    {step.engine ? ` · ${step.engine}` : ""}
-                    {step.startedAt
-                      ? ` · ${formatElapsedSpan(step.startedAt, step.finishedAt)}`
-                      : ""}
-                  </small>
-                  {step.status === "processing" &&
-                    typeof step.percent === "number" && (
-                      <div className="task-step-progress">
-                        <progress
-                          max={100}
-                          value={step.percent}
-                          aria-label={step.label}
-                        />
-                        <span>{Math.floor(step.percent)}%</span>
-                      </div>
+      <CollapsibleRegion open={expanded} id={detailId}>
+        <div className="task-detail">
+          {steps.length > 0 ? (
+            <ol className="task-steps">
+              {steps.map((step) => (
+                <li key={step.id} className={step.status}>
+                  <span key={step.status} className="task-step-icon">
+                    {step.status === "ready" ? (
+                      <Check size={14} />
+                    ) : step.status === "processing" ? (
+                      <LoaderCircle size={14} className="spin" />
+                    ) : step.status === "error" ? (
+                      <X size={14} />
+                    ) : step.status === "skipped" ? (
+                      <Minus size={14} />
+                    ) : (
+                      <Circle size={11} />
                     )}
-                  {step.note && <small>{step.note}</small>}
-                  {step.error && <p className="task-error">{step.error}</p>}
-                </div>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="task-note">
-            {job.status === "queued"
-              ? "等待开始处理"
-              : "此记录没有分步骤进度"}
-          </p>
-        )}
-
-        {job.error && !steps.some((s) => s.error === job.error) && (
-          <p className="task-error">{job.error}</p>
-        )}
-
-        <div className="task-row-actions">
-          {job.assetId && (
-            <button type="button" onClick={() => onLocateAsset(job.assetId)}>
-              查看照片
-            </button>
+                  </span>
+                  <div>
+                    <span>{step.label}</span>
+                    <small>
+                      {STEP_STATUS_LABELS[step.status]}
+                      {step.engine ? ` · ${step.engine}` : ""}
+                      {step.startedAt
+                        ? ` · ${formatElapsedSpan(step.startedAt, step.finishedAt)}`
+                        : ""}
+                    </small>
+                    {step.status === "processing" &&
+                      typeof step.percent === "number" && (
+                        <div className="task-step-progress">
+                          <progress
+                            max={100}
+                            value={step.percent}
+                            aria-label={step.label}
+                          />
+                          <span>{Math.floor(step.percent)}%</span>
+                        </div>
+                      )}
+                    {step.note && <small>{step.note}</small>}
+                    {step.error && <p className="task-error">{step.error}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="task-note">
+              {job.status === "queued"
+                ? "等待开始处理"
+                : "此记录没有分步骤进度"}
+            </p>
           )}
-          {job.status === "error" && (
-            <button
-              type="button"
-              disabled={retrying}
-              onClick={() => onRetryHashes([job.hash])}
-            >
-              重新处理
-            </button>
+
+          {job.error && !steps.some((s) => s.error === job.error) && (
+            <p className="task-error">{job.error}</p>
           )}
+
+          <div className="task-row-actions">
+            {job.assetId && (
+              <button type="button" onClick={() => onLocateAsset(job.assetId)}>
+                查看照片
+              </button>
+            )}
+            {job.status === "error" && (
+              <button
+                type="button"
+                disabled={retrying}
+                onClick={() => onRetryHashes([job.hash])}
+              >
+                重新处理
+              </button>
+            )}
+          </div>
         </div>
-      </div>
-    </details>
+      </CollapsibleRegion>
+    </article>
   );
 }
 
@@ -219,6 +232,8 @@ export function PipelineTaskCenter({
   const [retrying, setRetrying] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [pageIdx, setPageIdx] = useState(0);
+  const tabsIndicator = useSlidingIndicator(activeTab, ".active");
+  const filtersIndicator = useSlidingIndicator(`${activeTab}:${statusFilter}`, ".active");
 
   const reqSeq = useRef(0);
   const refreshFn = useRef(() => {});
@@ -338,10 +353,15 @@ export function PipelineTaskCenter({
         </div>
       )}
 
-      <div className="task-tabs">
+      <div
+        className="task-tabs motion-tabs"
+        ref={tabsIndicator.ref}
+        style={tabsIndicator.style}
+      >
         <button
           type="button"
           className={activeTab === "processing" ? "active" : ""}
+          aria-pressed={activeTab === "processing"}
           onClick={() => setActiveTab("processing")}
         >
           <ImageIcon size={16} />
@@ -350,6 +370,7 @@ export function PipelineTaskCenter({
         <button
           type="button"
           className={activeTab === "uploads" ? "active" : ""}
+          aria-pressed={activeTab === "uploads"}
           onClick={() => setActiveTab("uploads")}
         >
           <CloudUpload size={16} />
@@ -371,13 +392,18 @@ export function PipelineTaskCenter({
           <p className="task-note">
             已结束的记录保留 24 小时，未完成的任务持续显示。
           </p>
-          <div className="task-filters">
+          <div
+            className="task-filters motion-tabs"
+            ref={filtersIndicator.ref}
+            style={filtersIndicator.style}
+          >
             {(Object.keys(STATUS_FILTER_LABELS) as PipelineFilterStatus[]).map(
               (st) => (
                 <button
                   type="button"
                   key={st}
                   className={statusFilter === st ? "active" : ""}
+                  aria-pressed={statusFilter === st}
                   onClick={() => setStatusFilter(st)}
                 >
                   <span>{STATUS_FILTER_LABELS[st]}</span>

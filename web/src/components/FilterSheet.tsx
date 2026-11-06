@@ -1,21 +1,8 @@
-import React, {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import {
-  CalendarDays,
-  Camera,
-  Check,
-  FileImage,
-  Search,
-  SlidersHorizontal,
-  X,
-} from "lucide-react";
+import { CalendarDays, Camera, Check, FileImage, Search, SlidersHorizontal, X } from "lucide-react";
 import { formatIsoDayLocal, requestJson } from "../core/client";
+import { useIsPresent } from "../core/motion";
 import {
   type ActiveFilterChip,
   createEmptyFilters,
@@ -93,12 +80,16 @@ export function FilterSheet({
   onApply: (draft: LibraryFilterDraft) => void;
   onClose: () => void;
 }) {
+  const isPresent = useIsPresent();
   const [draft, setDraft] = useState<LibraryFilterDraft>(value);
   const [mbInputs, setMbInputs] = useState({
     minSize: value.minSize ? String(Number((Number(value.minSize) / 1048576).toFixed(6))) : "",
     maxSize: value.maxSize ? String(Number((Number(value.maxSize) / 1048576).toFixed(6))) : "",
   });
-  const [equipment, setEquipment] = useState<{ cameras: string[]; lenses: string[] }>();
+  const [equipment, setEquipment] = useState<{
+    cameras: string[];
+    lenses: string[];
+  }>();
   const [equipError, setEquipError] = useState("");
   const [equipLoading, setEquipLoading] = useState(true);
   const [retrySeq, setRetrySeq] = useState(0);
@@ -122,23 +113,12 @@ export function FilterSheet({
     };
   }, [retrySeq]);
 
-  const [closing, setClosing] = useState(false);
   const [coords, setCoords] = useState({ top: 96, right: 24, maxHeight: 660 });
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const sheetRef = useRef<HTMLElement>(null);
 
   const updateField = (key: keyof LibraryFilterDraft, nextVal: string) => {
     setDraft((prev) => ({ ...prev, [key]: nextVal }));
   };
-
-  function closeWithTransition() {
-    if (closeTimer.current) return;
-    setClosing(true);
-    const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 140;
-    closeTimer.current = setTimeout(onClose, delay);
-  }
-
-  useEffect(() => () => clearTimeout(closeTimer.current), []);
 
   useEffect(() => {
     const prev = document.activeElement;
@@ -152,10 +132,11 @@ export function FilterSheet({
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
+      if (!isPresent) return;
       if (e.key === "Escape" && !e.isComposing) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        closeWithTransition();
+        onClose();
       }
     };
     window.addEventListener("keydown", handleKey, true);
@@ -222,11 +203,7 @@ export function FilterSheet({
       <select
         aria-label={label}
         value={
-          draft[`${key}Match`] === "missing"
-            ? "missing"
-            : draft[key]
-              ? `value:${draft[key]}`
-              : ""
+          draft[`${key}Match`] === "missing" ? "missing" : draft[key] ? `value:${draft[key]}` : ""
         }
         disabled={equipLoading && !equipment}
         onChange={(e) => {
@@ -342,8 +319,10 @@ export function FilterSheet({
 
   return createPortal(
     <div
-      className={`filter-scrim ${closing ? "is-closing" : ""}`}
-      onClick={closeWithTransition}
+      className={`filter-scrim ${!isPresent ? "is-closing" : ""}`}
+      onClick={onClose}
+      inert={!isPresent}
+      aria-hidden={!isPresent || undefined}
     >
       <section
         ref={sheetRef}
@@ -359,9 +338,9 @@ export function FilterSheet({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (!hasInvalidBounds && !closing) {
+            if (!hasInvalidBounds && isPresent) {
               onApply(draft);
-              closeWithTransition();
+              onClose();
             }
           }}
         >
@@ -370,12 +349,7 @@ export function FilterSheet({
               <SlidersHorizontal size={17} />
               <span>筛选照片</span>
             </h2>
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="关闭筛选"
-              onClick={closeWithTransition}
-            >
+            <button type="button" className="icon-btn" aria-label="关闭筛选" onClick={onClose}>
               <X size={19} />
             </button>
           </header>
@@ -471,13 +445,13 @@ export function FilterSheet({
             >
               重置
             </button>
-            <button type="button" className="btn" onClick={closeWithTransition}>
+            <button type="button" className="btn" onClick={onClose}>
               取消
             </button>
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={!!hasInvalidBounds || closing}
+              disabled={!!hasInvalidBounds || !isPresent}
             >
               <Check size={15} />
               <span>应用筛选</span>

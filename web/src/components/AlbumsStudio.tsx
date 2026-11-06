@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { buildMediaUrl, requestJson } from "../core/client";
+import { useIsPresent } from "../core/motion";
 import type { AlbumItem, CatalogAsset } from "../core/types";
 import { PhotoTile } from "./TimelineCanvas";
 
@@ -136,6 +137,7 @@ export function AlbumActionModal({
   onClose: () => void;
   onSaved: (album?: AlbumItem) => void;
 }) {
+  const isPresent = useIsPresent();
   const [nameInput, setNameInput] = useState(
     state.kind === "rename" ? state.album.name : "",
   );
@@ -145,6 +147,7 @@ export function AlbumActionModal({
     state.kind === "create" || state.kind === "rename",
   );
   const [busy, setBusy] = useState(false);
+  const [pendingAlbumId, setPendingAlbumId] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -159,17 +162,24 @@ export function AlbumActionModal({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.isComposing && !busy) {
+      if (
+        isPresent &&
+        e.key === "Escape" &&
+        !e.isComposing &&
+        !e.defaultPrevented &&
+        !busy
+      ) {
+        e.preventDefault();
         onClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, onClose, isPresent]);
 
   useEffect(() => {
-    if (isCreatingNew) inputRef.current?.focus();
-  }, [isCreatingNew]);
+    if (isPresent && isCreatingNew) inputRef.current?.focus();
+  }, [isCreatingNew, isPresent]);
 
   useEffect(() => {
     if (state.kind !== "add") return;
@@ -191,6 +201,7 @@ export function AlbumActionModal({
 
   async function commitAction(chosenAlbum?: AlbumItem) {
     if (busy) return;
+    setPendingAlbumId(chosenAlbum?.id || "");
     setBusy(true);
     setErrorMsg("");
     try {
@@ -222,6 +233,7 @@ export function AlbumActionModal({
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
       setBusy(false);
+      setPendingAlbumId("");
     }
   }
 
@@ -261,7 +273,7 @@ export function AlbumActionModal({
           />
         ) : (
           <>
-            <div className="modal-body">
+            <div className="modal-body" key={isCreatingNew ? "name" : "albums"}>
               {state.kind === "delete" ? (
                 <p className="album-modal-note">
                   删除“{state.album.name}”？照片仍保留在照片库中。
@@ -309,6 +321,7 @@ export function AlbumActionModal({
                           type="button"
                           key={alb.id}
                           disabled={busy}
+                          data-pending={pendingAlbumId === alb.id}
                           onClick={() => void commitAction(alb)}
                         >
                           <AlbumCoverThumb album={alb} />
@@ -316,7 +329,11 @@ export function AlbumActionModal({
                             <strong>{alb.name}</strong>
                             <small>{alb.count} 项</small>
                           </span>
-                          <Plus size={18} />
+                          {pendingAlbumId === alb.id ? (
+                            <LoaderCircle size={18} className="spin" />
+                          ) : (
+                            <Plus size={18} />
+                          )}
                         </button>
                       ))}
                       {!albumsList.length && !errorMsg && (

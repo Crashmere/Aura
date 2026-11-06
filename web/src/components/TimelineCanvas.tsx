@@ -48,9 +48,7 @@ export type GridAspectMode = "square" | "original";
 
 interface FlipCaptureSnapshot {
   container: HTMLDivElement;
-  rects: Map<HTMLElement, DOMRect>;
-  sections: Set<HTMLElement>;
-  anchorTile: HTMLElement | null;
+  rects: Map<string, DOMRect>;
 }
 
 function clampZoomStep(val: number): number {
@@ -83,80 +81,56 @@ function isNearViewport(rect: DOMRect, buffer: number): boolean {
 }
 
 function captureGridSnapshot(container: HTMLDivElement): FlipCaptureSnapshot {
-  const rects = new Map<HTMLElement, DOMRect>();
-  const sections = new Set<HTMLElement>();
+  const rects = new Map<string, DOMRect>();
   const margin = Math.min(480, window.innerHeight / 2);
-  let anchorTile: HTMLElement | null = null;
-  let minCenterDistance = Infinity;
 
-  for (const child of container.children) {
-    if (!(child instanceof HTMLElement) || !child.matches(".day-group")) continue;
-    if (!isNearViewport(child.getBoundingClientRect(), margin)) continue;
-    const grid = child.querySelector<HTMLElement>(":scope > .photo-grid");
-    if (!grid) continue;
-    sections.add(child);
-
-    const gridRect = grid.getBoundingClientRect();
-    const style = getComputedStyle(grid);
-    const cols = style.gridTemplateColumns.split(/\s+/).length;
-    const rowGap = parseFloat(style.rowGap) || 0;
-    const colGap = parseFloat(style.columnGap) || 0;
-    const rowHeight = (gridRect.width - (cols - 1) * colGap) / cols + rowGap;
-    if (rowHeight <= 0) continue;
-
-    const firstIdx = Math.max(0, Math.floor((-margin - gridRect.top) / rowHeight)) * cols;
-    const lastIdx = Math.min(
-      grid.children.length,
-      Math.ceil((window.innerHeight + margin - gridRect.top) / rowHeight) * cols,
-    );
-
-    for (let i = firstIdx; i < lastIdx && rects.size < MAX_FLIP_TILES; i++) {
-      const tile = grid.children[i];
-      if (!(tile instanceof HTMLElement) || !tile.matches(".photo")) continue;
-      const r = tile.getBoundingClientRect();
-      if (!r.width || !r.height) continue;
-      rects.set(tile, r);
-      if (!isNearViewport(r, 0)) continue;
-      const dist =
-        Math.abs(r.top + r.height / 2 - window.innerHeight / 2) +
-        Math.abs(r.left + r.width / 2 - (gridRect.left + gridRect.width / 2)) / 10;
-      if (dist < minCenterDistance) {
-        anchorTile = tile;
-        minCenterDistance = dist;
-      }
-    }
+  // Density changes move photos between virtual rows and can replace their DOM nodes.
+  for (const tile of container.querySelectorAll<HTMLElement>(".photo[data-asset-id]")) {
+    const rect = tile.getBoundingClientRect();
+    if (!rect.width || !rect.height || !isNearViewport(rect, margin)) continue;
+    rects.set(tile.dataset.assetId!, rect);
     if (rects.size >= MAX_FLIP_TILES) break;
   }
 
-  return { container, rects, sections, anchorTile };
+  return { container, rects };
 }
 
 export function useGridDisplayPreferences() {
   const [zoom, setZoomRaw] = useState(loadSavedZoomStep);
-  const [layout, setLayout] = useState<GridAspectMode>(loadSavedAspectMode);
+  const [layout, setLayoutRaw] = useState<GridAspectMode>(loadSavedAspectMode);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const requestedZoom = useRef(zoom);
   const committedZoom = useRef(zoom);
+  const requestedLayout = useRef(layout);
+  const committedLayout = useRef(layout);
   const snapshotRef = useRef<FlipCaptureSnapshot | null>(null);
   const runningAnimations = useRef(new Set<Animation>());
-  const unlockedSections = useRef(new Set<HTMLElement>());
-
-  const clearUnlockedSections = useCallback(() => {
-    for (const sec of unlockedSections.current) {
-      sec.removeAttribute("data-gallery-zoom-active");
-    }
-    unlockedSections.current.clear();
-  }, []);
+  const animationFrame = useRef(0);
 
   const stopRunningAnimations = useCallback(() => {
+    cancelAnimationFrame(animationFrame.current);
+    animationFrame.current = 0;
     for (const anim of runningAnimations.current) {
       anim.onfinish = null;
       anim.oncancel = null;
       anim.cancel();
     }
     runningAnimations.current.clear();
-    clearUnlockedSections();
-  }, [clearUnlockedSections]);
+  }, []);
+
+  const captureNextDisplay = useCallback(
+    (nextZoom: number, nextLayout: GridAspectMode) => {
+      stopRunningAnimations();
+      snapshotRef.current =
+        containerRef.current &&
+        (nextZoom !== committedZoom.current || nextLayout !== committedLayout.current) &&
+        !window.matchMedia(REDUCED_MOTION_QUERY).matches &&
+        typeof Element.prototype.animate === "function"
+          ? captureGridSnapshot(containerRef.current)
+          : null;
+    },
+    [stopRunningAnimations],
+  );
 
   const bindTimelineElement = useCallback(
     (node: HTMLDivElement | null) => {
@@ -174,14 +148,20 @@ export function useGridDisplayPreferences() {
       const clamped = clampZoomStep(nextValue);
       if (clamped === requestedZoom.current) return;
       requestedZoom.current = clamped;
-      snapshotRef.current =
-        containerRef.current && clamped !== committedZoom.current
-          ? captureGridSnapshot(containerRef.current)
-          : null;
-      stopRunningAnimations();
+      captureNextDisplay(clamped, requestedLayout.current);
       setZoomRaw(clamped);
     },
-    [stopRunningAnimations],
+    [captureNextDisplay],
+  );
+
+  const changeLayout = useCallback(
+    (nextLayout: GridAspectMode) => {
+      if (nextLayout === requestedLayout.current) return;
+      requestedLayout.current = nextLayout;
+      captureNextDisplay(requestedZoom.current, nextLayout);
+      setLayoutRaw(nextLayout);
+    },
+    [captureNextDisplay],
   );
 
   useEffect(() => {
@@ -202,76 +182,72 @@ export function useGridDisplayPreferences() {
 
   useLayoutEffect(() => {
     committedZoom.current = zoom;
+    committedLayout.current = layout;
     const prev = snapshotRef.current;
     snapshotRef.current = null;
     if (!prev || containerRef.current !== prev.container) return;
-
-    for (const sec of prev.sections) {
-      if (!prev.container.contains(sec)) continue;
-      sec.setAttribute("data-gallery-zoom-active", "");
-      unlockedSections.current.add(sec);
-    }
-
-    if (prev.anchorTile && prev.container.contains(prev.anchorTile)) {
-      const beforeBox = prev.rects.get(prev.anchorTile)!;
-      const afterBox = prev.anchorTile.getBoundingClientRect();
-      const dy = afterBox.top + afterBox.height / 2 - beforeBox.top - beforeBox.height / 2;
-      if (Math.abs(dy) > 0.5) {
-        window.scrollBy({ top: dy, behavior: "instant" });
-      }
-    }
 
     if (
       window.matchMedia(REDUCED_MOTION_QUERY).matches ||
       typeof Element.prototype.animate !== "function"
     ) {
-      clearUnlockedSections();
       return;
     }
 
-    const margin = Math.min(480, window.innerHeight / 2);
-    const transitions: { tile: HTMLElement; from: DOMRect; to: DOMRect }[] = [];
-    for (const [tile, fromRect] of prev.rects) {
-      if (!prev.container.contains(tile)) continue;
-      const toRect = tile.getBoundingClientRect();
-      if (toRect.width && toRect.height && isNearViewport(toRect, margin)) {
-        transitions.push({ tile, from: fromRect, to: toRect });
+    // Child layout effects settle scroll anchoring and its mounted row window first.
+    animationFrame.current = requestAnimationFrame(() => {
+      animationFrame.current = 0;
+      if (
+        containerRef.current !== prev.container ||
+        !prev.container.isConnected ||
+        window.matchMedia(REDUCED_MOTION_QUERY).matches
+      ) {
+        return;
       }
-    }
 
-    for (const { tile, from, to } of transitions) {
-      const dx = from.left - to.left;
-      const dy = from.top - to.top;
-      const sx = from.width / to.width;
-      const sy = from.height / to.height;
-      if (Math.abs(dx) + Math.abs(dy) < 0.5 && Math.abs(sx - 1) + Math.abs(sy - 1) < 0.005) {
-        continue;
+      const margin = Math.min(480, window.innerHeight / 2);
+      const transitions: { tile: HTMLElement; from: DOMRect; to: DOMRect }[] = [];
+      for (const tile of prev.container.querySelectorAll<HTMLElement>(".photo[data-asset-id]")) {
+        const fromRect = prev.rects.get(tile.dataset.assetId!);
+        if (!fromRect) continue;
+        const toRect = tile.getBoundingClientRect();
+        if (toRect.width && toRect.height && isNearViewport(toRect, margin)) {
+          transitions.push({ tile, from: fromRect, to: toRect });
+        }
       }
-      const anim = tile.animate(
-        [
-          {
-            transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`,
-            transformOrigin: "0 0",
-          },
-          { transform: "none", transformOrigin: "0 0" },
-        ],
-        { duration: 250, easing: "cubic-bezier(.22, .8, .25, 1)", fill: "none" },
-      );
-      runningAnimations.current.add(anim);
-      const cleanup = () => {
-        anim.onfinish = null;
-        anim.oncancel = null;
-        anim.cancel();
-        runningAnimations.current.delete(anim);
-        if (!runningAnimations.current.size) clearUnlockedSections();
-      };
-      anim.onfinish = cleanup;
-      anim.oncancel = cleanup;
-    }
 
-    if (!runningAnimations.current.size) clearUnlockedSections();
+      for (const { tile, from, to } of transitions) {
+        const dx = from.left - to.left;
+        const dy = from.top - to.top;
+        const sx = from.width / to.width;
+        const sy = from.height / to.height;
+        if (Math.abs(dx) + Math.abs(dy) < 0.5 && Math.abs(sx - 1) + Math.abs(sy - 1) < 0.005) {
+          continue;
+        }
+        const anim = tile.animate(
+          [
+            {
+              transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`,
+              transformOrigin: "0 0",
+            },
+            { transform: "none", transformOrigin: "0 0" },
+          ],
+          { duration: 250, easing: "cubic-bezier(.22, .8, .25, 1)", fill: "none" },
+        );
+        runningAnimations.current.add(anim);
+        const cleanup = () => {
+          anim.onfinish = null;
+          anim.oncancel = null;
+          anim.cancel();
+          runningAnimations.current.delete(anim);
+        };
+        anim.onfinish = cleanup;
+        anim.oncancel = cleanup;
+      }
+    });
+
     return stopRunningAnimations;
-  }, [zoom, stopRunningAnimations, clearUnlockedSections]);
+  }, [zoom, layout, stopRunningAnimations]);
 
   useLayoutEffect(() => {
     const mq = window.matchMedia(REDUCED_MOTION_QUERY);
@@ -299,7 +275,7 @@ export function useGridDisplayPreferences() {
     zoom,
     setZoom: changeZoom,
     layout,
-    setLayout,
+    setLayout: changeLayout,
     columns,
     mobileColumns,
     timelineProps: {
@@ -430,7 +406,7 @@ export function PhotoTile({
     setBroken(false);
   }, [thumbUrl, asset.status]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setLoaded(!!imgRef.current?.complete && !!imgRef.current?.naturalWidth);
   }, [thumbUrl]);
 
@@ -563,7 +539,7 @@ export function PhotoTile({
           disabled={disabled || !!asset.deletionPending}
           onClick={onToggleSelect}
         >
-          {selected && <Check size={14} />}
+          <Check size={14} aria-hidden="true" />
         </button>
       )}
     </div>
@@ -646,6 +622,29 @@ export function VirtualizedTimelineCanvas({
   }, [groups, activeCols, gridGap, viewport.width]);
 
   useLayoutEffect(() => {
+    const sig = `${activeCols}:${viewport.width}`;
+    if (
+      layoutSignature.current &&
+      layoutSignature.current !== sig &&
+      scrollAnchor.current &&
+      rootRef.current
+    ) {
+      const saved = scrollAnchor.current;
+      const targetRow = rows.find((r) => r.assets?.some((a) => a.id === saved.id));
+      if (targetRow) {
+        window.scrollBy({
+          top:
+            rootRef.current.getBoundingClientRect().top +
+            targetRow.top -
+            saved.offsetTop,
+          behavior: "instant",
+        });
+      }
+    }
+    layoutSignature.current = sig;
+  }, [activeCols, viewport.width, rows]);
+
+  useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     let rafId = 0;
@@ -662,14 +661,13 @@ export function VirtualizedTimelineCanvas({
       const topBound = Math.max(0, -rect.top - 700);
       const bottomBound = Math.max(0, window.innerHeight - rect.top + 700);
 
-      const firstVisibleTile = [...el.querySelectorAll<HTMLElement>(".photo")].find(
-        (node) => node.getBoundingClientRect().top >= 180,
-      );
-      if (firstVisibleTile?.dataset.assetId) {
-        scrollAnchor.current = {
-          id: firstVisibleTile.dataset.assetId,
-          offsetTop: firstVisibleTile.getBoundingClientRect().top,
-        };
+      // Read unanimated row geometry so an in-flight FLIP cannot change the saved anchor.
+      for (const grid of el.querySelectorAll<HTMLElement>(".photo-grid")) {
+        const top = grid.getBoundingClientRect().top;
+        const tile = grid.firstElementChild as HTMLElement | null;
+        if (top < 180 || !tile?.dataset.assetId) continue;
+        scrollAnchor.current = { id: tile.dataset.assetId, offsetTop: top };
+        break;
       }
 
       setVisibleWindow((prev) =>
@@ -696,29 +694,6 @@ export function VirtualizedTimelineCanvas({
       window.removeEventListener("resize", schedule);
     };
   }, [totalHeight]);
-
-  useLayoutEffect(() => {
-    const sig = `${activeCols}:${viewport.width}`;
-    if (
-      layoutSignature.current &&
-      layoutSignature.current !== sig &&
-      scrollAnchor.current &&
-      rootRef.current
-    ) {
-      const saved = scrollAnchor.current;
-      const targetRow = rows.find((r) => r.assets?.some((a) => a.id === saved.id));
-      if (targetRow) {
-        window.scrollBy({
-          top:
-            rootRef.current.getBoundingClientRect().top +
-            targetRow.top -
-            saved.offsetTop,
-          behavior: "instant",
-        });
-      }
-    }
-    layoutSignature.current = sig;
-  }, [activeCols, viewport.width, rows]);
 
   useLayoutEffect(() => {
     const onScrollToAsset = (e: Event) => {

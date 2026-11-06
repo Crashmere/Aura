@@ -34,21 +34,15 @@ import {
   Video,
   X,
 } from "lucide-react";
-import {
-  formatByteSize,
-  requestJson,
-} from "./core/client";
+import { formatByteSize, requestJson } from "./core/client";
 import {
   enqueueUploadFiles,
   getUploadActivitySummary,
   markAssetsPurgedInQueue,
   subscribeUploadEngine,
 } from "./core/importer";
-import {
-  ConfirmPurgeModal,
-  PurgeStatusBanner,
-  usePurgeTracker,
-} from "./core/purge-tracker";
+import { ConfirmPurgeModal, PurgeStatusBanner, usePurgeTracker } from "./core/purge-tracker";
+import { CollapsibleRegion, MotionPresence, useSlidingIndicator } from "./core/motion";
 import type {
   AlbumItem,
   CandidatePair,
@@ -95,6 +89,10 @@ import {
   VirtualizedTimelineCanvas,
 } from "./components/TimelineCanvas";
 import "./styles/aura.css";
+import "./styles/motion.css";
+import "./styles/motion-gallery.css";
+import "./styles/motion-studios.css";
+import "./styles/motion-viewer.css";
 
 // ============================================================================
 // Global Keyboard Focus & Tab Interception Policy
@@ -161,6 +159,8 @@ function AuraApplication() {
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [monthRailOpen, setMonthRailOpen] = useState(false);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
+  const navigationIndicator = useSlidingIndicator<HTMLElement>(route.view);
+  const monthIndicator = useSlidingIndicator(`${route.from}:${route.to}`);
 
   // Telemetry & Catalog
   const [telemetry, setTelemetry] = useState<LibraryTelemetry>();
@@ -189,7 +189,10 @@ function AuraApplication() {
     right: CatalogAsset;
   } | null>(null);
   const [historyKind, setHistoryKind] = useState<CurationHistoryType | null>(null);
-  const [toast, setToast] = useState<{ text: string; isError?: boolean } | null>(null);
+  const [toast, setToast] = useState<{
+    text: string;
+    isError?: boolean;
+  } | null>(null);
   const [dragHover, setDragHover] = useState(false);
 
   // Similar studio state
@@ -206,10 +209,7 @@ function AuraApplication() {
   const [lastIgnoredPair, setLastIgnoredPair] = useState<CandidatePair | null>(null);
 
   const gridPrefs = useGridDisplayPreferences();
-  const uploadActivity = useSyncExternalStore(
-    subscribeUploadEngine,
-    getUploadActivitySummary,
-  );
+  const uploadActivity = useSyncExternalStore(subscribeUploadEngine, getUploadActivitySummary);
 
   const showToast = useCallback((text: string, isError = false) => {
     setToast({ text, isError });
@@ -277,8 +277,7 @@ function AuraApplication() {
   );
 
   const isAlbumOverview = route.view === "albums" && !route.album;
-  const isGalleryView =
-    route.view !== "similar" && route.view !== "jobs" && !isAlbumOverview;
+  const isGalleryView = route.view !== "similar" && route.view !== "jobs" && !isAlbumOverview;
 
   // Build shared query parameters for /api/assets and /api/timeline
   const buildCatalogQuery = useCallback(
@@ -317,9 +316,7 @@ function AuraApplication() {
         if (found) {
           setActiveAlbumDetail(found);
         } else {
-          const detailRes = await requestJson<AlbumItem>(`albums/${route.album}`).catch(
-            () => null,
-          );
+          const detailRes = await requestJson<AlbumItem>(`albums/${route.album}`).catch(() => null);
           setActiveAlbumDetail(detailRes);
         }
       } else {
@@ -393,9 +390,10 @@ function AuraApplication() {
 
     try {
       const firstPageQuery = buildCatalogQuery(true, "");
-      const firstPage = await requestJson<{ items: CatalogAsset[]; next: string }>(
-        `assets?${firstPageQuery.toString()}`,
-      );
+      const firstPage = await requestJson<{
+        items: CatalogAsset[];
+        next: string;
+      }>(`assets?${firstPageQuery.toString()}`);
       setAssets((prev) => {
         if (prev.length <= firstPage.items.length) {
           setNextCursor(firstPage.next);
@@ -498,10 +496,7 @@ function AuraApplication() {
   useEffect(() => {
     if (!isGalleryView || !nextCursor || loadingPage || loadError) return;
     const checkScrollBottom = () => {
-      if (
-        window.innerHeight + window.scrollY >=
-        document.documentElement.scrollHeight - 850
-      ) {
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 850) {
         void fetchGalleryPage(nextCursor, true);
       }
     };
@@ -543,22 +538,13 @@ function AuraApplication() {
   );
 
   useEffect(() => {
-    if (
-      openAssetIndex >= 0 &&
-      assets.length - openAssetIndex <= 5 &&
-      nextCursor &&
-      !loadingPage
-    ) {
+    if (openAssetIndex >= 0 && assets.length - openAssetIndex <= 5 && nextCursor && !loadingPage) {
       void fetchGalleryPage(nextCursor, true);
     }
   }, [openAssetIndex, assets.length, nextCursor, loadingPage, fetchGalleryPage]);
 
   // Similar Candidates Fetcher
-  async function fetchSimilarCandidates(
-    src: "dhash" | "dino",
-    cursor = "",
-    append = false,
-  ) {
+  async function fetchSimilarCandidates(src: "dhash" | "dino", cursor = "", append = false) {
     setSimilarLoading(true);
     try {
       const q = new URLSearchParams({
@@ -569,9 +555,7 @@ function AuraApplication() {
       });
       const res = await requestJson<SimilarCandidatesPage>(`similar?${q.toString()}`);
       setSimilarPairs((prev) => (append ? [...prev, ...res.items] : res.items));
-      setSimilarAssets((prev) =>
-        append ? { ...prev, ...res.assets } : res.assets || {},
-      );
+      setSimilarAssets((prev) => (append ? { ...prev, ...res.assets } : res.assets || {}));
       setSimilarCounts(res.counts);
       if (res.index) setDinoIndex(res.index);
       setSimilarNext(res.next || "");
@@ -663,11 +647,7 @@ function AuraApplication() {
       await requestJson("assets", { ids, trash }, "PATCH");
       setSelectedIds(new Set());
       setSelecting(false);
-      showToast(
-        trash
-          ? `已将 ${ids.length} 项移入最近删除`
-          : `已恢复 ${ids.length} 项照片`,
-      );
+      showToast(trash ? `已将 ${ids.length} 项移入最近删除` : `已恢复 ${ids.length} 项照片`);
       await refreshBoundedCatalog();
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err), true);
@@ -699,11 +679,7 @@ function AuraApplication() {
     setBatchBusy(true);
     try {
       const ids = [...selectedIds];
-      await requestJson(
-        `albums/${route.album}/assets`,
-        { assets: ids },
-        "DELETE",
-      );
+      await requestJson(`albums/${route.album}/assets`, { assets: ids }, "DELETE");
       setSelectedIds(new Set());
       setSelecting(false);
       showToast(`已从相片集移除 ${ids.length} 项`);
@@ -779,12 +755,8 @@ function AuraApplication() {
     }
   };
 
-  const activeChips = useMemo(
-    () => buildActiveFilterChips(route.filters),
-    [route.filters],
-  );
-  const hasAnyFilter =
-    !!route.query || !!route.from || !!route.to || activeChips.length > 0;
+  const activeChips = useMemo(() => buildActiveFilterChips(route.filters), [route.filters]);
+  const hasAnyFilter = !!route.query || !!route.from || !!route.to || activeChips.length > 0;
 
   return (
     <div
@@ -830,7 +802,12 @@ function AuraApplication() {
           </button>
         </div>
 
-        <nav className="sidebar-nav" aria-label="主导航">
+        <nav
+          className="sidebar-nav motion-tabs"
+          ref={navigationIndicator.ref}
+          style={navigationIndicator.style}
+          aria-label="主导航"
+        >
           {(
             [
               ["browse", "浏览与相片集"],
@@ -848,6 +825,7 @@ function AuraApplication() {
                     type="button"
                     key={mod.id}
                     className={`nav-item ${isActive ? "is-active" : ""}`}
+                    aria-current={isActive ? "page" : undefined}
                     onClick={() => switchWorkspaceModule(mod.id)}
                   >
                     <span className="nav-item-label">
@@ -855,9 +833,7 @@ function AuraApplication() {
                       <span>{mod.title}</span>
                     </span>
                     {badge !== undefined && (
-                      <small className="nav-badge">
-                        {badge.toLocaleString("zh-CN")}
-                      </small>
+                      <small className="nav-badge">{badge.toLocaleString("zh-CN")}</small>
                     )}
                   </button>
                 );
@@ -898,12 +874,11 @@ function AuraApplication() {
         </footer>
       </aside>
 
-      {mobileNavOpen && (
-        <div
-          className="mobile-sidebar-backdrop"
-          onClick={() => setMobileNavOpen(false)}
-        />
-      )}
+      <MotionPresence present={mobileNavOpen}>
+        {mobileNavOpen && (
+          <div className="mobile-sidebar-backdrop" onClick={() => setMobileNavOpen(false)} />
+        )}
+      </MotionPresence>
 
       {/* Main Content Stage */}
       <div className="aura-main">
@@ -924,18 +899,14 @@ function AuraApplication() {
                 <button
                   type="button"
                   className="btn btn-subtle"
-                  onClick={() =>
-                    updateRoute((prev) => ({ ...prev, album: "" }), "push")
-                  }
+                  onClick={() => updateRoute((prev) => ({ ...prev, album: "" }), "push")}
                 >
                   <ArrowLeft size={16} />
                   <span>相片集</span>
                 </button>
                 <h1>{activeAlbumDetail?.name || "相片集"}</h1>
                 {activeAlbumDetail && (
-                  <small className="header-count-pill">
-                    {activeAlbumDetail.count} 项
-                  </small>
+                  <small className="header-count-pill">{activeAlbumDetail.count} 项</small>
                 )}
               </div>
             ) : (
@@ -1011,10 +982,7 @@ function AuraApplication() {
             )}
 
             {isAlbumOverview && (
-              <ActionButton
-                variant="primary"
-                onClick={() => setAlbumModal({ kind: "create" })}
-              >
+              <ActionButton variant="primary" onClick={() => setAlbumModal({ kind: "create" })}>
                 <Plus size={16} />
                 <span>新建相片集</span>
               </ActionButton>
@@ -1024,26 +992,20 @@ function AuraApplication() {
               <div className="album-header-actions">
                 <ActionButton
                   variant="primary"
-                  onClick={() =>
-                    setAlbumModal({ kind: "pick", album: activeAlbumDetail })
-                  }
+                  onClick={() => setAlbumModal({ kind: "pick", album: activeAlbumDetail })}
                 >
                   <Plus size={15} />
                   <span>添加照片</span>
                 </ActionButton>
                 <RoundIconButton
                   title="重命名相片集"
-                  onClick={() =>
-                    setAlbumModal({ kind: "rename", album: activeAlbumDetail })
-                  }
+                  onClick={() => setAlbumModal({ kind: "rename", album: activeAlbumDetail })}
                 >
                   <Pencil size={16} />
                 </RoundIconButton>
                 <RoundIconButton
                   title="删除相片集"
-                  onClick={() =>
-                    setAlbumModal({ kind: "delete", album: activeAlbumDetail })
-                  }
+                  onClick={() => setAlbumModal({ kind: "delete", album: activeAlbumDetail })}
                 >
                   <Trash2 size={16} />
                 </RoundIconButton>
@@ -1059,28 +1021,26 @@ function AuraApplication() {
               </ActionButton>
             )}
 
-            {currentModule.supportsBatchSelection &&
-              !isAlbumOverview &&
-              assets.length > 0 && (
-                <ActionButton
-                  variant={selecting ? "primary" : "default"}
-                  onClick={() => {
-                    if (selecting) {
-                      setSelecting(false);
-                      setSelectedIds(new Set());
-                    } else {
-                      setSelecting(true);
-                    }
-                  }}
-                >
-                  {selecting ? `退出选择 (${selectedIds.size})` : "选择"}
-                </ActionButton>
-              )}
+            {currentModule.supportsBatchSelection && !isAlbumOverview && assets.length > 0 && (
+              <ActionButton
+                variant={selecting ? "primary" : "default"}
+                onClick={() => {
+                  if (selecting) {
+                    setSelecting(false);
+                    setSelectedIds(new Set());
+                  } else {
+                    setSelecting(true);
+                  }
+                }}
+              >
+                {selecting ? `退出选择 (${selectedIds.size})` : "选择"}
+              </ActionButton>
+            )}
           </div>
         </header>
 
         {/* Active Filters Strip */}
-        {hasAnyFilter && !isAlbumOverview && (
+        <CollapsibleRegion open={hasAnyFilter && !isAlbumOverview}>
           <ActiveFiltersBar
             query={route.query}
             from={route.from}
@@ -1091,9 +1051,7 @@ function AuraApplication() {
               setSearchDraft("");
               updateRoute((prev) => ({ ...prev, query: "" }));
             }}
-            onClearDates={() =>
-              updateRoute((prev) => ({ ...prev, from: "", to: "" }))
-            }
+            onClearDates={() => updateRoute((prev) => ({ ...prev, from: "", to: "" }))}
             onClearChip={(keys: FilterParameterKey[]) =>
               updateRoute((prev) => {
                 const nextFilters = { ...prev.filters };
@@ -1112,24 +1070,26 @@ function AuraApplication() {
               }));
             }}
           />
-        )}
+        </CollapsibleRegion>
 
         {/* Collapsible Month Timeline Strip */}
-        {monthRailOpen && months.length > 0 && isGalleryView && (
-          <div className="month-scrubber-bar" aria-label="按拍摄月份筛选">
+        <CollapsibleRegion open={monthRailOpen && months.length > 0 && isGalleryView}>
+          <div
+            className="month-scrubber-bar motion-tabs"
+            ref={monthIndicator.ref}
+            style={monthIndicator.style}
+            aria-label="按拍摄月份筛选"
+          >
             <button
               type="button"
               className={!route.from && !route.to ? "is-active" : ""}
-              onClick={() =>
-                updateRoute((prev) => ({ ...prev, from: "", to: "" }))
-              }
+              onClick={() => updateRoute((prev) => ({ ...prev, from: "", to: "" }))}
             >
               <span>全部时间</span>
             </button>
             {months.map((m) => {
               const bounds = resolveMonthBounds(m.month);
-              const isSelected =
-                route.from === bounds.from && route.to === bounds.to;
+              const isSelected = route.from === bounds.from && route.to === bounds.to;
               return (
                 <button
                   type="button"
@@ -1149,7 +1109,7 @@ function AuraApplication() {
               );
             })}
           </div>
-        )}
+        </CollapsibleRegion>
 
         {/* Permanent Deletion Progress Banner */}
         {(route.view === "trash" || (telemetry?.pendingDeletions || 0) > 0) && (
@@ -1160,10 +1120,7 @@ function AuraApplication() {
         )}
 
         {/* Main Workspace Body */}
-        <main
-          className="aura-content"
-          key={`${route.view}:${route.album}`}
-        >
+        <main className="aura-content" key={`${route.view}:${route.album}`}>
           {route.view === "jobs" ? (
             <PipelineTaskCenter
               info={telemetry}
@@ -1191,19 +1148,11 @@ function AuraApplication() {
                   dinoCursorsRef.current[nextIdx] = similarNext;
                 }
                 setDinoPageIdx(nextIdx);
-                void fetchSimilarCandidates(
-                  "dino",
-                  dinoCursorsRef.current[nextIdx] || "",
-                  false,
-                );
+                void fetchSimilarCandidates("dino", dinoCursorsRef.current[nextIdx] || "", false);
               }}
-              onAppendDhash={() =>
-                void fetchSimilarCandidates("dhash", similarNext, true)
-              }
+              onAppendDhash={() => void fetchSimilarCandidates("dhash", similarNext, true)}
               onOpenHistory={() => setHistoryKind("similar")}
-              onOpenAsset={(asset) =>
-                updateRoute((prev) => ({ ...prev, asset: asset.id }), "push")
-              }
+              onOpenAsset={(asset) => updateRoute((prev) => ({ ...prev, asset: asset.id }), "push")}
               onComparePair={(left, right) => setComparePair({ left, right })}
               onMergePair={async (left, right) => {
                 const key = `${left.id}:${right.id}`;
@@ -1215,10 +1164,7 @@ function AuraApplication() {
                   showToast("已归并为一项，所有原件均已保留");
                   await refreshBoundedCatalog();
                 } catch (err) {
-                  showToast(
-                    err instanceof Error ? err.message : String(err),
-                    true,
-                  );
+                  showToast(err instanceof Error ? err.message : String(err), true);
                 } finally {
                   setIgnoringKey("");
                 }
@@ -1233,16 +1179,11 @@ function AuraApplication() {
                   });
                   setLastIgnoredPair(pair);
                   setSimilarPairs((prev) =>
-                    prev.filter(
-                      (p) => !(p.left === pair.left && p.right === pair.right),
-                    ),
+                    prev.filter((p) => !(p.left === pair.left && p.right === pair.right)),
                   );
                   await refreshBoundedCatalog();
                 } catch (err) {
-                  showToast(
-                    err instanceof Error ? err.message : String(err),
-                    true,
-                  );
+                  showToast(err instanceof Error ? err.message : String(err), true);
                 } finally {
                   setIgnoringKey("");
                 }
@@ -1259,10 +1200,7 @@ function AuraApplication() {
                   setLastIgnoredPair(null);
                   await refreshBoundedCatalog();
                 } catch (err) {
-                  showToast(
-                    err instanceof Error ? err.message : String(err),
-                    true,
-                  );
+                  showToast(err instanceof Error ? err.message : String(err), true);
                 } finally {
                   setIgnoringKey("");
                 }
@@ -1274,10 +1212,7 @@ function AuraApplication() {
                 albums={albums}
                 onOpenAlbum={(alb) => {
                   setActiveAlbumDetail(alb);
-                  updateRoute(
-                    (prev) => ({ ...prev, view: "albums", album: alb.id }),
-                    "push",
-                  );
+                  updateRoute((prev) => ({ ...prev, view: "albums", album: alb.id }), "push");
                 }}
               />
             ) : (
@@ -1287,10 +1222,7 @@ function AuraApplication() {
                 </div>
                 <h2>还没有相片集</h2>
                 <p>创建相片集按主题或旅程整理照片，同一张照片可归入多个相片集。</p>
-                <ActionButton
-                  variant="primary"
-                  onClick={() => setAlbumModal({ kind: "create" })}
-                >
+                <ActionButton variant="primary" onClick={() => setAlbumModal({ kind: "create" })}>
                   <Plus size={16} />
                   <span>新建相片集</span>
                 </ActionButton>
@@ -1301,9 +1233,7 @@ function AuraApplication() {
               {loadError && (
                 <div className="inline-alert" role="alert">
                   <span>{loadError}</span>
-                  <ActionButton
-                    onClick={() => void fetchGalleryPage(nextCursor, !!nextCursor)}
-                  >
+                  <ActionButton onClick={() => void fetchGalleryPage(nextCursor, !!nextCursor)}>
                     <RefreshCw size={14} />
                     <span>重试</span>
                   </ActionButton>
@@ -1359,10 +1289,7 @@ function AuraApplication() {
                     </ActionButton>
                   ) : (
                     route.view === "all" && (
-                      <ActionButton
-                        variant="primary"
-                        onClick={() => setUploadHubTab("files")}
-                      >
+                      <ActionButton variant="primary" onClick={() => setUploadHubTab("files")}>
                         <CloudUpload size={16} />
                         <span>导入第一批照片</span>
                       </ActionButton>
@@ -1382,315 +1309,321 @@ function AuraApplication() {
         </main>
 
         {/* Floating Batch Selection Action Dock */}
-        {selecting && isGalleryView && (
-          <div className="selection-action-dock" role="region" aria-label="批量操作栏">
-            <div className="dock-summary">
-              <strong>已选择 {selectedIds.size} 项</strong>
-              <button type="button" onClick={selectAllLoaded}>
-                全选已加载 ({assets.filter((a) => !a.deletionPending).length})
-              </button>
-              {selectedIds.size > 0 && (
-                <button type="button" onClick={() => setSelectedIds(new Set())}>
-                  清空
+        <MotionPresence present={selecting && isGalleryView} variant="dock">
+          {selecting && isGalleryView && (
+            <div className="selection-action-dock" role="region" aria-label="批量操作栏">
+              <div className="dock-summary">
+                <strong>
+                  已选择{" "}
+                  <span className="motion-count" key={selectedIds.size}>
+                    {selectedIds.size}
+                  </span>{" "}
+                  项
+                </strong>
+                <button type="button" onClick={selectAllLoaded}>
+                  全选已加载 ({assets.filter((a) => !a.deletionPending).length})
                 </button>
-              )}
-            </div>
+                {selectedIds.size > 0 && (
+                  <button type="button" onClick={() => setSelectedIds(new Set())}>
+                    清空
+                  </button>
+                )}
+              </div>
 
-            <div className="dock-buttons">
-              {selectedIds.size === 2 && (
-                <>
-                  <ActionButton
-                    disabled={batchBusy}
-                    onClick={() => {
-                      const [idA, idB] = [...selectedIds];
-                      const left = assets.find((a) => a.id === idA);
-                      const right = assets.find((a) => a.id === idB);
-                      if (left && right) setComparePair({ left, right });
-                    }}
-                  >
-                    <Columns2 size={15} />
-                    <span>对比所选</span>
-                  </ActionButton>
-                  <ActionButton
-                    disabled={batchBusy}
-                    onClick={() => void batchMergeSelected()}
-                  >
-                    <Layers3 size={15} />
-                    <span>归并为一项</span>
-                  </ActionButton>
-                </>
-              )}
+              <div className="dock-buttons">
+                {selectedIds.size === 2 && (
+                  <>
+                    <ActionButton
+                      disabled={batchBusy}
+                      onClick={() => {
+                        const [idA, idB] = [...selectedIds];
+                        const left = assets.find((a) => a.id === idA);
+                        const right = assets.find((a) => a.id === idB);
+                        if (left && right) setComparePair({ left, right });
+                      }}
+                    >
+                      <Columns2 size={15} />
+                      <span>对比所选</span>
+                    </ActionButton>
+                    <ActionButton disabled={batchBusy} onClick={() => void batchMergeSelected()}>
+                      <Layers3 size={15} />
+                      <span>归并为一项</span>
+                    </ActionButton>
+                  </>
+                )}
 
-              {route.view === "trash" ? (
-                <>
-                  <ActionButton
-                    variant="primary"
-                    disabled={batchBusy || !selectedIds.size}
-                    onClick={() => void batchSetTrash(false)}
-                  >
-                    <RotateCcw size={15} />
-                    <span>恢复所选</span>
-                  </ActionButton>
-                  <ActionButton
-                    variant="danger"
-                    disabled={batchBusy || !selectedIds.size}
-                    onClick={() => {
-                      const targets = assets.filter((a) => selectedIds.has(a.id));
-                      if (targets.length) setPurgeTargets(targets);
-                    }}
-                  >
-                    <Trash2 size={15} />
-                    <span>永久删除</span>
-                  </ActionButton>
-                </>
-              ) : (
-                <>
-                  <ActionButton
-                    disabled={batchBusy || !selectedIds.size}
-                    onClick={() =>
-                      setAlbumModal({ kind: "add", assets: [...selectedIds] })
-                    }
-                  >
-                    <FolderPlus size={15} />
-                    <span>加入相片集</span>
-                  </ActionButton>
-                  {route.view === "albums" && route.album && (
+                {route.view === "trash" ? (
+                  <>
+                    <ActionButton
+                      variant="primary"
+                      disabled={batchBusy || !selectedIds.size}
+                      onClick={() => void batchSetTrash(false)}
+                    >
+                      <RotateCcw size={15} />
+                      <span>恢复所选</span>
+                    </ActionButton>
+                    <ActionButton
+                      variant="danger"
+                      disabled={batchBusy || !selectedIds.size}
+                      onClick={() => {
+                        const targets = assets.filter((a) => selectedIds.has(a.id));
+                        if (targets.length) setPurgeTargets(targets);
+                      }}
+                    >
+                      <Trash2 size={15} />
+                      <span>永久删除</span>
+                    </ActionButton>
+                  </>
+                ) : (
+                  <>
                     <ActionButton
                       disabled={batchBusy || !selectedIds.size}
-                      onClick={() => void batchRemoveFromCurrentAlbum()}
+                      onClick={() => setAlbumModal({ kind: "add", assets: [...selectedIds] })}
                     >
-                      移出当前相片集
+                      <FolderPlus size={15} />
+                      <span>加入相片集</span>
                     </ActionButton>
-                  )}
-                  <ActionButton
-                    variant="danger"
-                    disabled={batchBusy || !selectedIds.size}
-                    onClick={() => void batchSetTrash(true)}
-                  >
-                    <Trash2 size={15} />
-                    <span>移入最近删除</span>
-                  </ActionButton>
-                </>
-              )}
+                    {route.view === "albums" && route.album && (
+                      <ActionButton
+                        disabled={batchBusy || !selectedIds.size}
+                        onClick={() => void batchRemoveFromCurrentAlbum()}
+                      >
+                        移出当前相片集
+                      </ActionButton>
+                    )}
+                    <ActionButton
+                      variant="danger"
+                      disabled={batchBusy || !selectedIds.size}
+                      onClick={() => void batchSetTrash(true)}
+                    >
+                      <Trash2 size={15} />
+                      <span>移入最近删除</span>
+                    </ActionButton>
+                  </>
+                )}
 
-              <ActionButton
-                onClick={() => {
-                  setSelecting(false);
-                  setSelectedIds(new Set());
-                }}
-              >
-                取消
-              </ActionButton>
+                <ActionButton
+                  onClick={() => {
+                    setSelecting(false);
+                    setSelectedIds(new Set());
+                  }}
+                >
+                  取消
+                </ActionButton>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </MotionPresence>
       </div>
 
       {/* Filter Popover Sheet */}
-      {filterSheetOpen && (
-        <FilterSheet
-          value={{ ...route.filters, from: route.from, to: route.to }}
-          anchorRef={filterBtnRef}
-          onClose={() => setFilterSheetOpen(false)}
-          onApply={(draft) => {
-            const { from, to, ...restFilters } = draft;
-            updateRoute(
-              (prev) => ({
-                ...prev,
-                from,
-                to,
-                filters: restFilters,
-              }),
-              "push",
-            );
-          }}
-        />
-      )}
-
-      {/* Lightbox Viewer & Inspector */}
-      {openAssetObj && (
-        <LightboxStudio
-          asset={openAssetObj}
-          neighbors={assets}
-          positionIndex={openAssetIndex}
-          totalLoaded={assets.length}
-          hasMorePages={!!nextCursor}
-          onClose={() => {
-            if (window.history.state?.auraViewer) {
-              window.history.back();
-            } else {
-              updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
-            }
-          }}
-          onSelectAsset={(target) => {
-            setOpenAssetObj(target);
-            updateRoute((prev) => ({ ...prev, asset: target.id }), "replace");
-          }}
-          onUpdateAsset={async (patch) => {
-            const updated = await requestJson<CatalogAsset>(
-              `assets/${openAssetObj.id}`,
-              patch,
-              "PATCH",
-            );
-            if (patch.trash !== undefined) {
-              showToast(patch.trash ? "已移入最近删除" : "已恢复到照片库");
-              updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
-            } else {
-              setOpenAssetObj(updated);
-            }
-            await refreshBoundedCatalog();
-          }}
-          onRemoveFromAlbum={
-            route.view === "albums" && route.album
-              ? async () => {
-                  await requestJson(
-                    `albums/${route.album}/assets`,
-                    { assets: [openAssetObj.id] },
-                    "DELETE",
-                  );
-                  showToast("已从当前相片集移除");
-                  updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
-                  await refreshBoundedCatalog();
-                }
-              : undefined
-          }
-          onOpenAlbumAdd={() =>
-            setAlbumModal({ kind: "add", assets: [openAssetObj.id] })
-          }
-          onOpenCompare={(left, right) => setComparePair({ left, right })}
-          onOpenSplitHistory={() => setHistoryKind("split")}
-          onRequestPurge={(target) => setPurgeTargets([target])}
-          onCatalogMutated={refreshBoundedCatalog}
-          onNotify={showToast}
-        />
-      )}
-
-      {/* Photo Comparison Studio */}
-      {comparePair && (
-        <PhotoComparisonModal
-          left={comparePair.left}
-          right={comparePair.right}
-          onClose={() => setComparePair(null)}
-        />
-      )}
-
-      {/* Curation History Modal */}
-      {historyKind && (
-        <CurationHistoryModal
-          initialKind={historyKind}
-          covered={!!comparePair || !!openAssetObj}
-          onClose={() => setHistoryKind(null)}
-          onCatalogMutated={refreshBoundedCatalog}
-          onOpenAsset={(item) =>
-            updateRoute((prev) => ({ ...prev, asset: item.id }), "push")
-          }
-          onComparePair={(left, right) => setComparePair({ left, right })}
-          onNotify={showToast}
-        />
-      )}
-
-      {/* Album Operations Modal */}
-      {albumModal && (
-        <AlbumActionModal
-          state={albumModal}
-          onClose={() => setAlbumModal(null)}
-          onSaved={(savedAlbum) => {
-            const kind = albumModal.kind;
-            setAlbumModal(null);
-            if (kind === "delete") {
-              showToast("相片集已删除");
-              updateRoute((prev) => ({ ...prev, album: "" }), "replace");
-            } else if (kind === "create" && savedAlbum) {
-              showToast(`已创建“${savedAlbum.name}”`);
-              setActiveAlbumDetail(savedAlbum);
+      <MotionPresence present={filterSheetOpen} variant="menu">
+        {filterSheetOpen && (
+          <FilterSheet
+            value={{ ...route.filters, from: route.from, to: route.to }}
+            anchorRef={filterBtnRef}
+            onClose={() => setFilterSheetOpen(false)}
+            onApply={(draft) => {
+              const { from, to, ...restFilters } = draft;
               updateRoute(
-                (prev) => ({ ...prev, view: "albums", album: savedAlbum.id }),
+                (prev) => ({
+                  ...prev,
+                  from,
+                  to,
+                  filters: restFilters,
+                }),
                 "push",
               );
-            } else if (kind === "rename" && savedAlbum) {
-              showToast("相片集已重命名");
-              setActiveAlbumDetail(savedAlbum);
-            } else {
-              showToast("相片集已更新");
+            }}
+          />
+        )}
+      </MotionPresence>
+
+      {/* Lightbox Viewer & Inspector */}
+      <MotionPresence present={!!openAssetObj}>
+        {openAssetObj && (
+          <LightboxStudio
+            asset={openAssetObj}
+            neighbors={assets}
+            positionIndex={openAssetIndex}
+            totalLoaded={assets.length}
+            hasMorePages={!!nextCursor}
+            onClose={() => {
+              if (window.history.state?.auraViewer) {
+                window.history.back();
+              } else {
+                updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
+              }
+            }}
+            onSelectAsset={(target) => {
+              setOpenAssetObj(target);
+              updateRoute((prev) => ({ ...prev, asset: target.id }), "replace");
+            }}
+            onUpdateAsset={async (patch) => {
+              const updated = await requestJson<CatalogAsset>(
+                `assets/${openAssetObj.id}`,
+                patch,
+                "PATCH",
+              );
+              if (patch.trash !== undefined) {
+                showToast(patch.trash ? "已移入最近删除" : "已恢复到照片库");
+                updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
+              } else {
+                setOpenAssetObj(updated);
+              }
+              await refreshBoundedCatalog();
+            }}
+            onRemoveFromAlbum={
+              route.view === "albums" && route.album
+                ? async () => {
+                    await requestJson(
+                      `albums/${route.album}/assets`,
+                      { assets: [openAssetObj.id] },
+                      "DELETE",
+                    );
+                    showToast("已从当前相片集移除");
+                    updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
+                    await refreshBoundedCatalog();
+                  }
+                : undefined
             }
-            void refreshBoundedCatalog();
-          }}
-        />
-      )}
+            onOpenAlbumAdd={() => setAlbumModal({ kind: "add", assets: [openAssetObj.id] })}
+            onOpenCompare={(left, right) => setComparePair({ left, right })}
+            onOpenSplitHistory={() => setHistoryKind("split")}
+            onRequestPurge={(target) => setPurgeTargets([target])}
+            onCatalogMutated={refreshBoundedCatalog}
+            onNotify={showToast}
+          />
+        )}
+      </MotionPresence>
+
+      {/* Photo Comparison Studio */}
+      <MotionPresence present={!!comparePair}>
+        {comparePair && (
+          <PhotoComparisonModal
+            left={comparePair.left}
+            right={comparePair.right}
+            onClose={() => setComparePair(null)}
+          />
+        )}
+      </MotionPresence>
+
+      {/* Curation History Modal */}
+      <MotionPresence present={!!historyKind}>
+        {historyKind && (
+          <CurationHistoryModal
+            initialKind={historyKind}
+            covered={!!comparePair || !!openAssetObj}
+            onClose={() => setHistoryKind(null)}
+            onCatalogMutated={refreshBoundedCatalog}
+            onOpenAsset={(item) => updateRoute((prev) => ({ ...prev, asset: item.id }), "push")}
+            onComparePair={(left, right) => setComparePair({ left, right })}
+            onNotify={showToast}
+          />
+        )}
+      </MotionPresence>
+
+      {/* Album Operations Modal */}
+      <MotionPresence present={!!albumModal}>
+        {albumModal && (
+          <AlbumActionModal
+            state={albumModal}
+            onClose={() => setAlbumModal(null)}
+            onSaved={(savedAlbum) => {
+              const kind = albumModal.kind;
+              setAlbumModal(null);
+              if (kind === "delete") {
+                showToast("相片集已删除");
+                updateRoute((prev) => ({ ...prev, album: "" }), "replace");
+              } else if (kind === "create" && savedAlbum) {
+                showToast(`已创建“${savedAlbum.name}”`);
+                setActiveAlbumDetail(savedAlbum);
+                updateRoute((prev) => ({ ...prev, view: "albums", album: savedAlbum.id }), "push");
+              } else if (kind === "rename" && savedAlbum) {
+                showToast("相片集已重命名");
+                setActiveAlbumDetail(savedAlbum);
+              } else {
+                showToast("相片集已更新");
+              }
+              void refreshBoundedCatalog();
+            }}
+          />
+        )}
+      </MotionPresence>
 
       {/* Confirm Permanent Deletion Modal */}
-      {purgeTargets && (
-        <ConfirmPurgeModal
-          targets={purgeTargets}
-          onClose={() => setPurgeTargets(null)}
-          onConfirm={async (ids, confirmation) => {
-            const receipt = await requestJson<PurgeRequestReceipt>(
-              "assets/purge",
-              { ids, confirmation },
-            );
-            purgeTracker.track(
-              receipt.requestId,
-              receipt.accepted,
-              receipt.state,
-            );
-            setPurgeTargets(null);
-            setSelectedIds(new Set());
-            setSelecting(false);
-            if (openAssetObj && ids.includes(openAssetObj.id)) {
-              updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
-            }
-            showToast(
-              receipt.state === "complete"
-                ? "已永久删除所选照片"
-                : "已提交永久删除，正在后台清理原件",
-            );
-            await refreshBoundedCatalog();
-          }}
-        />
-      )}
+      <MotionPresence present={!!purgeTargets}>
+        {purgeTargets && (
+          <ConfirmPurgeModal
+            targets={purgeTargets}
+            onClose={() => setPurgeTargets(null)}
+            onConfirm={async (ids, confirmation) => {
+              const receipt = await requestJson<PurgeRequestReceipt>("assets/purge", {
+                ids,
+                confirmation,
+              });
+              purgeTracker.track(receipt.requestId, receipt.accepted, receipt.state);
+              setPurgeTargets(null);
+              setSelectedIds(new Set());
+              setSelecting(false);
+              if (openAssetObj && ids.includes(openAssetObj.id)) {
+                updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
+              }
+              showToast(
+                receipt.state === "complete"
+                  ? "已永久删除所选照片"
+                  : "已提交永久删除，正在后台清理原件",
+              );
+              await refreshBoundedCatalog();
+            }}
+          />
+        )}
+      </MotionPresence>
 
       {/* Import & Continuous Upload Hub */}
-      {uploadHubTab && (
-        <ImportHubModal
-          activeTab={uploadHubTab}
-          onSelectTab={setUploadHubTab}
-          onClose={() => setUploadHubTab(null)}
-          onLocateAsset={(id) => void locateAssetInLibrary(id)}
-          onOpenJobsView={() => {
-            setUploadHubTab(null);
-            switchWorkspaceModule("jobs");
-          }}
-        />
-      )}
+      <MotionPresence present={!!uploadHubTab}>
+        {uploadHubTab && (
+          <ImportHubModal
+            activeTab={uploadHubTab}
+            onSelectTab={setUploadHubTab}
+            onClose={() => setUploadHubTab(null)}
+            onLocateAsset={(id) => void locateAssetInLibrary(id)}
+            onOpenJobsView={() => {
+              setUploadHubTab(null);
+              switchWorkspaceModule("jobs");
+            }}
+          />
+        )}
+      </MotionPresence>
 
       {/* Drag & Drop Fullscreen Overlay */}
-      {dragHover && (
-        <div className="drop-fullscreen-overlay">
-          <div className="drop-card">
-            <CloudUpload size={42} />
-            <h2>松开鼠标导入到 Aura</h2>
-            <p>原件将通过 SHA-256 完整校验并自动去重</p>
+      <MotionPresence present={dragHover}>
+        {dragHover && (
+          <div className="drop-fullscreen-overlay">
+            <div className="drop-card">
+              <CloudUpload size={42} />
+              <h2>松开鼠标导入到 Aura</h2>
+              <p>原件将通过 SHA-256 完整校验并自动去重</p>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </MotionPresence>
 
       {/* Toast Notification */}
-      {toast && (
-        <div
-          className={`aura-toast ${toast.isError ? "is-error" : ""}`}
-          role="status"
-          aria-live="polite"
-        >
-          <span>{toast.text}</span>
-          <button
-            type="button"
-            aria-label="关闭提示"
-            onClick={() => setToast(null)}
+      <MotionPresence present={!!toast} variant="toast">
+        {toast && (
+          <div
+            className={`aura-toast ${toast.isError ? "is-error" : ""}`}
+            role="status"
+            aria-live="polite"
           >
-            <X size={14} />
-          </button>
-        </div>
-      )}
+            <span>{toast.text}</span>
+            <button type="button" aria-label="关闭提示" onClick={() => setToast(null)}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
+      </MotionPresence>
     </div>
   );
 }

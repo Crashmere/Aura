@@ -33,6 +33,7 @@ import {
   readCachedPreviewUrl,
   useNetworkMediaPolicy,
 } from "../core/workspace";
+import { MotionPresence, useIsPresent } from "../core/motion";
 import { SkipSecondsGlyph } from "./Icons";
 
 // ============================================================================
@@ -57,8 +58,7 @@ export function useQuarterTurnBoxStyle(
     return () => ro.disconnect();
   }, [containerRef, isOddQuarter]);
 
-  if (!deltaRotation) return undefined;
-
+  // Keep the same centered geometry at zero so each quarter-turn takes the short path.
   return {
     position: "absolute",
     inset: "auto",
@@ -208,37 +208,44 @@ export function ProgressiveStagePhoto({
         )}
       </div>
 
-      {!clearLoaded && mountClearImg && !clearFailed && (
-        <div className="viewer-image-loading" role="status">
-          <LoaderCircle size={15} className="spin" />
-          <span>正在加载清晰图</span>
-        </div>
-      )}
+      <MotionPresence present={!clearLoaded && mountClearImg && !clearFailed} variant="panel">
+        {!clearLoaded && mountClearImg && !clearFailed && (
+          <div className="viewer-image-loading" role="status">
+            <LoaderCircle size={15} className="spin" />
+            <span>正在加载清晰图</span>
+          </div>
+        )}
+      </MotionPresence>
 
-      {!clearLoaded && (clearFailed || !shouldFetchClear || thumbFailed) && (
-        <div className="viewer-quality-action">
-          <button
-            type="button"
-            disabled={!!asset.deletionPending}
-            onClick={() => {
-              setUserRequestedClear(true);
-              setMountClearImg(true);
-              if (clearFailed || thumbFailed) setRetryStamp(Date.now());
-              setClearFailed(false);
-              setThumbFailed(false);
-            }}
-          >
-            {clearFailed || thumbFailed ? (
-              <>
-                <RefreshCw size={14} />
-                <span>重新加载</span>
-              </>
-            ) : (
-              "载入清晰图"
-            )}
-          </button>
-        </div>
-      )}
+      <MotionPresence
+        present={!clearLoaded && (clearFailed || !shouldFetchClear || thumbFailed)}
+        variant="panel"
+      >
+        {!clearLoaded && (clearFailed || !shouldFetchClear || thumbFailed) && (
+          <div className="viewer-quality-action">
+            <button
+              type="button"
+              disabled={!!asset.deletionPending}
+              onClick={() => {
+                setUserRequestedClear(true);
+                setMountClearImg(true);
+                if (clearFailed || thumbFailed) setRetryStamp(Date.now());
+                setClearFailed(false);
+                setThumbFailed(false);
+              }}
+            >
+              {clearFailed || thumbFailed ? (
+                <>
+                  <RefreshCw size={14} />
+                  <span>重新加载</span>
+                </>
+              ) : (
+                "载入清晰图"
+              )}
+            </button>
+          </div>
+        )}
+      </MotionPresence>
     </>
   );
 }
@@ -298,6 +305,7 @@ export function FrameTimelineStrip({
             key={idx}
             disabled={locked || !duration}
             aria-label={`选择 ${formatDurationClock(ts)} 的帧`}
+            aria-pressed={idx === Math.round((playheadPercent / 100) * 6)}
             title={`${ts.toFixed(3)} 秒`}
             onClick={() => onSeek(ts)}
           >
@@ -365,6 +373,7 @@ export function StageVideoPlayer({
     onChange: (frame: FramePlayheadState) => void;
   };
 }) {
+  const isPresent = useIsPresent();
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageBoxRef = useRef<HTMLDivElement>(null);
   const rotationCss = useQuarterTurnBoxStyle(stageBoxRef, rotationDelta);
@@ -488,12 +497,12 @@ export function StageVideoPlayer({
   }, []);
 
   useEffect(() => {
-    if (locked) videoRef.current?.pause();
-  }, [locked]);
+    if (locked || !isPresent) videoRef.current?.pause();
+  }, [locked, isPresent]);
 
   async function startPlayback() {
     const el = videoRef.current;
-    if (!el || locked) return;
+    if (!el || locked || !isPresent) return;
     if (!el.getAttribute("src")) {
       el.src = playUrl;
       el.load();
@@ -747,41 +756,47 @@ export function StageVideoPlayer({
         }}
       />
 
-      {!framePicker && !playing && !buffering && !errorMsg && (
-        <button
-          type="button"
-          className="player-big-play"
-          disabled={locked}
-          aria-label={
-            currentTime >= duration && duration > 0 ? "重新播放" : "播放视频"
-          }
-          onClick={togglePlayPause}
-        >
-          <Play size={30} fill="currentColor" strokeWidth={1} />
-        </button>
-      )}
-
-      {buffering && (
-        <div className="player-waiting" role="status" aria-label="视频缓冲中">
-          <LoaderCircle className="spin" size={28} />
-        </div>
-      )}
-
-      {errorMsg && (
-        <div className="player-error" role="status">
-          <span>{errorMsg}</span>
+      <MotionPresence present={!framePicker && !playing && !buffering && !errorMsg} variant="panel">
+        {!framePicker && !playing && !buffering && !errorMsg && (
           <button
             type="button"
+            className="player-big-play"
             disabled={locked}
-            onClick={() => {
-              videoRef.current?.removeAttribute("src");
-              void startPlayback();
-            }}
+            aria-label={
+              currentTime >= duration && duration > 0 ? "重新播放" : "播放视频"
+            }
+            onClick={togglePlayPause}
           >
-            重试
+            <Play size={30} fill="currentColor" strokeWidth={1} />
           </button>
-        </div>
-      )}
+        )}
+      </MotionPresence>
+
+      <MotionPresence present={buffering} variant="panel">
+        {buffering && (
+          <div className="player-waiting" role="status" aria-label="视频缓冲中">
+            <LoaderCircle className="spin" size={28} />
+          </div>
+        )}
+      </MotionPresence>
+
+      <MotionPresence present={!!errorMsg} variant="panel">
+        {errorMsg && (
+          <div className="player-error" role="status">
+            <span>{errorMsg}</span>
+            <button
+              type="button"
+              disabled={locked}
+              onClick={() => {
+                videoRef.current?.removeAttribute("src");
+                void startPlayback();
+              }}
+            >
+              重试
+            </button>
+          </div>
+        )}
+      </MotionPresence>
 
       <div
         className="player-controls"
@@ -864,11 +879,13 @@ export function StageVideoPlayer({
                 }
               }}
             >
-              {muted || volume === 0 ? (
-                <VolumeX size={18} />
-              ) : (
-                <Volume2 size={18} />
-              )}
+              <span key={muted || volume === 0 ? "muted" : "sound"} className="player-state-icon" aria-hidden="true">
+                {muted || volume === 0 ? (
+                  <VolumeX size={18} />
+                ) : (
+                  <Volume2 size={18} />
+                )}
+              </span>
             </button>
             <input
               aria-label="音量"
@@ -924,11 +941,13 @@ export function StageVideoPlayer({
               disabled={locked}
               onClick={togglePlayPause}
             >
-              {playing ? (
-                <Pause size={22} fill="currentColor" />
-              ) : (
-                <Play size={22} fill="currentColor" />
-              )}
+              <span key={playing ? "pause" : "play"} className="player-state-icon" aria-hidden="true">
+                {playing ? (
+                  <Pause size={22} fill="currentColor" />
+                ) : (
+                  <Play size={22} fill="currentColor" />
+                )}
+              </span>
             </button>
             <button
               type="button"
@@ -973,7 +992,7 @@ export function StageVideoPlayer({
                 if (videoRef.current) videoRef.current.playbackRate = next;
               }}
             >
-              {playbackSpeed}×
+              <span key={playbackSpeed} className="player-state-icon">{playbackSpeed}×</span>
             </button>
             {supportsPip && (
               <button

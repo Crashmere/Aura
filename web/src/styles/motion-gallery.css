@@ -1,0 +1,40 @@
+.select-photo svg {
+  opacity: 0;
+  transform: scale(0.55);
+  transition: opacity 0.12s var(--ease-out), transform 0.2s var(--ease-snappy);
+}
+
+.select-photo.checked svg {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.select-photo svg path,
+.day-select svg path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  transition: stroke-dashoffset 0.2s var(--ease-out);
+}
+
+.select-photo.checked svg path,
+.day-select[aria-pressed="true"] svg path {
+  stroke-dashoffset: 0;
+}
+
+.day-select svg {
+  transition: color 0.16s var(--ease-out), transform 0.2s var(--ease-snappy);
+}
+
+.day-select[aria-pressed="true"] svg {
+  color: var(--accent);
+  transform: scale(1.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select-photo svg,
+  .select-photo svg path,
+  .day-select svg,
+  .day-select svg path {
+    transition: none;
+  }
+}

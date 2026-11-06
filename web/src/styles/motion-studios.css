@@ -1,0 +1,162 @@
+.modal-tabs.motion-tabs,
+.review-history-tabs.motion-tabs,
+.comparison-modes.motion-tabs {
+  --motion-indicator-color: var(--bg-surface);
+  --motion-indicator-shadow: var(--shadow-sm);
+  --motion-indicator-radius: var(--radius-sm);
+}
+
+.task-tabs.motion-tabs,
+.task-filters.motion-tabs,
+.similar-tabs.motion-tabs {
+  --motion-indicator-color: var(--text-primary);
+  --motion-indicator-radius: var(--radius-sm);
+}
+
+.modal-tabs.motion-tabs button.active,
+.review-history-tabs.motion-tabs button[aria-pressed="true"],
+.comparison-modes.motion-tabs button[aria-pressed="true"],
+.task-tabs.motion-tabs button.active,
+.task-filters.motion-tabs button.active,
+.similar-tabs.motion-tabs button.active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.task-tabs.motion-tabs button.active,
+.task-filters.motion-tabs button.active,
+.similar-tabs.motion-tabs button.active {
+  border-color: transparent;
+}
+
+.task-row-toggle {
+  width: 100%;
+  text-align: left;
+}
+
+.comparison-slider-region {
+  flex-shrink: 0;
+}
+
+.task-job.is-expanded .task-expand {
+  transform: rotate(180deg);
+  color: var(--text-primary);
+}
+
+.task-job .task-detail {
+  animation: none;
+}
+
+.task-row-toggle:active {
+  background: var(--bg-subtle);
+}
+
+@keyframes aura-state-settle {
+  from {
+    opacity: 0.5;
+    transform: scale(0.78);
+  }
+  65% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+.task-state.ready > svg,
+.task-steps li.ready .task-step-icon > svg,
+.queue-state.done > svg,
+.queue-state.duplicate > svg {
+  animation: aura-state-settle 220ms var(--ease-spring);
+}
+
+.task-state,
+.queue-state {
+  transition: color 160ms var(--ease-out), background 160ms var(--ease-out);
+}
+
+.task-count-pill,
+.similar-count,
+.queue-item > small,
+.queue-header > strong,
+.picker-selection-summary {
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-actions button,
+.queue-header button {
+  transition: color 140ms var(--ease-out), opacity 140ms var(--ease-out),
+    transform 160ms var(--ease-spring);
+}
+
+.queue-actions button:hover:not(:disabled),
+.queue-header button:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.queue-actions button:active:not(:disabled),
+.queue-header button:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.album-choice-list button[data-pending="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.review-history-item,
+.similar-pair-card {
+  transition: opacity 180ms var(--ease-out), transform 220ms var(--ease-spring),
+    border-color 180ms var(--ease-out), box-shadow 220ms var(--ease-out);
+}
+
+.review-history-item[aria-busy="true"],
+.similar-pair-card[aria-busy="true"] {
+  opacity: 0.65;
+}
+
+.pair-meta > .spin {
+  color: var(--accent);
+}
+
+.processing-jobs summary {
+  cursor: pointer;
+  transition: color 140ms var(--ease-out), opacity 140ms var(--ease-out);
+}
+
+.processing-jobs summary:hover {
+  color: var(--accent);
+}
+
+.processing-jobs summary:active {
+  opacity: 0.75;
+}
+
+/* Native details keep their disclosure behavior when intrinsic-size animation is unavailable. */
+@supports (interpolate-size: allow-keywords) and selector(details::details-content) {
+  .processing-jobs {
+    interpolate-size: allow-keywords;
+  }
+
+  .processing-jobs::details-content {
+    block-size: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: block-size 220ms var(--ease-spring), opacity 160ms var(--ease-out),
+      content-visibility 220ms allow-discrete;
+  }
+
+  .processing-jobs[open]::details-content {
+    block-size: auto;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processing-jobs::details-content {
+    transition: none;
+  }
+}

@@ -32,6 +32,7 @@ import {
   subscribeUploadEngine,
   type UploadTaskPhase,
 } from "../core/importer";
+import { useSlidingIndicator } from "../core/motion";
 import type { StoredFile } from "../core/types";
 import { ActionButton, RoundIconButton } from "./Icons";
 
@@ -59,6 +60,7 @@ export function ImportHubModal({
   onLocateAsset: (assetId: string) => void;
   onOpenJobsView: () => void;
 }) {
+  const tabsIndicator = useSlidingIndicator(activeTab, ".active");
   const engine = useSyncExternalStore(subscribeUploadEngine, getUploadSnapshot);
   const filePickerRef = useRef<HTMLInputElement>(null);
   const dirPickerRef = useRef<HTMLInputElement>(null);
@@ -106,7 +108,11 @@ export function ImportHubModal({
           </RoundIconButton>
         </header>
 
-        <div className="modal-tabs">
+        <div
+          className="modal-tabs motion-tabs"
+          ref={tabsIndicator.ref}
+          style={tabsIndicator.style}
+        >
           {[
             ["files", "文件上传"],
             ["sources", "持续导入"],
@@ -117,6 +123,7 @@ export function ImportHubModal({
               key={id}
               onClick={() => onSelectTab(id)}
               className={activeTab === id ? "active" : ""}
+              aria-pressed={activeTab === id}
             >
               {title}
             </button>
@@ -309,7 +316,7 @@ export function ImportHubModal({
               <div className="queue-items">
                 {engine.items.slice(-150).map((entry) => (
                   <div className="queue-item" key={entry.id}>
-                    <span className={`queue-state ${entry.state}`}>
+                    <span key={entry.state} className={`queue-state ${entry.state}`}>
                       {entry.state === "trashed" ? (
                         <Trash2 size={16} />
                       ) : entry.state === "done" || entry.state === "duplicate" ? (

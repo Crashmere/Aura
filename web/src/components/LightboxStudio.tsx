@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -60,6 +61,12 @@ import {
   updateMediaMode,
   useNetworkMediaPolicy,
 } from "../core/workspace";
+import {
+  CollapsibleRegion,
+  MotionPresence,
+  useIsPresent,
+  useSlidingIndicator,
+} from "../core/motion";
 import { ActionButton, LiveRingsIcon, RoundIconButton } from "./Icons";
 import {
   type FramePlayheadState,
@@ -122,24 +129,28 @@ export function LightboxStudio({
   onCatalogMutated: () => Promise<void>;
   onNotify: (msg: string, isError?: boolean) => void;
 }) {
+  const isPresent = useIsPresent();
   const mediaPolicy = useNetworkMediaPolicy();
-  const [detail, setDetail] = useState<AssetDetailPayload | null>(null);
+  const [loadedDetail, setDetail] = useState<AssetDetailPayload | null>(null);
+  const detail = loadedDetail?.asset.id === asset.id ? loadedDetail : null;
   const [detailLoading, setDetailLoading] = useState(false);
-  const [selectedHash, setSelectedHash] = useState<string>("");
-  const [playingVideoFile, setPlayingVideoFile] = useState<StoredFile | null>(null);
-  const [playingLive, setPlayingLive] = useState(false);
+  const [transientAssetId, setTransientAssetId] = useState(asset.id);
+  const [selectedHashState, setSelectedHash] = useState<string>("");
+  const [playingVideoFileState, setPlayingVideoFile] = useState<StoredFile | null>(null);
+  const [playingLiveState, setPlayingLive] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoTab, setInfoTab] = useState<"overview" | "versions" | "edits" | "raw">("overview");
+  const inspectorTabs = useSlidingIndicator(`${infoOpen}:${infoTab}`, '[aria-selected="true"]');
   const [metaFilter, setMetaFilter] = useState("");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [chromeHidden, setChromeHidden] = useState(false);
 
-  const [rotationDelta, setRotationDelta] = useState(0);
+  const [rotationDeltaState, setRotationDelta] = useState(0);
   const [savingRotation, setSavingRotation] = useState(false);
 
-  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [coverPickerOpenState, setCoverPickerOpen] = useState(false);
   const [frameState, setFrameState] = useState<FramePlayheadState>({
     time: 0,
     duration: 0,
@@ -149,9 +160,11 @@ export function LightboxStudio({
   const [mutatingVersion, setMutatingVersion] = useState(false);
 
   // Zoom & Pan state
-  const [zoomScale, setZoomScale] = useState(1);
-  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [zoomScaleState, setZoomScale] = useState(1);
+  const [panOffsetState, setPanOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [wheelZooming, setWheelZooming] = useState(false);
+  const wheelZoomTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [navDir, setNavDir] = useState<"next" | "prev" | "fade">("fade");
   const stageRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
@@ -166,8 +179,19 @@ export function LightboxStudio({
   } | null>(null);
   const lastTapRef = useRef<number>(0);
 
+  // Navigation must not mount the outgoing asset's live/video resources for the new photo.
+  const hasCurrentTransients = transientAssetId === asset.id;
+  const selectedHash = hasCurrentTransients ? selectedHashState : "";
+  const playingVideoFile = hasCurrentTransients ? playingVideoFileState : null;
+  const playingLive = hasCurrentTransients && playingLiveState;
+  const rotationDelta = hasCurrentTransients ? rotationDeltaState : 0;
+  const coverPickerOpen = hasCurrentTransients && coverPickerOpenState;
+  const zoomScale = hasCurrentTransients ? zoomScaleState : 1;
+  const panOffset = hasCurrentTransients ? panOffsetState : { x: 0, y: 0 };
+
   // Reset per-asset transient state when switching asset
-  useEffect(() => {
+  useLayoutEffect(() => {
+    setTransientAssetId(asset.id);
     setSelectedHash("");
     setPlayingVideoFile(null);
     setPlayingLive(false);
@@ -177,7 +201,15 @@ export function LightboxStudio({
     setMoreMenuOpen(false);
     setZoomScale(1);
     setPanOffset({ x: 0, y: 0 });
+    setIsDragging(false);
+    setWheelZooming(false);
+    clearTimeout(wheelZoomTimer.current);
+    pointersRef.current.clear();
+    gestureStartRef.current = null;
+    lastTapRef.current = 0;
   }, [asset.id]);
+
+  useEffect(() => () => clearTimeout(wheelZoomTimer.current), []);
 
   // Fetch full detail payload
   useEffect(() => {
@@ -228,6 +260,10 @@ export function LightboxStudio({
     }
     return asset;
   }, [asset, detail, activeFile, playingVideoFile, files]);
+  const versionTabs = useSlidingIndicator(
+    `${effectiveAsset.primary}:${versionSelectableFiles.length}:${playingVideoFile?.hash || ""}`,
+    ".version-pill.is-active",
+  );
 
   const primaryAssetView = useMemo(() => {
     if (!detail) return asset;
@@ -265,17 +301,18 @@ export function LightboxStudio({
   const canPickCover =
     effectiveAsset.kind === "video" ||
     (effectiveAsset.kind === "live" && !!effectiveAsset.motion);
+  const hasRotationChange = normalizeQuarterAngle(rotationDelta) !== 0;
 
   // Rotate handler
   const rotateBy = (step: -90 | 90) => {
     if (isLocked || coverPickerOpen) return;
     setZoomScale(1);
     setPanOffset({ x: 0, y: 0 });
-    setRotationDelta((prev) => normalizeQuarterAngle(prev + step));
+    setRotationDelta((prev) => prev + step);
   };
 
   async function saveRotationDecision() {
-    if (!rotationDelta || savingRotation || isLocked) return;
+    if (!hasRotationChange || savingRotation || isLocked) return;
     const baseRotation = effectiveAsset.rotation || 0;
     const targetRotation = normalizeQuarterAngle(baseRotation + rotationDelta);
     setSavingRotation(true);
@@ -306,6 +343,7 @@ export function LightboxStudio({
     setRotationDelta(0);
     setPlayingLive(false);
     setMoreMenuOpen(false);
+    setNavDir("fade");
     const initialSec = effectiveAsset.cover?.time ?? 0;
     setFrameState({
       time: initialSec,
@@ -390,10 +428,12 @@ export function LightboxStudio({
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if (!isPresent || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       const target = e.target instanceof HTMLElement ? e.target : null;
+      const targetDialog = target?.closest('[role="dialog"]');
+      if (targetDialog && targetDialog !== stageRef.current?.closest('[role="dialog"]')) return;
       const inInput =
         target?.isContentEditable ||
         target?.closest('input, textarea, select, [role="textbox"], [role="combobox"]');
@@ -404,7 +444,7 @@ export function LightboxStudio({
           setMoreMenuOpen(false);
         } else if (coverPickerOpen) {
           setCoverPickerOpen(false);
-        } else if (rotationDelta !== 0) {
+        } else if (hasRotationChange) {
           setRotationDelta(0);
         } else if (playingVideoFile) {
           setPlayingVideoFile(null);
@@ -639,7 +679,10 @@ export function LightboxStudio({
             <button
               type="button"
               className={`lightbox-pill-btn ${playingLive ? "is-active" : ""}`}
-              onClick={() => setPlayingLive((v) => !v)}
+              onClick={() => {
+                setNavDir("fade");
+                setPlayingLive((v) => !v);
+              }}
               title="播放实况照片"
             >
               <LiveRingsIcon size={15} />
@@ -760,57 +803,59 @@ export function LightboxStudio({
               <MoreHorizontal size={18} />
             </RoundIconButton>
 
-            {moreMenuOpen && (
-              <div className="lightbox-dropdown" role="menu">
-                <div className="dropdown-group-label">清晰图加载策略</div>
-                {(
-                  [
-                    ["auto", "自动（按网络状况）"],
-                    ["quality", "始终高清并预读相邻"],
-                    ["save", "省流（手动点按加载）"],
-                  ] as [NetworkMediaMode, string][]
-                ).map(([modeKey, label]) => (
-                  <button
-                    type="button"
-                    key={modeKey}
-                    role="menuitemradio"
-                    aria-checked={mediaPolicy.mode === modeKey}
-                    onClick={() => {
-                      updateMediaMode(modeKey);
-                      setMoreMenuOpen(false);
-                    }}
-                  >
-                    <span>{label}</span>
-                    {mediaPolicy.mode === modeKey && <Check size={14} />}
-                  </button>
-                ))}
+            <MotionPresence present={moreMenuOpen} variant="menu">
+              {moreMenuOpen && (
+                <div className="lightbox-dropdown" role="menu">
+                  <div className="dropdown-group-label">清晰图加载策略</div>
+                  {(
+                    [
+                      ["auto", "自动（按网络状况）"],
+                      ["quality", "始终高清并预读相邻"],
+                      ["save", "省流（手动点按加载）"],
+                    ] as [NetworkMediaMode, string][]
+                  ).map(([modeKey, label]) => (
+                    <button
+                      type="button"
+                      key={modeKey}
+                      role="menuitemradio"
+                      aria-checked={mediaPolicy.mode === modeKey}
+                      onClick={() => {
+                        updateMediaMode(modeKey);
+                        setMoreMenuOpen(false);
+                      }}
+                    >
+                      <span>{label}</span>
+                      {mediaPolicy.mode === modeKey && <Check size={14} />}
+                    </button>
+                  ))}
 
-                <hr />
-                {onRemoveFromAlbum && (
+                  <hr />
+                  {onRemoveFromAlbum && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        void onRemoveFromAlbum();
+                      }}
+                    >
+                      从当前相片集移除
+                    </button>
+                  )}
                   <button
                     type="button"
                     role="menuitem"
                     onClick={() => {
                       setMoreMenuOpen(false);
-                      void onRemoveFromAlbum();
+                      onOpenSplitHistory();
                     }}
                   >
-                    从当前相片集移除
+                    <History size={14} />
+                    <span>查看分离与整理记录</span>
                   </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMoreMenuOpen(false);
-                    onOpenSplitHistory();
-                  }}
-                >
-                  <History size={14} />
-                  <span>查看分离与整理记录</span>
-                </button>
-              </div>
-            )}
+                </div>
+              )}
+            </MotionPresence>
           </div>
 
           <RoundIconButton
@@ -824,89 +869,97 @@ export function LightboxStudio({
       </header>
 
       {/* Unsaved Rotation Banner */}
-      {rotationDelta !== 0 && !coverPickerOpen && (
-        <div className="lightbox-action-bar" role="region" aria-label="保存旋转方向">
-          <span>
-            已旋转{" "}
-            {normalizeQuarterAngle((effectiveAsset.rotation || 0) + rotationDelta)}°
-            （无损浏览方向标记，不重编码原件）
-          </span>
-          <div className="action-bar-buttons">
-            <ActionButton
-              disabled={savingRotation}
-              onClick={() => setRotationDelta(0)}
-            >
-              取消
-            </ActionButton>
-            <ActionButton
-              variant="primary"
-              disabled={savingRotation}
-              onClick={() => void saveRotationDecision()}
-            >
-              {savingRotation ? "正在保存…" : "保存方向"}
-            </ActionButton>
-          </div>
-        </div>
-      )}
+      <CollapsibleRegion open={hasRotationChange && !coverPickerOpen} className="lightbox-bar-reveal">
+        <MotionPresence present={hasRotationChange && !coverPickerOpen} variant="panel" exitMs={220}>
+          {hasRotationChange && !coverPickerOpen && (
+            <div className="lightbox-action-bar" role="region" aria-label="保存旋转方向">
+              <span>
+                已旋转{" "}
+                {normalizeQuarterAngle((effectiveAsset.rotation || 0) + rotationDelta)}°
+                （无损浏览方向标记，不重编码原件）
+              </span>
+              <div className="action-bar-buttons">
+                <ActionButton
+                  disabled={savingRotation}
+                  onClick={() => setRotationDelta(0)}
+                >
+                  取消
+                </ActionButton>
+                <ActionButton
+                  variant="primary"
+                  disabled={savingRotation}
+                  onClick={() => void saveRotationDecision()}
+                >
+                  {savingRotation ? "正在保存…" : "保存方向"}
+                </ActionButton>
+              </div>
+            </div>
+          )}
+        </MotionPresence>
+      </CollapsibleRegion>
 
       {/* Cover Frame Editor Bar */}
-      {coverPickerOpen && (
-        <div className="lightbox-cover-editor" role="region" aria-label="选择封面帧">
-          <div className="cover-editor-head">
-            <div className="cover-editor-status">
-              <Film size={16} />
-              <strong>
-                {effectiveAsset.kind === "live"
-                  ? "选择实况照片主画面"
-                  : "选择视频封面帧"}
-              </strong>
-              <small>
-                当前时刻 {frameState.time.toFixed(2)} 秒 · 可用 , / . 键逐帧微调
-              </small>
+      <CollapsibleRegion open={coverPickerOpen} className="lightbox-bar-reveal">
+        <MotionPresence present={coverPickerOpen} variant="panel" exitMs={220}>
+          {coverPickerOpen && (
+            <div className="lightbox-cover-editor" role="region" aria-label="选择封面帧">
+              <div className="cover-editor-head">
+                <div className="cover-editor-status">
+                  <Film size={16} />
+                  <strong>
+                    {effectiveAsset.kind === "live"
+                      ? "选择实况照片主画面"
+                      : "选择视频封面帧"}
+                  </strong>
+                  <small>
+                    当前时刻 {frameState.time.toFixed(2)} 秒 · 可用 , / . 键逐帧微调
+                  </small>
+                </div>
+                <div className="cover-editor-actions">
+                  {effectiveAsset.cover && (
+                    <ActionButton
+                      disabled={savingCover}
+                      onClick={() => void commitCoverDecision(null)}
+                    >
+                      还原默认
+                    </ActionButton>
+                  )}
+                  <ActionButton
+                    disabled={savingCover}
+                    onClick={() => setCoverPickerOpen(false)}
+                  >
+                    取消
+                  </ActionButton>
+                  <ActionButton
+                    variant="primary"
+                    disabled={savingCover || !frameState.duration}
+                    onClick={() => void commitCoverDecision(frameState.time)}
+                  >
+                    {savingCover
+                      ? "正在生成封面…"
+                      : effectiveAsset.kind === "live"
+                        ? "设为主画面"
+                        : "设为封面"}
+                  </ActionButton>
+                </div>
+              </div>
+              <FrameTimelineStrip
+                asset={effectiveAsset}
+                time={frameState.time}
+                duration={frameState.duration}
+                locked={savingCover}
+                onSeek={(t) => {
+                  const video = stageRef.current?.querySelector("video");
+                  if (video) {
+                    video.pause();
+                    video.currentTime = t;
+                  }
+                }}
+              />
             </div>
-            <div className="cover-editor-actions">
-              {effectiveAsset.cover && (
-                <ActionButton
-                  disabled={savingCover}
-                  onClick={() => void commitCoverDecision(null)}
-                >
-                  还原默认
-                </ActionButton>
-              )}
-              <ActionButton
-                disabled={savingCover}
-                onClick={() => setCoverPickerOpen(false)}
-              >
-                取消
-              </ActionButton>
-              <ActionButton
-                variant="primary"
-                disabled={savingCover || !frameState.duration}
-                onClick={() => void commitCoverDecision(frameState.time)}
-              >
-                {savingCover
-                  ? "正在生成封面…"
-                  : effectiveAsset.kind === "live"
-                    ? "设为主画面"
-                    : "设为封面"}
-              </ActionButton>
-            </div>
-          </div>
-          <FrameTimelineStrip
-            asset={effectiveAsset}
-            time={frameState.time}
-            duration={frameState.duration}
-            locked={savingCover}
-            onSeek={(t) => {
-              const video = stageRef.current?.querySelector("video");
-              if (video) {
-                video.pause();
-                video.currentTime = t;
-              }
-            }}
-          />
-        </div>
-      )}
+          )}
+        </MotionPresence>
+      </CollapsibleRegion>
 
       {/* Main Stage + Optional Inspector Drawer */}
       <div className="lightbox-workspace">
@@ -921,6 +974,9 @@ export function LightboxStudio({
             if (isVideoStage) return;
             if (e.ctrlKey || e.metaKey) {
               e.preventDefault();
+              clearTimeout(wheelZoomTimer.current);
+              setWheelZooming(true);
+              wheelZoomTimer.current = setTimeout(() => setWheelZooming(false), 120);
               const next = Math.max(1, Math.min(5, zoomScale - e.deltaY * 0.01));
               setZoomScale(next);
               if (next <= 1.01) setPanOffset({ x: 0, y: 0 });
@@ -943,7 +999,7 @@ export function LightboxStudio({
 
           <div
             key={`${asset.id}:${effectiveAsset.primary}`}
-            className={`lightbox-canvas nav-${navDir} ${isDragging ? "is-dragging" : ""}`}
+            className={`lightbox-canvas nav-${navDir} ${isDragging || wheelZooming ? "is-dragging" : ""}`}
             style={
               !isVideoStage && zoomScale > 1.01
                 ? ({
@@ -1023,310 +1079,329 @@ export function LightboxStudio({
         </div>
 
         {/* Right-Side Inspector Drawer */}
-        {infoOpen && (
-          <aside className="lightbox-inspector" aria-label="照片详情与资源管理">
-            <header className="inspector-header">
-              <div className="inspector-tabs" role="tablist">
-                {(
-                  [
-                    ["overview", "概览"],
-                    ["versions", `原件 (${files.length || asset.variants})`],
-                    ...(matchedEdits.length ? [["edits", "编辑记录"]] : []),
-                    ["raw", "EXIF"],
-                  ] as ["overview" | "versions" | "edits" | "raw", string][]
-                ).map(([tabId, label]) => (
-                  <button
-                    type="button"
-                    role="tab"
-                    key={tabId}
-                    aria-selected={infoTab === tabId}
-                    className={infoTab === tabId ? "active" : ""}
-                    onClick={() => setInfoTab(tabId)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <RoundIconButton title="收起详情面板" onClick={() => setInfoOpen(false)}>
-                <X size={17} />
-              </RoundIconButton>
-            </header>
+        <div className="inspector-reveal" data-open={infoOpen} aria-hidden={!infoOpen} inert={!infoOpen}>
+          <div className="inspector-reveal-inner">
+            <MotionPresence present={infoOpen} variant="panel" exitMs={220}>
+              {infoOpen && (
+                <aside className="lightbox-inspector" aria-label="照片详情与资源管理">
+                  <header className="inspector-header">
+                    <div
+                      className="inspector-tabs motion-tabs"
+                      role="tablist"
+                      ref={inspectorTabs.ref}
+                      style={inspectorTabs.style}
+                    >
+                      {(
+                        [
+                          ["overview", "概览"],
+                          ["versions", `原件 (${files.length || asset.variants})`],
+                          ...(matchedEdits.length ? [["edits", "编辑记录"]] : []),
+                          ["raw", "EXIF"],
+                        ] as ["overview" | "versions" | "edits" | "raw", string][]
+                      ).map(([tabId, label]) => (
+                        <button
+                          type="button"
+                          role="tab"
+                          key={tabId}
+                          aria-selected={infoTab === tabId}
+                          className={infoTab === tabId ? "active" : ""}
+                          onClick={() => setInfoTab(tabId)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <RoundIconButton title="收起详情面板" onClick={() => setInfoOpen(false)}>
+                      <X size={17} />
+                    </RoundIconButton>
+                  </header>
 
-            <div className="inspector-body" key={infoTab}>
-              {detailLoading && !detail && (
-                <div className="loading-inline">
-                  <LoaderCircle size={18} className="spin" />
-                  <span>正在读取原件与元数据…</span>
-                </div>
-              )}
-
-              {infoTab === "overview" && (
-                <div className="inspector-section-list">
-                  <section className="inspector-card">
-                    <h4>基本属性</h4>
-                    <dl className="inspector-kv">
-                      <div>
-                        <dt>
-                          <Clock size={14} /> 拍摄时间
-                        </dt>
-                        <dd>
-                          {formatHumanDate(effectiveAsset.capturedAt, true)}{" "}
-                          {new Date(effectiveAsset.capturedAt).toLocaleTimeString("zh-CN")}
-                        </dd>
+                  <div className="inspector-body" key={infoTab}>
+                    {detailLoading && !detail && (
+                      <div className="loading-inline">
+                        <LoaderCircle size={18} className="spin" />
+                        <span>正在读取原件与元数据…</span>
                       </div>
-                      <div>
-                        <dt>尺寸与体积</dt>
-                        <dd>
-                          {dims.width} × {dims.height} ·{" "}
-                          {((dims.width * dims.height) / 1_000_000).toFixed(1)} MP ·{" "}
-                          {formatByteSize(effectiveAsset.size)}
-                        </dd>
-                      </div>
-                      {effectiveAsset.grouping && (
-                        <div>
-                          <dt>
-                            <Layers3 size={14} /> 版本组织
-                          </dt>
-                          <dd>
-                            {effectiveAsset.grouping === "manual"
-                              ? "手动归并"
-                              : "自动组合"}{" "}
-                            （{effectiveAsset.imageVersions} 个照片版本，共{" "}
-                            {effectiveAsset.variants} 份原件）
-                          </dd>
-                        </div>
-                      )}
-                      {gpsText && (
-                        <div>
-                          <dt>
-                            <MapPin size={14} /> 地理位置
-                          </dt>
-                          <dd>{gpsText}</dd>
-                        </div>
-                      )}
-                    </dl>
-                  </section>
+                    )}
 
-                  {(cameraText || lensText || focalText || apertureText || shutterText || isoText) && (
-                    <section className="inspector-card">
-                      <h4>
-                        <Camera size={14} /> 拍摄设备与曝光
-                      </h4>
-                      <div className="camera-badges">
-                        {cameraText && <span className="equip-pill">{cameraText}</span>}
-                        {lensText && <span className="equip-pill">{lensText}</span>}
-                      </div>
-                      <div className="exposure-grid">
-                        {focalText && (
-                          <div>
-                            <small>焦距</small>
-                            <strong>{focalText}</strong>
-                          </div>
-                        )}
-                        {apertureText && (
-                          <div>
-                            <small>光圈</small>
-                            <strong>ƒ/{apertureText.replace(/^f\//i, "")}</strong>
-                          </div>
-                        )}
-                        {shutterText && (
-                          <div>
-                            <small>快门</small>
-                            <strong>{shutterText}s</strong>
-                          </div>
-                        )}
-                        {isoText && (
-                          <div>
-                            <small>ISO</small>
-                            <strong>{isoText}</strong>
-                          </div>
-                        )}
-                      </div>
-                    </section>
-                  )}
-                </div>
-              )}
-
-              {infoTab === "versions" && (
-                <div className="inspector-section-list">
-                  {files.map((file) => {
-                    const isPrimary = file.hash === (detail?.asset.primary || asset.primary);
-                    const isCurrent = file.hash === effectiveAsset.primary;
-                    const isImg = file.mime.startsWith("image/");
-                    const isVid = file.mime.startsWith("video/");
-                    return (
-                      <article
-                        key={file.hash}
-                        className={`resource-item-card ${isCurrent ? "is-viewing" : ""}`}
-                      >
-                        <div className="resource-item-head">
-                          <div>
-                            <span className="resource-role-badge">
-                              {describeOriginalRole(file)}
-                            </span>
-                            {isPrimary && (
-                              <span className="resource-primary-badge">
-                                <Star size={11} /> 主版本
-                              </span>
-                            )}
-                          </div>
-                          <small className="mono-hash">{file.hash.slice(0, 10)}</small>
-                        </div>
-                        <strong className="resource-filename">{file.name}</strong>
-                        <small className="resource-specs">
-                          {file.width > 0 && file.height > 0
-                            ? `${file.width} × ${file.height} · `
-                            : ""}
-                          {formatByteSize(file.size)} · {file.mime}
-                        </small>
-
-                        <div className="resource-actions">
-                          {isImg && !isCurrent && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPlayingVideoFile(null);
-                                setSelectedHash(file.hash);
-                              }}
-                            >
-                              预览此版本
-                            </button>
-                          )}
-                          {isVid && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPlayingVideoFile((prev) =>
-                                  prev?.hash === file.hash ? null : file,
-                                )
-                              }
-                            >
-                              <Play size={12} />
-                              <span>
-                                {playingVideoFile?.hash === file.hash
-                                  ? "返回照片"
-                                  : "播放视频"}
-                              </span>
-                            </button>
-                          )}
-                          {isImg && !isPrimary && (
-                            <>
-                              <button
-                                type="button"
-                                disabled={isLocked}
-                                onClick={() => void setAsPrimaryVersion(file.hash)}
-                              >
-                                设为主版本
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onOpenCompare(
-                                    primaryAssetView,
-                                    projectVersionAsAsset(
-                                      detail?.asset || asset,
-                                      file,
-                                      files,
-                                    ),
-                                  )
-                                }
-                              >
-                                <Columns2 size={12} />
-                                <span>对比主版本</span>
-                              </button>
-                            </>
-                          )}
-                          {files.length > 1 && (
-                            <button
-                              type="button"
-                              disabled={isLocked}
-                              onClick={() => void splitVersionOut(file.hash)}
-                            >
-                              <Scissors size={12} />
-                              <span>分离为独立项</span>
-                            </button>
-                          )}
-                          <a
-                            href={buildMediaUrl(file.hash, "original")}
-                            download={file.name}
-                          >
-                            下载原件
-                          </a>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-
-              {infoTab === "edits" && (
-                <div className="inspector-section-list">
-                  {matchedEdits.map((rec: NativeEditRecord) => {
-                    const summaryRows = summarizeNativeAdjustments(rec);
-                    return (
-                      <section key={rec.hash} className="inspector-card">
-                        <div className="edit-record-header">
-                          <strong>
-                            <Sparkles size={14} /> {describeEditorSource(rec.editor)}
-                          </strong>
-                          {rec.timestamp && (
-                            <small>{formatHumanDate(rec.timestamp, true)}</small>
-                          )}
-                        </div>
-                        <small className="edit-format-tag">
-                          格式 {rec.format || "Apple Adjustment"} · 版本{" "}
-                          {rec.version || "1.0"}
-                        </small>
-                        {rec.state === "parsed" && summaryRows.length > 0 ? (
+                    {infoTab === "overview" && (
+                      <div className="inspector-section-list">
+                        <section className="inspector-card">
+                          <h4>基本属性</h4>
                           <dl className="inspector-kv">
-                            {summaryRows.map((row, idx) => (
-                              <div key={idx}>
-                                <dt>{row.label}</dt>
-                                <dd>{row.value}</dd>
+                            <div>
+                              <dt>
+                                <Clock size={14} /> 拍摄时间
+                              </dt>
+                              <dd>
+                                {formatHumanDate(effectiveAsset.capturedAt, true)}{" "}
+                                {new Date(effectiveAsset.capturedAt).toLocaleTimeString("zh-CN")}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>尺寸与体积</dt>
+                              <dd>
+                                {dims.width} × {dims.height} ·{" "}
+                                {((dims.width * dims.height) / 1_000_000).toFixed(1)} MP ·{" "}
+                                {formatByteSize(effectiveAsset.size)}
+                              </dd>
+                            </div>
+                            {effectiveAsset.grouping && (
+                              <div>
+                                <dt>
+                                  <Layers3 size={14} /> 版本组织
+                                </dt>
+                                <dd>
+                                  {effectiveAsset.grouping === "manual"
+                                    ? "手动归并"
+                                    : "自动组合"}{" "}
+                                  （{effectiveAsset.imageVersions} 个照片版本，共{" "}
+                                  {effectiveAsset.variants} 份原件）
+                                </dd>
                               </div>
-                            ))}
+                            )}
+                            {gpsText && (
+                              <div>
+                                <dt>
+                                  <MapPin size={14} /> 地理位置
+                                </dt>
+                                <dd>{gpsText}</dd>
+                              </div>
+                            )}
                           </dl>
-                        ) : (
-                          <p className="inspector-note">
-                            {rec.state === "unsupported"
-                              ? "此原生编辑记录使用私有二进制格式，已完整保留原件供下载。"
-                              : "未包含可识别的启用项。"}
-                          </p>
-                        )}
-                      </section>
-                    );
-                  })}
-                </div>
-              )}
+                        </section>
 
-              {infoTab === "raw" && (
-                <div className="inspector-raw-meta">
-                  <input
-                    type="search"
-                    placeholder="筛选 EXIF / QuickTime 标签…"
-                    value={metaFilter}
-                    onChange={(e) => setMetaFilter(e.target.value)}
-                  />
-                  <dl className="raw-meta-list">
-                    {filteredMetaEntries.map(([k, v]) => (
-                      <div key={k}>
-                        <dt>{k}</dt>
-                        <dd>{typeof v === "object" ? JSON.stringify(v) : String(v)}</dd>
+                        {(cameraText || lensText || focalText || apertureText || shutterText || isoText) && (
+                          <section className="inspector-card">
+                            <h4>
+                              <Camera size={14} /> 拍摄设备与曝光
+                            </h4>
+                            <div className="camera-badges">
+                              {cameraText && <span className="equip-pill">{cameraText}</span>}
+                              {lensText && <span className="equip-pill">{lensText}</span>}
+                            </div>
+                            <div className="exposure-grid">
+                              {focalText && (
+                                <div>
+                                  <small>焦距</small>
+                                  <strong>{focalText}</strong>
+                                </div>
+                              )}
+                              {apertureText && (
+                                <div>
+                                  <small>光圈</small>
+                                  <strong>ƒ/{apertureText.replace(/^f\//i, "")}</strong>
+                                </div>
+                              )}
+                              {shutterText && (
+                                <div>
+                                  <small>快门</small>
+                                  <strong>{shutterText}s</strong>
+                                </div>
+                              )}
+                              {isoText && (
+                                <div>
+                                  <small>ISO</small>
+                                  <strong>{isoText}</strong>
+                                </div>
+                              )}
+                            </div>
+                          </section>
+                        )}
                       </div>
-                    ))}
-                  </dl>
-                </div>
+                    )}
+
+                    {infoTab === "versions" && (
+                      <div className="inspector-section-list">
+                        {files.map((file) => {
+                          const isPrimary = file.hash === (detail?.asset.primary || asset.primary);
+                          const isCurrent = file.hash === effectiveAsset.primary;
+                          const isImg = file.mime.startsWith("image/");
+                          const isVid = file.mime.startsWith("video/");
+                          return (
+                            <article
+                              key={file.hash}
+                              className={`resource-item-card ${isCurrent ? "is-viewing" : ""}`}
+                            >
+                              <div className="resource-item-head">
+                                <div>
+                                  <span className="resource-role-badge">
+                                    {describeOriginalRole(file)}
+                                  </span>
+                                  {isPrimary && (
+                                    <span className="resource-primary-badge">
+                                      <Star size={11} /> 主版本
+                                    </span>
+                                  )}
+                                </div>
+                                <small className="mono-hash">{file.hash.slice(0, 10)}</small>
+                              </div>
+                              <strong className="resource-filename">{file.name}</strong>
+                              <small className="resource-specs">
+                                {file.width > 0 && file.height > 0
+                                  ? `${file.width} × ${file.height} · `
+                                  : ""}
+                                {formatByteSize(file.size)} · {file.mime}
+                              </small>
+
+                              <div className="resource-actions">
+                                {isImg && !isCurrent && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setNavDir("fade");
+                                      setPlayingVideoFile(null);
+                                      setSelectedHash(file.hash);
+                                    }}
+                                  >
+                                    预览此版本
+                                  </button>
+                                )}
+                                {isVid && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setNavDir("fade");
+                                      setPlayingVideoFile((prev) =>
+                                        prev?.hash === file.hash ? null : file,
+                                      );
+                                    }}
+                                  >
+                                    <Play size={12} />
+                                    <span>
+                                      {playingVideoFile?.hash === file.hash
+                                        ? "返回照片"
+                                        : "播放视频"}
+                                    </span>
+                                  </button>
+                                )}
+                                {isImg && !isPrimary && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={isLocked}
+                                      onClick={() => void setAsPrimaryVersion(file.hash)}
+                                    >
+                                      设为主版本
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onOpenCompare(
+                                          primaryAssetView,
+                                          projectVersionAsAsset(
+                                            detail?.asset || asset,
+                                            file,
+                                            files,
+                                          ),
+                                        )
+                                      }
+                                    >
+                                      <Columns2 size={12} />
+                                      <span>对比主版本</span>
+                                    </button>
+                                  </>
+                                )}
+                                {files.length > 1 && (
+                                  <button
+                                    type="button"
+                                    disabled={isLocked}
+                                    onClick={() => void splitVersionOut(file.hash)}
+                                  >
+                                    <Scissors size={12} />
+                                    <span>分离为独立项</span>
+                                  </button>
+                                )}
+                                <a
+                                  href={buildMediaUrl(file.hash, "original")}
+                                  download={file.name}
+                                >
+                                  下载原件
+                                </a>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {infoTab === "edits" && (
+                      <div className="inspector-section-list">
+                        {matchedEdits.map((rec: NativeEditRecord) => {
+                          const summaryRows = summarizeNativeAdjustments(rec);
+                          return (
+                            <section key={rec.hash} className="inspector-card">
+                              <div className="edit-record-header">
+                                <strong>
+                                  <Sparkles size={14} /> {describeEditorSource(rec.editor)}
+                                </strong>
+                                {rec.timestamp && (
+                                  <small>{formatHumanDate(rec.timestamp, true)}</small>
+                                )}
+                              </div>
+                              <small className="edit-format-tag">
+                                格式 {rec.format || "Apple Adjustment"} · 版本{" "}
+                                {rec.version || "1.0"}
+                              </small>
+                              {rec.state === "parsed" && summaryRows.length > 0 ? (
+                                <dl className="inspector-kv">
+                                  {summaryRows.map((row, idx) => (
+                                    <div key={idx}>
+                                      <dt>{row.label}</dt>
+                                      <dd>{row.value}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              ) : (
+                                <p className="inspector-note">
+                                  {rec.state === "unsupported"
+                                    ? "此原生编辑记录使用私有二进制格式，已完整保留原件供下载。"
+                                    : "未包含可识别的启用项。"}
+                                </p>
+                              )}
+                            </section>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {infoTab === "raw" && (
+                      <div className="inspector-raw-meta">
+                        <input
+                          type="search"
+                          placeholder="筛选 EXIF / QuickTime 标签…"
+                          value={metaFilter}
+                          onChange={(e) => setMetaFilter(e.target.value)}
+                        />
+                        <dl className="raw-meta-list">
+                          {filteredMetaEntries.map(([k, v]) => (
+                            <div key={k}>
+                              <dt>{k}</dt>
+                              <dd>{typeof v === "object" ? JSON.stringify(v) : String(v)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    )}
+                  </div>
+                </aside>
               )}
-            </div>
-          </aside>
-        )}
+            </MotionPresence>
+          </div>
+        </div>
       </div>
 
       {/* Bottom Version Strip & Nearby Filmstrip */}
-      {!coverPickerOpen && (
+      <CollapsibleRegion open={!coverPickerOpen} className="lightbox-bar-reveal lightbox-footer-reveal">
         <footer className="lightbox-bottom-bar">
           {versionSelectableFiles.length > 1 && (
-            <div className="version-selector-strip" role="group" aria-label="照片版本切换">
+            <div
+              className="version-selector-strip motion-tabs"
+              role="group"
+              aria-label="照片版本切换"
+              ref={versionTabs.ref}
+              style={versionTabs.style}
+            >
               {versionSelectableFiles.map((file) => {
                 const active = file.hash === effectiveAsset.primary && !playingVideoFile;
                 const isPrimary = file.hash === (detail?.asset.primary || asset.primary);
@@ -1336,6 +1411,7 @@ export function LightboxStudio({
                     key={file.hash}
                     className={`version-pill ${active ? "is-active" : ""}`}
                     onClick={() => {
+                      setNavDir("fade");
                       setPlayingVideoFile(null);
                       setSelectedHash(file.hash);
                     }}
@@ -1414,7 +1490,7 @@ export function LightboxStudio({
             </div>
           )}
         </footer>
-      )}
+      </CollapsibleRegion>
     </div>
   );
 }

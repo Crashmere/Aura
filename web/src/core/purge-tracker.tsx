@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CheckCheck, LoaderCircle, RefreshCw, Trash2, X } from "lucide-react";
 import { formatByteSize, requestJson } from "./client";
+import { useIsPresent } from "./motion";
 import type { CatalogAsset, PurgeRequestReceipt, PurgeTaskStatus } from "./types";
 
 const LOCAL_STORAGE_KEY = "aura-pending-deletions";
@@ -52,9 +53,7 @@ export function usePurgeTracker(
       localStorage.setItem(
         LOCAL_STORAGE_KEY,
         JSON.stringify(
-          tasks
-            .filter((t) => t.state === "pending")
-            .map(({ id, ids }) => ({ id, ids })),
+          tasks.filter((t) => t.state === "pending").map(({ id, ids }) => ({ id, ids })),
         ),
       );
     } catch {
@@ -92,7 +91,10 @@ export function usePurgeTracker(
           setTasks((prev) =>
             prev.map((t) =>
               t.id === taskId
-                ? { ...t, error: err instanceof Error ? err.message : String(err) }
+                ? {
+                    ...t,
+                    error: err instanceof Error ? err.message : String(err),
+                  }
                 : t,
             ),
           );
@@ -112,11 +114,7 @@ export function usePurgeTracker(
     };
   }, [enabled, activeIdsKey, pollTrigger, serverPendingCount]);
 
-  function registerTask(
-    id: string,
-    ids: string[] = [],
-    state: "pending" | "complete" = "pending",
-  ) {
+  function registerTask(id: string, ids: string[] = [], state: "pending" | "complete" = "pending") {
     setTasks((prev) => {
       const existing = prev.find((t) => t.id === id);
       const updated: PurgeTaskStatus = {
@@ -146,9 +144,7 @@ export function usePurgeTracker(
     } catch (err) {
       setTasks((prev) =>
         prev.map((t) =>
-          t.id === task.id
-            ? { ...t, error: err instanceof Error ? err.message : String(err) }
-            : t,
+          t.id === task.id ? { ...t, error: err instanceof Error ? err.message : String(err) } : t,
         ),
       );
     } finally {
@@ -224,11 +220,7 @@ export function PurgeStatusBanner({
                     {tracker.retrying === op.id ? "正在重试" : "重试清理"}
                   </button>
                 )}
-                <button
-                  type="button"
-                  disabled={!!tracker.retrying}
-                  onClick={tracker.refresh}
-                >
+                <button type="button" disabled={!!tracker.retrying} onClick={tracker.refresh}>
                   <RefreshCw size={14} />
                   刷新状态
                 </button>
@@ -267,6 +259,7 @@ export function ConfirmPurgeModal({
   onClose: () => void;
   onConfirm: (ids: string[], confirmation: string) => Promise<void>;
 }) {
+  const isPresent = useIsPresent();
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState("");
   const busyLock = useRef(false);
@@ -284,13 +277,14 @@ export function ConfirmPurgeModal({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!isPresent) return;
       if (e.key === "Escape" && !e.isComposing && !busyLock.current) {
         onClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, isPresent]);
 
   const safeDismiss = () => {
     if (!busyLock.current) onClose();
@@ -345,7 +339,8 @@ export function ConfirmPurgeModal({
               <span>此操作无法在 Aura 内撤销。</span>
             </p>
             <p className="purge-description">
-              会删除这些照片的全部原件、其他版本、实况视频及对应预览，不会删除设备上的 Apple 照片，也不会改动已有备份。
+              会删除这些照片的全部原件、其他版本、实况视频及对应预览，不会删除设备上的 Apple
+              照片，也不会改动已有备份。
             </p>
             <ul className="purge-target-list">
               {targets.slice(0, 4).map((item) => (
@@ -363,12 +358,7 @@ export function ConfirmPurgeModal({
             )}
           </div>
           <footer className="modal-footer">
-            <button
-              type="button"
-              className="btn"
-              disabled={submitting}
-              onClick={safeDismiss}
-            >
+            <button type="button" className="btn" disabled={submitting} onClick={safeDismiss}>
               取消
             </button>
             <button type="submit" className="btn btn-danger" disabled={submitting}>

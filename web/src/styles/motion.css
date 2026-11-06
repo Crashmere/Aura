@@ -1,0 +1,201 @@
+:root {
+  --motion-fast: 140ms;
+  --motion-standard: 220ms;
+  --motion-reveal: 240ms;
+  --motion-ease: cubic-bezier(0.22, 0.8, 0.25, 1);
+}
+
+@keyframes aura-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes aura-dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+@keyframes aura-menu-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+}
+
+@keyframes aura-dock-out {
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+@keyframes aura-view-out {
+  to {
+    opacity: 0;
+    transform: scale(0.992);
+  }
+}
+
+@keyframes aura-count-change {
+  from {
+    opacity: 0.55;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.motion-presence {
+  display: contents;
+}
+
+.motion-presence[data-presence="exiting"] > * {
+  pointer-events: none;
+  animation: aura-fade-out var(--motion-exit-duration) ease-out both !important;
+}
+
+.motion-presence[data-presence="exiting"][data-motion="overlay"]
+  > :is(.lightbox-studio, .photo-comparison) {
+  animation-name: aura-view-out !important;
+}
+
+.motion-presence[data-presence="exiting"] > .modal-scrim > .modal-card,
+.motion-presence[data-presence="exiting"]
+  > .drop-fullscreen-overlay
+  > .drop-card {
+  animation: aura-dialog-out var(--motion-exit-duration) ease-out both !important;
+}
+
+.motion-presence[data-presence="exiting"][data-motion="menu"] > * {
+  animation-name: aura-menu-out !important;
+}
+
+.motion-presence[data-presence="exiting"][data-motion="dock"] > *,
+.motion-presence[data-presence="exiting"][data-motion="toast"] > * {
+  animation-name: aura-dock-out !important;
+}
+
+.motion-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--motion-reveal) var(--motion-ease),
+    opacity var(--motion-fast) ease;
+}
+
+.motion-collapse.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.motion-collapse-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.motion-tabs {
+  position: relative;
+  isolation: isolate;
+  --motion-indicator-color: var(--bg-active);
+  --motion-indicator-radius: var(--radius-sm);
+}
+
+.motion-tabs::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--motion-indicator-width, 0px);
+  height: var(--motion-indicator-height, 0px);
+  transform: translate(
+    var(--motion-indicator-x, 0px),
+    var(--motion-indicator-y, 0px)
+  );
+  border-radius: var(--motion-indicator-radius);
+  background: var(--motion-indicator-color);
+  box-shadow: var(--motion-indicator-shadow, none);
+  opacity: var(--motion-indicator-visible, 0);
+  pointer-events: none;
+  z-index: -1;
+  transition:
+    transform var(--motion-indicator-duration, 0ms) var(--motion-ease),
+    width var(--motion-indicator-duration, 0ms) var(--motion-ease),
+    height var(--motion-indicator-duration, 0ms) var(--motion-ease),
+    opacity var(--motion-fast) ease;
+}
+
+.motion-tabs--underline::before {
+  height: 2px;
+  top: calc(var(--motion-indicator-height, 0px) - 2px);
+  border-radius: 2px;
+}
+
+.sidebar-nav.motion-tabs {
+  --motion-indicator-color: var(--bg-surface);
+  --motion-indicator-shadow: inset 0 0 0 1px var(--border-hairline);
+}
+
+.sidebar-nav.motion-tabs .nav-item.is-active {
+  background: transparent;
+  border-color: transparent;
+}
+
+.sidebar-nav.motion-tabs .nav-item {
+  padding-left: 13px;
+}
+
+.month-scrubber-bar.motion-tabs {
+  --motion-indicator-color: var(--text-primary);
+  --motion-indicator-radius: 999px;
+}
+
+.month-scrubber-bar.motion-tabs button {
+  background: transparent;
+}
+
+.motion-count {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  animation: aura-count-change var(--motion-standard) var(--motion-ease);
+}
+
+.filter-scrim.is-closing {
+  animation: aura-fade-out 160ms ease-out both;
+}
+
+.filter-scrim.is-closing .filter-panel {
+  animation: aura-menu-out 160ms ease-out both;
+}
+
+.btn,
+.icon-btn,
+.nav-item {
+  transition-property: background, border-color, color, transform, opacity;
+}
+
+@media (hover: none) {
+  .nav-item:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-collapse,
+  .motion-tabs::before {
+    transition: none;
+  }
+
+  .motion-presence[data-presence="exiting"] > *,
+  .motion-presence[data-presence="exiting"] .modal-card,
+  .motion-count,
+  .filter-scrim.is-closing,
+  .filter-scrim.is-closing .filter-panel {
+    animation: none !important;
+  }
+}
