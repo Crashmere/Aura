@@ -702,6 +702,12 @@ a {
   font-weight: 500;
 }
 
+.month-filter-region {
+  position: sticky;
+  top: var(--sticky-header-height, var(--header-height));
+  z-index: 29;
+}
+
 .month-scrubber-bar {
   display: flex;
   align-items: center;

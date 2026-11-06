@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -158,9 +159,28 @@ function AuraApplication() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [monthRailOpen, setMonthRailOpen] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const navigationIndicator = useSlidingIndicator<HTMLElement>(route.view);
   const monthIndicator = useSlidingIndicator(`${route.from}:${route.to}`);
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    const main = header?.parentElement;
+    if (!header || !main) return;
+
+    // The command header can wrap, so the month rail must track its actual height.
+    const updateHeight = () => {
+      main.style.setProperty("--sticky-header-height", `${header.getBoundingClientRect().height}px`);
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(header);
+    return () => {
+      observer.disconnect();
+      main.style.removeProperty("--sticky-header-height");
+    };
+  }, []);
 
   // Telemetry & Catalog
   const [telemetry, setTelemetry] = useState<LibraryTelemetry>();
@@ -965,7 +985,7 @@ function AuraApplication() {
       {/* Main Content Stage */}
       <div className="aura-main">
         {/* Sticky Command Header */}
-        <header className="aura-header">
+        <header className="aura-header" ref={headerRef}>
           <div className="header-left">
             <button
               type="button"
@@ -1166,7 +1186,10 @@ function AuraApplication() {
         </CollapsibleRegion>
 
         {/* Collapsible Month Timeline Strip */}
-        <CollapsibleRegion open={monthRailOpen && months.length > 0 && isGalleryView}>
+        <CollapsibleRegion
+          open={monthRailOpen && months.length > 0 && isGalleryView}
+          className="month-filter-region"
+        >
           <div
             className="month-scrubber-bar motion-tabs"
             ref={monthIndicator.ref}
