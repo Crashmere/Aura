@@ -12,6 +12,7 @@ export type UploadTaskPhase =
   | "waiting"
   | "reading"
   | "uploading"
+  | "adding"
   | "done"
   | "duplicate"
   | "trashed"
@@ -23,6 +24,7 @@ export interface UploadQueueEntry {
   file: File;
   name: string;
   albumId?: string;
+  completionState?: "done" | "duplicate";
   state: UploadTaskPhase;
   progress: number;
   error?: string;
@@ -57,6 +59,7 @@ interface ServerUploadSession {
   trashed?: boolean;
   trashedAt?: string;
   missing?: boolean;
+  status?: string;
 }
 
 type WatchableDirectoryHandle = FileSystemDirectoryHandle & {
@@ -327,18 +330,26 @@ function assertValidSession(session: ServerUploadSession, fileSize: number): voi
 
 async function finishUploadEntry(
   entry: UploadQueueEntry,
-  result: { assetId?: string; filtered?: boolean; trashed?: boolean; trashedAt?: string },
+  result: Pick<ServerUploadSession, "assetId" | "filtered" | "trashed" | "trashedAt" | "status">,
   state: "done" | "duplicate",
 ): Promise<void> {
-  entry.assetId = result.assetId || entry.assetId;
-  entry.trashedAt = result.trashedAt || entry.trashedAt;
+  entry.assetId = result.assetId;
+  entry.trashedAt = result.trashedAt;
+  entry.completionState = state;
+  entry.progress = 1;
   const unavailable = result.filtered || result.trashed || entry.trashedAt;
   if (entry.albumId && !unavailable) {
-    if (!entry.assetId) throw new Error("服务器尚未建立照片项目，无法加入相片集");
+    if (!entry.assetId) {
+      if (result.status === "error") {
+        throw new Error("原件已保存，但照片项目建立失败，请在处理任务中重试后继续");
+      }
+      entry.state = "adding";
+      broadcastState();
+      return;
+    }
     await requestJson(`albums/${entry.albumId}/assets`, { assets: [entry.assetId] });
   }
   entry.state = result.filtered ? "skipped" : result.trashed || entry.trashedAt ? "trashed" : state;
-  entry.progress = 1;
   broadcastState();
   if (state === "done" || (entry.albumId && !unavailable)) {
     window.dispatchEvent(new Event("aura-library-changed"));
@@ -445,9 +456,22 @@ async function transferEntry(
     assetId?: string;
     trashed?: boolean;
     trashedAt?: string;
+    status?: string;
   }>(`uploads/${hash}/complete`, {});
 
   await finishUploadEntry(entry, commitResult, "done");
+}
+
+function failUploadEntry(entry: UploadQueueEntry, err: unknown): void {
+  const purged = isPurgedOriginalError(err);
+  entry.state = purged ? "skipped" : "error";
+  entry.error = purged
+    ? "已永久删除，不会重新导入"
+    : err instanceof Error
+      ? err.message
+      : String(err);
+  if (purged) entry.progress = 1;
+  broadcastState();
 }
 
 async function driveUploadLoop(): Promise<void> {
@@ -476,7 +500,25 @@ async function driveUploadLoop(): Promise<void> {
       const current = engineState.items.find(
         (x) => x.state === "waiting" || prefetchedMap.has(x.id),
       );
-      if (!current) break;
+      if (!current) {
+        const pending = engineState.items.filter((x) => x.state === "adding");
+        if (!pending.length) break;
+        // Publication is asynchronous. Drain transfers before polling album additions.
+        for (const entry of pending) {
+          if (engineState.paused) break;
+          try {
+            const status = await requestJson<ServerUploadSession>(`uploads/${entry.hash}`);
+            if (!status.complete) throw new Error("原件未完成保存，请重试上传");
+            await finishUploadEntry(entry, status, entry.completionState || "done");
+          } catch (err) {
+            failUploadEntry(entry, err);
+          }
+        }
+        if (engineState.items.some((x) => x.state === "adding")) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        continue;
+      }
       try {
         const currentPrep = prefetchedMap.get(current.id) || startPrep(current);
         await currentPrep;
@@ -488,15 +530,7 @@ async function driveUploadLoop(): Promise<void> {
         }
         await transferEntry(current, currentPrep);
       } catch (err) {
-        const purged = isPurgedOriginalError(err);
-        current.state = purged ? "skipped" : "error";
-        current.error = purged
-          ? "已永久删除，不会重新导入"
-          : err instanceof Error
-            ? err.message
-            : String(err);
-        if (purged) current.progress = 1;
-        broadcastState();
+        failUploadEntry(current, err);
       } finally {
         prefetchedMap.delete(current.id);
       }
@@ -511,6 +545,9 @@ async function driveUploadLoop(): Promise<void> {
     engineState.running = false;
     await wakeSentinel?.release();
     broadcastState();
+    if (engineState.items.some((x) => x.state === "waiting" || x.state === "adding")) {
+      void driveUploadLoop();
+    }
   }
 }
 

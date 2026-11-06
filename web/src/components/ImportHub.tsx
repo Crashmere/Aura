@@ -40,6 +40,7 @@ const UPLOAD_PHASE_LABELS: Record<UploadTaskPhase, string> = {
   waiting: "等待上传",
   reading: "读取原件",
   uploading: "上传中",
+  adding: "等待加入相片集",
   done: "已保存",
   duplicate: "原件已存在",
   trashed: "已在最近删除中",
@@ -324,6 +325,7 @@ export function ImportHubModal({
                       ) : entry.state === "error" ? (
                         <X size={16} />
                       ) : entry.state === "uploading" ||
+                        entry.state === "adding" ||
                         entry.state === "reading" ? (
                         <LoaderCircle className="spin" size={16} />
                       ) : (
