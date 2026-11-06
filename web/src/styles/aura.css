@@ -773,6 +773,7 @@
   color: rgba(255, 255, 255, 0.55);
 }
 
+.comparison-workspace,
 .comparison-side,
 .comparison-single,
 .comparison-overlay {
@@ -780,6 +781,15 @@
   min-height: 0;
   position: relative;
   display: flex;
+}
+
+.comparison-workspace {
+  overflow: hidden;
+  touch-action: none;
+}
+
+.comparison-workspace section {
+  overflow: hidden;
 }
 
 .comparison-side section {

@@ -1,4 +1,12 @@
-import React, { useEffect, useRef, useState, type CSSProperties } from "react";
+import React, {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   ArrowLeftRight,
   Columns2,
@@ -15,6 +23,7 @@ import {
   requestJson,
 } from "../core/client";
 import { CollapsibleRegion, MotionPresence, useIsPresent, useSlidingIndicator } from "../core/motion";
+import { usePageScrollLock, zoomPhotoWithWheel } from "../core/photo-view";
 import type {
   CandidatePair,
   CatalogAsset,
@@ -50,11 +59,52 @@ export function PhotoComparisonModal({
   const [mode, setMode] = useState<"side" | "overlay" | "switch">("side");
   const [activeSide, setActiveSide] = useState<"left" | "right">("left");
   const [curtainPercent, setCurtainPercent] = useState(50);
+  const [zoomScale, setZoomScale] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    panX: number;
+    panY: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const modesIndicator = useSlidingIndicator(mode, '[aria-pressed="true"]');
+
+  usePageScrollLock();
+
+  useLayoutEffect(() => {
+    if (zoomScale <= 1.01) {
+      setPanOffset(previous => previous.x || previous.y ? { x: 0, y: 0 } : previous);
+    }
+  }, [zoomScale]);
+
+  const handleStageWheel = useEffectEvent((event: WheelEvent) => {
+    if (!isPresent) return;
+    event.preventDefault();
+    setZoomScale(previous => zoomPhotoWithWheel(previous, event, stageRef.current!.clientHeight));
+  });
+  useEffect(() => {
+    const stage = stageRef.current!;
+    stage.addEventListener("wheel", handleStageWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", handleStageWheel);
+  }, []);
 
   const toggleAbSide = () => {
     setMode("switch");
     setActiveSide((prev) => (prev === "left" ? "right" : "left"));
+  };
+
+  const finishDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    setIsDragging(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
   };
 
   useEffect(() => {
@@ -104,10 +154,14 @@ export function PhotoComparisonModal({
   }, []);
 
   const renderStagePhoto = (item: CatalogAsset) => (
-    <div className="compare-image">
+    <div
+      className="compare-image"
+      style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})` }}
+    >
       <ProgressiveStagePhoto
         key={`${item.primary}:${item.rotation || 0}:${item.cover?.revision || ""}`}
         asset={item}
+        zoomed={zoomScale > 1.05}
         onClearReady={() => {}}
       />
     </div>
@@ -182,63 +236,102 @@ export function PhotoComparisonModal({
         </span>
       </div>
 
-      {mode === "switch" ? (
-        <div className="comparison-single">
-          <section
-            aria-label={`照片 A：${left.name}`}
-            aria-hidden={activeSide !== "left"}
-          >
-            {renderStagePhoto(left)}
-          </section>
-          <section
-            aria-label={`照片 B：${right.name}`}
-            aria-hidden={activeSide !== "right"}
-          >
-            {renderStagePhoto(right)}
-          </section>
-        </div>
-      ) : mode === "side" ? (
-        <div className="comparison-side">
-          <section aria-label={`照片 A：${left.name}`}>
-            {renderStagePhoto(left)}
-          </section>
-          <section aria-label={`照片 B：${right.name}`}>
-            {renderStagePhoto(right)}
-          </section>
-        </div>
-      ) : (
-        <div
-          className="comparison-overlay"
-          style={{ "--compare-position": `${curtainPercent}%` } as CSSProperties}
-        >
-          <section aria-label={`照片 B：${right.name}`}>
-            {renderStagePhoto(right)}
-          </section>
-          <section
-            className="comparison-reveal"
-            aria-label={`照片 A：${left.name}`}
-          >
-            {renderStagePhoto(left)}
-          </section>
-          <div
-            className="comparison-divider"
-            aria-hidden="true"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.currentTarget.setPointerCapture(e.pointerId);
-            }}
-            onPointerMove={(e) => {
-              if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-              const rect = e.currentTarget.parentElement!.getBoundingClientRect();
-              setCurtainPercent(
-                Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100)),
-              );
-            }}
-          >
-            <span>↔</span>
+      <div
+        ref={stageRef}
+        className="comparison-workspace"
+        style={{ cursor: zoomScale > 1.01 ? isDragging ? "grabbing" : "grab" : undefined }}
+        onPointerDown={(e) => {
+          if (!isPresent || e.button !== 0 || zoomScale <= 1.01 || dragRef.current) return;
+          const target = e.target instanceof HTMLElement ? e.target : null;
+          if (target?.closest("button, input, .comparison-divider")) return;
+          const section = target?.closest("section");
+          if (!section) return;
+          const rect = section.getBoundingClientRect();
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          dragRef.current = {
+            pointerId: e.pointerId,
+            x: e.clientX,
+            y: e.clientY,
+            panX: panOffset.x,
+            panY: panOffset.y,
+            width: rect.width,
+            height: rect.height,
+          };
+          setIsDragging(true);
+        }}
+        onPointerMove={(e) => {
+          const drag = dragRef.current;
+          if (!drag || drag.pointerId !== e.pointerId || zoomScale <= 1.01) return;
+          const maxX = (drag.width * (zoomScale - 1)) / 2;
+          const maxY = (drag.height * (zoomScale - 1)) / 2;
+          setPanOffset({
+            x: Math.max(-maxX, Math.min(maxX, drag.panX + e.clientX - drag.x)),
+            y: Math.max(-maxY, Math.min(maxY, drag.panY + e.clientY - drag.y)),
+          });
+        }}
+        onPointerUp={finishDrag}
+        onPointerCancel={finishDrag}
+        onLostPointerCapture={finishDrag}
+      >
+        {mode === "switch" ? (
+          <div className="comparison-single">
+            <section
+              aria-label={`照片 A：${left.name}`}
+              aria-hidden={activeSide !== "left"}
+            >
+              {renderStagePhoto(left)}
+            </section>
+            <section
+              aria-label={`照片 B：${right.name}`}
+              aria-hidden={activeSide !== "right"}
+            >
+              {renderStagePhoto(right)}
+            </section>
           </div>
-        </div>
-      )}
+        ) : mode === "side" ? (
+          <div className="comparison-side">
+            <section aria-label={`照片 A：${left.name}`}>
+              {renderStagePhoto(left)}
+            </section>
+            <section aria-label={`照片 B：${right.name}`}>
+              {renderStagePhoto(right)}
+            </section>
+          </div>
+        ) : (
+          <div
+            className="comparison-overlay"
+            style={{ "--compare-position": `${curtainPercent}%` } as CSSProperties}
+          >
+            <section aria-label={`照片 B：${right.name}`}>
+              {renderStagePhoto(right)}
+            </section>
+            <section
+              className="comparison-reveal"
+              aria-label={`照片 A：${left.name}`}
+            >
+              {renderStagePhoto(left)}
+            </section>
+            <div
+              className="comparison-divider"
+              aria-hidden="true"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+                const rect = e.currentTarget.parentElement!.getBoundingClientRect();
+                setCurtainPercent(
+                  Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100)),
+                );
+              }}
+            >
+              <span>↔</span>
+            </div>
+          </div>
+        )}
+      </div>
 
       <CollapsibleRegion open={mode === "overlay"} className="comparison-slider-region">
         <footer className="comparison-slider">

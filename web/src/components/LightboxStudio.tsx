@@ -69,6 +69,7 @@ import {
   useSlidingIndicator,
 } from "../core/motion";
 import { ActionButton, LiveRingsIcon, RoundIconButton } from "./Icons";
+import { usePageScrollLock, zoomPhotoWithWheel } from "../core/photo-view";
 import {
   type FramePlayheadState,
   FrameTimelineStrip,
@@ -190,20 +191,7 @@ export function LightboxStudio({
   const zoomScale = hasCurrentTransients ? zoomScaleState : 1;
   const panOffset = hasCurrentTransients ? panOffsetState : { x: 0, y: 0 };
 
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    const body = document.body;
-    const rootOverflow = root.style.overflow;
-    const bodyOverflow = body.style.overflow;
-    const { scrollX, scrollY } = window;
-    root.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    return () => {
-      root.style.overflow = rootOverflow;
-      body.style.overflow = bodyOverflow;
-      window.scrollTo({ left: scrollX, top: scrollY, behavior: "instant" });
-    };
-  }, []);
+  usePageScrollLock();
 
   useLayoutEffect(() => {
     if (zoomScale <= 1.01) {
@@ -328,11 +316,10 @@ export function LightboxStudio({
   const handleStageWheel = useEffectEvent((event: WheelEvent) => {
     if (!isPresent || isVideoStage) return;
     event.preventDefault();
-    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stageRef.current!.clientHeight : 1);
     clearTimeout(wheelZoomTimer.current);
     setWheelZooming(true);
     wheelZoomTimer.current = setTimeout(() => setWheelZooming(false), 120);
-    setZoomScale(previous => Math.max(1, Math.min(5, previous * Math.exp(-delta * 0.002))));
+    setZoomScale(previous => zoomPhotoWithWheel(previous, event, stageRef.current!.clientHeight));
   });
   useEffect(() => {
     const stage = stageRef.current!;
