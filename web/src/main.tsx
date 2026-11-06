@@ -195,6 +195,55 @@ function AuraApplication() {
   } | null>(null);
   const [dragHover, setDragHover] = useState(false);
 
+  useEffect(() => {
+    let dragTimeout: number | undefined;
+    const resetDrag = () => {
+      window.clearTimeout(dragTimeout);
+      setDragHover(false);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      setDragHover(true);
+      window.clearTimeout(dragTimeout);
+      // Native drag cancellation can omit dragend and keyboard events in the page.
+      dragTimeout = window.setTimeout(resetDrag, 1200);
+    };
+    const onDragLeave = (event: DragEvent) => {
+      if (
+        !event.relatedTarget &&
+        (event.clientX <= 0 || event.clientY <= 0 ||
+          event.clientX >= window.innerWidth || event.clientY >= window.innerHeight)
+      ) resetDrag();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") resetDrag();
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) resetDrag();
+    };
+
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", resetDrag);
+    window.addEventListener("dragend", resetDrag);
+    window.addEventListener("blur", resetDrag);
+    window.addEventListener("pointermove", resetDrag);
+    window.addEventListener("keydown", onKeyDown);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearTimeout(dragTimeout);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", resetDrag);
+      window.removeEventListener("dragend", resetDrag);
+      window.removeEventListener("blur", resetDrag);
+      window.removeEventListener("pointermove", resetDrag);
+      window.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
   // Similar studio state
   const [similarSource, setSimilarSource] = useState<"dhash" | "dino">("dhash");
   const [similarPairs, setSimilarPairs] = useState<CandidatePair[]>([]);
@@ -788,15 +837,6 @@ function AuraApplication() {
   return (
     <div
       className="aura-shell"
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("Files")) {
-          e.preventDefault();
-          setDragHover(true);
-        }
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragHover(false);
-      }}
       onDrop={(e) => {
         e.preventDefault();
         setDragHover(false);
