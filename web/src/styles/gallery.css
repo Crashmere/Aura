@@ -339,12 +339,6 @@
   color: #f9d58b;
 }
 
-.photo-similar-divider {
-  width: 1px;
-  height: 10px;
-  background: rgba(255, 255, 255, 0.32);
-}
-
 @container (max-width: 160px) {
   .photo-top-badges.has-similar .photo-kind span {
     display: none;

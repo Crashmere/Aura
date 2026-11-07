@@ -595,9 +595,8 @@ export function PhotoTile({
               abortSpeculativePreloads();
               onOpenSimilar?.();
             }}>
-            <Sparkles size={13} aria-hidden="true" />
             {dhashCount > 0 && <span className="photo-similar-dhash">{dhashCount}</span>}
-            {dhashCount > 0 && dinoCount > 0 && <span className="photo-similar-divider" aria-hidden="true" />}
+            <Sparkles size={13} aria-hidden="true" />
             {dinoCount > 0 && <span className="photo-similar-dino">{dinoCount}</span>}
           </button>
         )}
