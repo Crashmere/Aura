@@ -277,7 +277,6 @@ export type WorkspaceViewId =
   | "albums"
   | "live"
   | "videos"
-  | "grouped"
   | "automatic"
   | "merged"
   | "similar"

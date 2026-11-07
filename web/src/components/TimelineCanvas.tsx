@@ -564,14 +564,14 @@ export function PhotoTile({
 
           <div className="photo-shade" />
 
-          {asset.imageVersions > 1 && !asset.deletionPending && (
+          {(asset.imageVersions > 1 || asset.grouping === "manual") && !asset.deletionPending && (
             <span
               className="photo-versions"
-              title={`${asset.grouping === "manual" ? "手动归并" : "自动组合"} · ${asset.imageVersions} 个照片版本`}
+              title={asset.grouping === "manual" ? `手动归并 · ${asset.variants} 份原件` : `自动组合 · ${asset.imageVersions} 个照片版本`}
             >
               <Layers3 size={12} />
               <span>
-                {asset.grouping === "manual" ? "归并" : "版本"} {asset.imageVersions}
+                {asset.grouping === "manual" ? `归并 ${asset.variants}` : `版本 ${asset.imageVersions}`}
               </span>
             </span>
           )}

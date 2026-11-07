@@ -14,7 +14,6 @@ import {
   CheckCheck,
   CloudUpload,
   Columns2,
-  Copy,
   FolderOpen,
   FolderMinus,
   FolderPlus,
@@ -147,8 +146,6 @@ function ModuleIcon({ id }: { id: WorkspaceViewId }) {
       return <Layers size={17} />;
     case "merged":
       return <Layers3 size={17} />;
-    case "grouped":
-      return <Copy size={17} />;
     case "similar":
     case "similar-videos":
       return <Sparkles size={17} />;
@@ -1276,9 +1273,7 @@ function AuraApplication() {
                 </div>
               )}
 
-              {(route.view === "automatic" ||
-                route.view === "merged" ||
-                route.view === "grouped") && (
+              {(route.view === "automatic" || route.view === "merged") && (
                 <ActionButton onClick={() => setHistoryKind("split")}>
                   <History size={15} />
                   <span>分离记录</span>

@@ -1189,10 +1189,8 @@ export function LightboxStudio({
                                 </dt>
                                 <dd>
                                   {effectiveAsset.grouping === "manual"
-                                    ? "手动归并"
-                                    : "自动组合"}{" "}
-                                  （{effectiveAsset.imageVersions} 个照片版本，共{" "}
-                                  {effectiveAsset.variants} 份原件）
+                                    ? `手动归并（共 ${effectiveAsset.variants} 份原件）`
+                                    : `自动组合（${effectiveAsset.imageVersions} 个照片版本，共 ${effectiveAsset.variants} 份原件）`}
                                 </dd>
                               </div>
                             )}

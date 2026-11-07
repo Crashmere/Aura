@@ -56,7 +56,7 @@ export const WORKSPACE_MODULES: readonly WorkspaceModuleDescriptor[] = [
   },
   {
     id: "automatic",
-    title: "照片版本",
+    title: "编辑过照片",
     subtitle: "同一照片的原始与编辑版本，或像素完全一致的原件，会在上传时自动组合。",
     section: "curation",
     supportsSearch: true,
@@ -67,22 +67,12 @@ export const WORKSPACE_MODULES: readonly WorkspaceModuleDescriptor[] = [
   {
     id: "merged",
     title: "手动归并",
-    subtitle: "这里显示你手动归并的照片，所有原件均可在详情中查看或分离。",
+    subtitle: "这里显示你手动归并的照片和视频，所有原件均可在详情中查看或分离。",
     section: "curation",
     supportsSearch: true,
     supportsTimelineFilters: true,
     supportsBatchSelection: true,
     badgeCount: (info) => info?.merged,
-  },
-  {
-    id: "grouped",
-    title: "多版本照片",
-    subtitle: "包含自动组合版本与手动归并的全部多版本照片项目。",
-    section: "curation",
-    supportsSearch: true,
-    supportsTimelineFilters: true,
-    supportsBatchSelection: true,
-    badgeCount: (info) => info?.grouped,
   },
   {
     id: "similar",
