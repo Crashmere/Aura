@@ -31,6 +31,15 @@ func (l *Library) assetSimilar(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "相片集无效")
 		return
 	}
+	var minScore float32
+	if source == "dino" {
+		var err error
+		minScore, err = similarityMinScore(q)
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+	}
 	selected, err := l.assetCards(r.Context(), map[string]bool{id: true})
 	if err != nil {
 		fail(w, 500, err)
@@ -82,6 +91,9 @@ func (l *Library) assetSimilar(w http.ResponseWriter, r *http.Request) {
 		return a.ID < b.ID
 	}
 	sort.Slice(pairs, func(i, j int) bool { return less(position(pairs[i]), position(pairs[j])) })
+	if source == "dino" {
+		pairs = filterSimilarScores(pairs, minScore)
+	}
 	start := 0
 	if rawCursor := q.Get("cursor"); rawCursor != "" {
 		var cursor assetSimilarCursor

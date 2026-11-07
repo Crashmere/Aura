@@ -36,6 +36,7 @@ import { ActionButton, RoundIconButton } from "./Icons";
 import { ProgressiveStagePhoto } from "./StagePlayer";
 import { PhotoTile } from "./TimelineCanvas";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
+import { SimilarityScoreFilter } from "./SimilarityScoreFilter";
 
 // ============================================================================
 // 1. Photo Comparison Studio (Side-by-Side, Split Curtain, A/B Switch with V)
@@ -683,6 +684,11 @@ export function SimilarWorkspaceView({
   pairs,
   assetsMap,
   counts,
+  total,
+  minScore,
+  onSelectMinScore,
+  error,
+  onRetry,
   dinoIndex,
   pageIndex,
   hasNextPage,
@@ -703,6 +709,11 @@ export function SimilarWorkspaceView({
   pairs: CandidatePair[];
   assetsMap: Record<string, CatalogAsset>;
   counts?: Record<"dhash" | "dino", number>;
+  total: number;
+  minScore: number | null;
+  onSelectMinScore: (score: number | null) => void;
+  error: string;
+  onRetry: () => void;
   dinoIndex?: DinoIndexStatus;
   pageIndex: number;
   hasNextPage: boolean;
@@ -722,7 +733,7 @@ export function SimilarWorkspaceView({
   const dinoPager = (
     <nav className="similar-pagination" aria-label="智能推荐分页">
       <ActionButton
-        disabled={loading || !!ignoringKey || pageIndex === 0}
+        disabled={loading || !!error || !!ignoringKey || pageIndex === 0}
         onClick={() => onTurnDinoPage(-1)}
       >
         上一页
@@ -734,7 +745,7 @@ export function SimilarWorkspaceView({
         </span>
       </span>
       <ActionButton
-        disabled={loading || !!ignoringKey || !hasNextPage}
+        disabled={loading || !!error || !!ignoringKey || !hasNextPage}
         onClick={() => onTurnDinoPage(1)}
       >
         下一页
@@ -807,6 +818,19 @@ export function SimilarWorkspaceView({
         )}
       </MotionPresence>
 
+      {source === "dino" && <div className="similar-score-toolbar">
+        <SimilarityScoreFilter minScore={minScore} disabled={!!ignoringKey} onChange={onSelectMinScore} />
+        <span className="similar-score-result" role="status">
+          {loading ? <><LoaderCircle size={14} className="spin" />正在筛选</> :
+            !error && minScore !== null ? `筛选结果 ${total.toLocaleString("zh-CN")} 组` : ""}
+        </span>
+      </div>}
+
+      {error && <div className="asset-similar-error" role="alert">
+        <span>{error}</span>
+        <button className="btn" type="button" disabled={loading} onClick={onRetry}>重试</button>
+      </div>}
+
       {source === "dino" && (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager}
 
       <MotionPresence present={!!lastIgnoredPair} variant="panel">
@@ -829,7 +853,7 @@ export function SimilarWorkspaceView({
           <LoaderCircle className="spin" size={20} />
           <span>正在查找相似照片</span>
         </div>
-      ) : !pairs.length && !hasNextPage ? (
+      ) : !pairs.length && !hasNextPage && !error ? (
         <div className="empty-state">
           <div className="empty-icon-ring">
             <Copy size={28} strokeWidth={1.3} />
@@ -837,6 +861,8 @@ export function SimilarWorkspaceView({
           <h2>
             {source === "dino" && pageIndex > 0
               ? "当前页暂无推荐照片"
+              : source === "dino" && minScore !== null
+                ? "没有符合相似度条件的照片"
               : source === "dino" && dinoIndex?.pending
                 ? "分析完成后会显示推荐照片"
                 : source === "dino"
@@ -847,7 +873,6 @@ export function SimilarWorkspaceView({
       ) : (
         <div
           className="similar-pairs-grid"
-          key={`${source}:${pageIndex}`}
           aria-busy={loading}
         >
           {pairs.map((pair) => {
@@ -863,11 +888,13 @@ export function SimilarWorkspaceView({
                 <PhotoTile
                   asset={left}
                   originalAspect
+                  disabled={loading || !!error}
                   onClick={() => onOpenAsset(left)}
                 />
                 <PhotoTile
                   asset={right}
                   originalAspect
+                  disabled={loading || !!error}
                   onClick={() => onOpenAsset(right)}
                 />
                 <div className="pair-actions">
@@ -880,7 +907,7 @@ export function SimilarWorkspaceView({
                     </strong>
                     {source === "dino" && pair.score !== undefined && (
                       <small className="similar-score">
-                        特征相似度 {pair.score.toFixed(2)}
+                        特征相似度 {(100 * Math.min(1, pair.score)).toFixed(1)}%
                       </small>
                     )}
                     <small>
@@ -889,7 +916,7 @@ export function SimilarWorkspaceView({
                   </div>
                   <div className="pair-buttons">
                     <ActionButton
-                      disabled={!!left.deletionPending || !!right.deletionPending}
+                      disabled={loading || !!error || !!left.deletionPending || !!right.deletionPending}
                       onClick={() => onComparePair(left, right)}
                     >
                       <Columns2 size={15} />
@@ -897,7 +924,7 @@ export function SimilarWorkspaceView({
                     </ActionButton>
                     <ActionButton
                       variant="primary"
-                      disabled={loading || !!ignoringKey || !!left.deletionPending || !!right.deletionPending}
+                      disabled={loading || !!error || !!ignoringKey || !!left.deletionPending || !!right.deletionPending}
                       onClick={() => void onMergePair(left, right)}
                     >
                       <Layers3 size={15} />
@@ -905,7 +932,7 @@ export function SimilarWorkspaceView({
                     </ActionButton>
                     <ActionButton
                       className="similar-ignore-btn"
-                      disabled={loading || !!ignoringKey}
+                      disabled={loading || !!error || !!ignoringKey}
                       onClick={() => void onIgnorePair(pair)}
                     >
                       确认不同

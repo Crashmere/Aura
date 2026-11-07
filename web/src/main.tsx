@@ -285,9 +285,12 @@ function AuraApplication() {
 
   // Similar studio state
   const [similarSource, setSimilarSource] = useState<"dhash" | "dino">("dhash");
+  const [dinoMinScore, setDinoMinScore] = useState<number | null>(null);
   const [similarPairs, setSimilarPairs] = useState<CandidatePair[]>([]);
   const [similarAssets, setSimilarAssets] = useState<Record<string, CatalogAsset>>({});
   const [similarCounts, setSimilarCounts] = useState<Record<"dhash" | "dino", number>>();
+  const [similarTotal, setSimilarTotal] = useState(0);
+  const [similarError, setSimilarError] = useState("");
   const [dinoIndex, setDinoIndex] = useState<DinoIndexStatus>();
   const [similarNext, setSimilarNext] = useState("");
   const [dinoPageIdx, setDinoPageIdx] = useState(0);
@@ -295,8 +298,8 @@ function AuraApplication() {
   const [similarLoading, setSimilarLoading] = useState(false);
   const similarRequestIdRef = useRef(0);
   const similarRequestRef = useRef<AbortController | null>(null);
-  const similarPageRef = useRef<{ source: "dhash" | "dino"; cursor: string; pageIndex: number }>({
-    source: "dhash", cursor: "", pageIndex: 0,
+  const similarPageRef = useRef<{ source: "dhash" | "dino"; cursor: string; pageIndex: number; minScore: number | null }>({
+    source: "dhash", cursor: "", pageIndex: 0, minScore: null,
   });
   const [ignoringKey, setIgnoringKey] = useState("");
   const [lastIgnoredPair, setLastIgnoredPair] = useState<CandidatePair | null>(null);
@@ -646,12 +649,15 @@ function AuraApplication() {
   }, [openAssetIndex, assets.length, nextCursor, loadingPage, fetchGalleryPage]);
 
   // Similar Candidates Fetcher
-  async function fetchSimilarCandidates(src: "dhash" | "dino", cursor = "", append = false, pageIndex = 0) {
+  async function fetchSimilarCandidates(src: "dhash" | "dino", cursor = "", append = false, pageIndex = 0,
+    minScore = similarPageRef.current.minScore) {
     const requestId = ++similarRequestIdRef.current;
     similarRequestRef.current?.abort();
     const controller = new AbortController();
     similarRequestRef.current = controller;
+    similarPageRef.current = { source: src, cursor: append ? similarPageRef.current.cursor : cursor, pageIndex, minScore };
     setSimilarLoading(true);
+    setSimilarError("");
     try {
       const q = new URLSearchParams({
         source: src,
@@ -659,18 +665,19 @@ function AuraApplication() {
         limit: "20",
         ...(cursor ? { cursor } : {}),
       });
+      if (src === "dino" && minScore !== null) q.set("minScore", String(minScore));
       const res = await requestJson<SimilarCandidatesPage>(`similar?${q.toString()}`, undefined, undefined, controller.signal);
       if (requestId !== similarRequestIdRef.current) return;
-      similarPageRef.current = { source: src, cursor: append ? similarPageRef.current.cursor : cursor, pageIndex };
       setSimilarPairs((prev) => (append ? [...prev, ...res.items] : res.items));
       setSimilarAssets((prev) => (append ? { ...prev, ...res.assets } : res.assets || {}));
       setSimilarCounts(res.counts);
+      setSimilarTotal(res.total);
       if (res.index) setDinoIndex(res.index);
       setSimilarNext(res.next || "");
       if (src === "dino") setDinoPageIdx(pageIndex);
     } catch (err) {
       if (requestId === similarRequestIdRef.current && !controller.signal.aborted) {
-        showToast(err instanceof Error ? err.message : String(err), true);
+        setSimilarError(err instanceof Error ? err.message : String(err));
       }
     } finally {
       if (requestId === similarRequestIdRef.current) {
@@ -683,17 +690,18 @@ function AuraApplication() {
   useEffect(() => {
     if (route.view !== "similar") return;
     dinoCursorsRef.current = [""];
-    similarPageRef.current = { source: similarSource, cursor: "", pageIndex: 0 };
-    setDinoPageIdx(0);
-    setSimilarPairs([]);
-    setSimilarNext("");
-    void fetchSimilarCandidates(similarSource, "", false);
+    if (similarPageRef.current.source !== similarSource) {
+      setDinoPageIdx(0);
+      setSimilarPairs([]);
+      setSimilarNext("");
+    }
+    void fetchSimilarCandidates(similarSource, "", false, 0, dinoMinScore);
     return () => {
       similarRequestIdRef.current++;
       similarRequestRef.current?.abort();
       similarRequestRef.current = null;
     };
-  }, [route.view, similarSource]);
+  }, [route.view, similarSource, dinoMinScore]);
 
   // Group loaded assets by calendar capture day
   const dayGroups = useMemo<DayAssetGroup[]>(() => {
@@ -1277,6 +1285,19 @@ function AuraApplication() {
               pairs={similarPairs}
               assetsMap={similarAssets}
               counts={similarCounts}
+              total={similarTotal}
+              minScore={dinoMinScore}
+              onSelectMinScore={score => {
+                if (score === dinoMinScore) {
+                  dinoCursorsRef.current = [""];
+                  void fetchSimilarCandidates("dino", "", false, 0, score);
+                } else setDinoMinScore(score);
+              }}
+              error={similarError}
+              onRetry={() => {
+                const page = similarPageRef.current;
+                void fetchSimilarCandidates(page.source, page.cursor, false, page.pageIndex, page.minScore);
+              }}
               dinoIndex={dinoIndex || telemetry?.similarityIndex}
               pageIndex={dinoPageIdx}
               hasNextPage={!!similarNext}

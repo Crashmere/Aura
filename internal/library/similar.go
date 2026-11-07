@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/bits"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,11 +135,33 @@ func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 		next = base64.RawURLEncoding.EncodeToString([]byte(cursors[limit-1]))
 	}
-	l.writeSimilar(w, r, items, next, paged, false)
+	l.writeSimilar(w, r, items, next, paged, false, -1)
+}
+
+func similarityMinScore(q url.Values) (float32, error) {
+	if q.Get("minScore") == "" {
+		return 0, nil
+	}
+	score, err := strconv.ParseFloat(q.Get("minScore"), 64)
+	if err != nil || math.IsNaN(score) || math.IsInf(score, 0) || score < .7 || score > 1 {
+		return 0, fmt.Errorf("特征相似度阈值须在 70%% 到 100%% 之间")
+	}
+	return float32(score), nil
+}
+
+func filterSimilarScores(pairs []similarPair, minScore float32) []similarPair {
+	// Both DINO lists are score-sorted; retain a prefix without changing the cached snapshot.
+	end := sort.Search(len(pairs), func(i int) bool { return min(pairs[i].Score, 1) <= minScore })
+	return pairs[:end]
 }
 
 func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	minScore, err := similarityMinScore(q)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
 	limit := 100
 	paged := q.Get("paged") == "true"
 	if paged {
@@ -160,7 +184,7 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err)
 		return
 	}
-	pairs := value.([]similarPair)
+	pairs := filterSimilarScores(value.([]similarPair), minScore)
 	start := 0
 	if cursor.Left != "" {
 		start = sort.Search(len(pairs), func(i int) bool {
@@ -175,7 +199,7 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 		last := items[len(items)-1]
 		next = base64.RawURLEncoding.EncodeToString([]byte(marshal(map[string]any{"score": last.Score, "left": last.Left, "right": last.Right})))
 	}
-	l.writeSimilar(w, r, items, next, paged, true)
+	l.writeSimilar(w, r, items, next, paged, true, len(pairs))
 }
 
 func (l *Library) buildDINOPairs(ctx context.Context) ([]similarPair, error) {
@@ -254,7 +278,7 @@ func (l *Library) buildDINOPairs(ctx context.Context) ([]similarPair, error) {
 	return items, nil
 }
 
-func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []similarPair, next string, paged, dino bool) {
+func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []similarPair, next string, paged, dino bool, total int) {
 	if !paged {
 		writeJSON(w, 200, items)
 		return
@@ -278,7 +302,10 @@ func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []s
 	if dino {
 		source = "dino"
 	}
-	out := map[string]any{"items": items, "next": next, "assets": cards, "total": counts[source], "counts": counts}
+	if total < 0 {
+		total = counts[source]
+	}
+	out := map[string]any{"items": items, "next": next, "assets": cards, "total": total, "counts": counts}
 	if dino {
 		out["index"] = l.dinoSnapshot()
 	}

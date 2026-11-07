@@ -108,6 +108,50 @@
   height: 14px;
 }
 
+.similar-score-toolbar,
+.similar-score-filter,
+.similar-score-filter label,
+.similar-score-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.similar-score-toolbar,
+.similar-score-filter {
+  flex-wrap: wrap;
+}
+
+.similar-score-filter {
+  font-size: 13px;
+}
+
+.similar-score-input {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+}
+
+.similar-score-input input {
+  width: 70px;
+  min-width: 0;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.similar-score-result {
+  min-height: 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .similar-pairs-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
