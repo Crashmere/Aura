@@ -136,30 +136,31 @@ type File struct {
 }
 
 type Asset struct {
-	ID              string           `json:"id"`
-	Primary         string           `json:"primary"`
-	Motion          string           `json:"motion,omitempty"`
-	CapturedAt      string           `json:"capturedAt"`
-	Kind            string           `json:"kind"`
-	Favorite        bool             `json:"favorite"`
-	TrashedAt       string           `json:"trashedAt,omitempty"`
-	Name            string           `json:"name"`
-	Width           int              `json:"width"`
-	Height          int              `json:"height"`
-	Rotation        int              `json:"rotation"`
-	MotionRotation  int              `json:"motionRotation,omitempty"`
-	Cover           *CoverSelection  `json:"cover,omitempty"`
-	Size            int64            `json:"size"`
-	Status          string           `json:"status"`
-	Variants        int              `json:"variants"`
-	ImageVersions   int              `json:"imageVersions"`
-	Grouping        string           `json:"grouping,omitempty"`
-	Duration        float64          `json:"duration,omitempty"`
-	FrameRate       float64          `json:"frameRate,omitempty"`
-	MotionDuration  float64          `json:"motionDuration,omitempty"`
-	MotionFrameRate float64          `json:"motionFrameRate,omitempty"`
-	DeletionPending bool             `json:"deletionPending,omitempty"`
-	Albums          []AlbumReference `json:"albums"`
+	ID              string              `json:"id"`
+	Primary         string              `json:"primary"`
+	Motion          string              `json:"motion,omitempty"`
+	CapturedAt      string              `json:"capturedAt"`
+	Kind            string              `json:"kind"`
+	Favorite        bool                `json:"favorite"`
+	TrashedAt       string              `json:"trashedAt,omitempty"`
+	Name            string              `json:"name"`
+	Width           int                 `json:"width"`
+	Height          int                 `json:"height"`
+	Rotation        int                 `json:"rotation"`
+	MotionRotation  int                 `json:"motionRotation,omitempty"`
+	Cover           *CoverSelection     `json:"cover,omitempty"`
+	Size            int64               `json:"size"`
+	Status          string              `json:"status"`
+	Variants        int                 `json:"variants"`
+	ImageVersions   int                 `json:"imageVersions"`
+	Grouping        string              `json:"grouping,omitempty"`
+	Duration        float64             `json:"duration,omitempty"`
+	FrameRate       float64             `json:"frameRate,omitempty"`
+	MotionDuration  float64             `json:"motionDuration,omitempty"`
+	MotionFrameRate float64             `json:"motionFrameRate,omitempty"`
+	DeletionPending bool                `json:"deletionPending,omitempty"`
+	Albums          []AlbumReference    `json:"albums"`
+	SimilarCounts   *assetSimilarCounts `json:"similarCounts,omitempty"`
 }
 
 const schema = `

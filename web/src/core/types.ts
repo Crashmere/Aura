@@ -31,6 +31,7 @@ export interface CatalogAsset {
   motionFrameRate?: number;
   cover?: CoverChoice;
   albums?: AlbumReference[];
+  similarCounts?: { dhash: number; dino: number };
 }
 
 export interface AlbumReference {

@@ -104,6 +104,7 @@
   border-radius: 4px;
   overflow: hidden;
   user-select: none;
+  container-type: inline-size;
   transition: background 0.24s var(--ease-out);
 }
 
@@ -264,6 +265,7 @@
 }
 
 .photo-kind,
+.photo-similar,
 .photo-duration,
 .photo-versions,
 .photo-deletion-pending {
@@ -282,9 +284,108 @@
   transition: transform 0.2s var(--ease-spring), opacity 0.2s ease;
 }
 
-.photo-kind {
-  top: 6px;
-  left: 6px;
+.photo-top-badges {
+  position: absolute;
+  top: calc((100% - var(--frame-h, 100%)) / 2 + 6px);
+  left: calc((100% - var(--frame-w, 100%)) / 2 + 6px);
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(var(--frame-w, 100%) - 12px);
+  pointer-events: none;
+  transition: top 0.28s var(--ease-spring), left 0.28s var(--ease-spring);
+}
+
+.photo-top-badges .photo-kind,
+.photo-similar {
+  position: static;
+  flex-shrink: 0;
+  height: 20px;
+}
+
+.photo-similar {
+  pointer-events: auto;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.photo-similar:hover:not(:disabled) {
+  background: rgba(18, 18, 16, 0.82);
+}
+
+.photo-similar:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.photo-similar-dhash {
+  color: #9edaff;
+}
+
+.photo-similar-dino {
+  color: #f9d58b;
+}
+
+.photo-similar-divider {
+  width: 1px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.32);
+}
+
+@container (max-width: 160px) {
+  .photo-top-badges.has-similar .photo-kind span {
+    display: none;
+  }
+
+  .photo-top-badges.has-similar {
+    gap: 3px;
+  }
+
+  .photo-top-badges.has-similar .photo-kind,
+  .photo-similar {
+    padding: 2px 4px;
+    gap: 3px;
+    font-size: 10px;
+  }
+}
+
+@container (max-width: 120px) {
+  .photo-top-badges.has-similar ~ .select-photo {
+    top: calc((100% - var(--frame-h, 100%)) / 2 + 30px);
+  }
+}
+
+@container (max-width: 72px) {
+  .photo-top-badges.has-similar {
+    top: calc((100% - var(--frame-h, 100%)) / 2 + 4px);
+    left: calc((100% - var(--frame-w, 100%)) / 2 + 4px);
+    max-width: calc(var(--frame-w, 100%) - 8px);
+    gap: 2px;
+  }
+
+  .photo-top-badges.has-similar .photo-kind,
+  .photo-similar {
+    height: 18px;
+    padding: 2px;
+    gap: 1px;
+    font-size: 9px;
+  }
+
+  .photo-top-badges.has-similar svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  .photo-top-badges.has-similar ~ .select-photo {
+    top: calc((100% - var(--frame-h, 100%)) / 2 + 24px);
+    width: 18px;
+    height: 18px;
+  }
+
+  .photo-top-badges.has-similar:has(.photo-kind) ~ .select-photo {
+    top: calc((100% - var(--frame-h, 100%)) / 2 + 4px);
+  }
 }
 
 .photo-duration {

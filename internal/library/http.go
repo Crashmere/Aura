@@ -250,11 +250,16 @@ func (l *Library) list(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, e)
 		return
 	}
+	rows.Close()
 	next := ""
 	if len(items) > limit {
 		items = items[:limit]
 		a := items[len(items)-1]
 		next = a.CapturedAt + "|" + a.ID
+	}
+	if e = l.addAssetSimilarCounts(r.Context(), items); e != nil {
+		fail(w, 500, e)
+		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "next": next})
 }

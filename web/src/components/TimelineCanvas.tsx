@@ -12,6 +12,7 @@ import React, {
 import {
   Check,
   CircleCheck,
+  Copy,
   Image as ImageIcon,
   Layers3,
   LoaderCircle,
@@ -421,6 +422,7 @@ export function PhotoTile({
   selected = false,
   selecting = false,
   onToggleSelect,
+  onOpenSimilar,
   disabled = false,
   originalAspect = false,
 }: {
@@ -429,6 +431,7 @@ export function PhotoTile({
   selected?: boolean;
   selecting?: boolean;
   onToggleSelect?: (e: MouseEvent<HTMLButtonElement>) => void;
+  onOpenSimilar?: () => void;
   disabled?: boolean;
   originalAspect?: boolean;
 }) {
@@ -457,6 +460,12 @@ export function PhotoTile({
     "--photo-natural-height": `${Math.min(1, 1 / aspect) * 100}%`,
     "--photo-crop-scale": Math.max(aspect, 1 / aspect),
   } as CSSProperties;
+
+  const dhashCount = asset.similarCounts?.dhash || 0;
+  const dinoCount = asset.similarCounts?.dino || 0;
+  const showSimilar = !!onOpenSimilar && !asset.trashedAt && !asset.deletionPending &&
+    (dhashCount > 0 || dinoCount > 0);
+  const similarLabel = `相似照片${dhashCount ? `，算法判定 ${dhashCount} 张` : ""}${dinoCount ? `，智能推荐 ${dinoCount} 张` : ""}`;
 
   useEffect(() => {
     setBroken(false);
@@ -548,17 +557,6 @@ export function PhotoTile({
 
           <div className="photo-shade" />
 
-          {asset.kind === "live" && (
-            <span className="photo-kind">
-              <LiveRingsIcon size={13} />
-              <span>实况</span>
-            </span>
-          )}
-          {asset.kind === "video" && !asset.duration && (
-            <span className="photo-kind">
-              <Video size={13} />
-            </span>
-          )}
           {asset.kind === "video" && !!asset.duration && (
             <span className="photo-duration">{formatDurationClock(asset.duration)}</span>
           )}
@@ -581,6 +579,32 @@ export function PhotoTile({
           )}
         </div>
       </button>
+
+      <div className={`photo-top-badges ${showSimilar ? "has-similar" : ""}`}>
+        {asset.kind === "live" && (
+          <span className="photo-kind">
+            <LiveRingsIcon size={13} />
+            <span>实况</span>
+          </span>
+        )}
+        {asset.kind === "video" && !asset.duration && !showSimilar && (
+          <span className="photo-kind"><Video size={13} /></span>
+        )}
+        {showSimilar && (
+          <button type="button" className="photo-similar" disabled={disabled}
+            aria-label={similarLabel} title={similarLabel}
+            onClick={(event) => {
+              event.stopPropagation();
+              abortSpeculativePreloads();
+              onOpenSimilar?.();
+            }}>
+            <Copy size={13} aria-hidden="true" />
+            {dhashCount > 0 && <span className="photo-similar-dhash">{dhashCount}</span>}
+            {dhashCount > 0 && dinoCount > 0 && <span className="photo-similar-divider" aria-hidden="true" />}
+            {dinoCount > 0 && <span className="photo-similar-dino">{dinoCount}</span>}
+          </button>
+        )}
+      </div>
 
       <div className="photo-albums">
         <AssetAlbumBadges asset={asset} />
@@ -650,6 +674,7 @@ export function VirtualizedTimelineCanvas({
   onToggleGroup,
   onToggleAsset,
   onOpenAsset,
+  onOpenSimilar,
 }: {
   groups: DayAssetGroup[];
   columns: number;
@@ -660,6 +685,7 @@ export function VirtualizedTimelineCanvas({
   onToggleGroup: (items: CatalogAsset[]) => void;
   onToggleAsset: (id: string, shiftRange: boolean) => void;
   onOpenAsset: (asset: CatalogAsset) => void;
+  onOpenSimilar: (asset: CatalogAsset) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
@@ -870,6 +896,7 @@ export function VirtualizedTimelineCanvas({
                   selecting={selecting}
                   disabled={busy}
                   onToggleSelect={(e) => onToggleAsset(asset.id, e.shiftKey)}
+                  onOpenSimilar={() => onOpenSimilar(asset)}
                   onClick={(e) => {
                     if (selecting || e.shiftKey || e.ctrlKey || e.metaKey) {
                       e.preventDefault();

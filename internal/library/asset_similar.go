@@ -16,6 +16,66 @@ type assetSimilarCursor struct {
 	Score    float32 `json:"score"`
 }
 
+type assetSimilarCounts struct {
+	DHash int `json:"dhash"`
+	DINO  int `json:"dino"`
+}
+
+func (l *Library) addAssetSimilarCounts(ctx context.Context, assets []Asset) error {
+	eligible := false
+	for _, asset := range assets {
+		eligible = eligible || asset.TrashedAt == "" && !asset.DeletionPending
+	}
+	if !eligible {
+		return nil
+	}
+	value, err := l.cachedCatalog(ctx, "dhash-index", "library", func() (any, error) { return l.buildDHashIndex(ctx) })
+	if err != nil {
+		return err
+	}
+	index := value.(*dhashIndex)
+	ignored, err := l.ignoredPairs()
+	if err != nil {
+		return err
+	}
+	// Aggregate the existing DINO snapshot once; dHash lookup stays bounded to this page.
+	value, err = l.cachedCatalog(ctx, "dino-asset-counts", "review", func() (any, error) {
+		value, err := l.cachedCatalog(ctx, "dino-pairs", "review", func() (any, error) { return l.buildDINOPairs(ctx) })
+		if err != nil {
+			return nil, err
+		}
+		counts := map[string]int{}
+		for _, pair := range value.([]similarPair) {
+			counts[pair.Left]++
+			counts[pair.Right]++
+		}
+		return counts, nil
+	})
+	if err != nil {
+		return err
+	}
+	dino := value.(map[string]int)
+	for i := range assets {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		asset := &assets[i]
+		if asset.TrashedAt != "" || asset.DeletionPending {
+			continue
+		}
+		counts := &assetSimilarCounts{DINO: dino[asset.ID]}
+		if position, exists := index.byID[asset.ID]; exists {
+			for _, match := range index.findMatches(position, false) {
+				if !ignored[pairKey(asset.ID, match.Item.ID)] {
+					counts.DHash++
+				}
+			}
+		}
+		asset.SimilarCounts = counts
+	}
+	return nil
+}
+
 func (l *Library) assetSimilar(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	q := r.URL.Query()

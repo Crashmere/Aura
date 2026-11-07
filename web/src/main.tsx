@@ -88,6 +88,7 @@ import { LightboxStudio } from "./components/LightboxStudio";
 import { PipelineTaskCenter } from "./components/PipelineCenter";
 import { CurrentAlbumContext } from "./components/AssetAlbumBadges";
 import { MergePhotosModal } from "./components/MergePhotosModal";
+import { SimilarPhotosModal } from "./components/SimilarPhotosModal";
 import {
   type DayAssetGroup,
   GridDensityControls,
@@ -305,6 +306,9 @@ function AuraApplication() {
   });
   const [ignoringKey, setIgnoringKey] = useState("");
   const [lastIgnoredPair, setLastIgnoredPair] = useState<CandidatePair | null>(null);
+  const [similarAsset, setSimilarAsset] = useState<CatalogAsset | null>(null);
+
+  useEffect(() => setSimilarAsset(null), [route.view, route.album]);
 
   const gridPrefs = useGridDisplayPreferences();
   const uploadActivity = useSyncExternalStore(subscribeUploadEngine, getUploadActivitySummary);
@@ -609,13 +613,13 @@ function AuraApplication() {
   useEffect(() => {
     const hasActiveWork =
       (telemetry?.queued || 0) > 0 ||
-      (telemetry?.similarityIndex?.state === "processing" && route.view === "similar");
+      ((telemetry?.similarityIndex?.pending || 0) > 0 && (isGalleryView || route.view === "similar"));
     if (!hasActiveWork) return;
     const t = setInterval(() => {
       if (!document.hidden) void refreshBoundedCatalog();
     }, 4500);
     return () => clearInterval(t);
-  }, [telemetry?.queued, telemetry?.similarityIndex?.state, route.view, refreshBoundedCatalog]);
+  }, [telemetry?.queued, telemetry?.similarityIndex?.pending, isGalleryView, route.view, refreshBoundedCatalog]);
 
   // Infinite scroll pagination trigger for gallery
   useEffect(() => {
@@ -1406,6 +1410,7 @@ function AuraApplication() {
                     busy={batchBusy}
                     onToggleGroup={toggleSelectDayGroup}
                     onToggleAsset={toggleSelectAsset}
+                    onOpenSimilar={setSimilarAsset}
                     onOpenAsset={(item) =>
                       updateRoute((prev) => ({ ...prev, asset: item.id }), "push")
                     }
@@ -1602,6 +1607,21 @@ function AuraApplication() {
             }}
           />
         )}
+      </MotionPresence>
+
+      <MotionPresence present={!!similarAsset} variant="panel">
+        {similarAsset && <SimilarPhotosModal asset={similarAsset}
+          currentAlbumId={route.view === "albums" ? route.album : undefined}
+          onClose={() => setSimilarAsset(null)}
+          onOpenAsset={(target) => {
+            setSimilarAsset(null);
+            setOpenAssetObj(target);
+            updateRoute((prev) => ({ ...prev, asset: target.id }), "push");
+          }}
+          onCompare={(target) => {
+            setSimilarAsset(null);
+            setComparePair({ left: similarAsset, right: target });
+          }} />}
       </MotionPresence>
 
       {/* Lightbox Viewer & Inspector */}
