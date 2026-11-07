@@ -143,9 +143,9 @@ function ModuleIcon({ id }: { id: WorkspaceViewId }) {
     case "merged":
       return <Layers3 size={17} />;
     case "grouped":
-      return <Sparkles size={17} />;
-    case "similar":
       return <Copy size={17} />;
+    case "similar":
+      return <Sparkles size={17} />;
     case "jobs":
       return <ListChecks size={17} />;
     case "trash":
