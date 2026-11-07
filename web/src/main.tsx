@@ -1204,8 +1204,9 @@ function AuraApplication() {
             />
           </CollapsibleRegion>
 
-          {/* Collapsible Month Timeline Strip */}
+          {/* Floating Month Timeline Strip */}
           <CollapsibleRegion
+            className="month-scrubber-overlay"
             open={monthRailOpen && months.length > 0 && isGalleryView}
           >
             <div
