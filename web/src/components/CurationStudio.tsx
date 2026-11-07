@@ -9,6 +9,8 @@ import React, {
 } from "react";
 import {
   ArrowLeftRight,
+  ChevronLeft,
+  ChevronRight,
   Columns2,
   Copy,
   History,
@@ -694,7 +696,9 @@ export function SimilarWorkspaceView({
   pairs,
   assetsMap,
   counts,
-  total,
+  paginationTotal,
+  pageSize,
+  onSelectPageSize,
   resultsSource,
   resultsVideo,
   hasResults,
@@ -709,7 +713,7 @@ export function SimilarWorkspaceView({
   loading,
   ignoringKey,
   lastIgnoredPair,
-  onTurnDinoPage,
+  onSelectDinoPage,
   onAppendDhash,
   onOpenHistory,
   onOpenAsset,
@@ -725,7 +729,9 @@ export function SimilarWorkspaceView({
   pairs: CandidatePair[];
   assetsMap: Record<string, CatalogAsset>;
   counts?: Record<"dhash" | "dino", number>;
-  total: number;
+  paginationTotal?: number;
+  pageSize: number;
+  onSelectPageSize: (size: number) => void;
   resultsSource: "dhash" | "dino";
   resultsVideo: boolean;
   hasResults: boolean;
@@ -740,7 +746,7 @@ export function SimilarWorkspaceView({
   loading: boolean;
   ignoringKey: string;
   lastIgnoredPair: CandidatePair | null;
-  onTurnDinoPage: (delta: -1 | 1) => void;
+  onSelectDinoPage: (pageIndex: number) => void;
   onAppendDhash: () => void;
   onOpenHistory: () => void;
   onOpenAsset: (asset: CatalogAsset) => void;
@@ -752,26 +758,42 @@ export function SimilarWorkspaceView({
   const tabsIndicator = useSlidingIndicator(source, ".active");
   const mediaIndicator = useSlidingIndicator(video ? "video" : "photo", ".active");
   const resultsDisabled = loading || resultsStale || !!error;
+  const pageCount = Math.max(1, Math.ceil((paginationTotal || 0) / pageSize));
+  const currentPage = Math.min(pageCount, pageIndex + 1);
+  const windowStart = Math.max(2, Math.min(currentPage - 1, pageCount - 3));
+  const pageNumbers = pageCount <= 7
+    ? Array.from({ length: pageCount }, (_, i) => i + 1)
+    : [1, windowStart, windowStart + 1, windowStart + 2, pageCount];
+  const [jumpPage, setJumpPage] = useState("");
+  useEffect(() => setJumpPage(""), [pageIndex, pageSize, video, source]);
+  const jumpTarget = Number(jumpPage);
+  const validJump = Number.isInteger(jumpTarget) && jumpTarget >= 1 && jumpTarget <= pageCount;
   const dinoPager = (
-    <nav className="similar-pagination" aria-label="智能推荐分页">
-      <ActionButton
-        disabled={resultsDisabled || !!ignoringKey || pageIndex === 0}
-        onClick={() => onTurnDinoPage(-1)}
-      >
-        上一页
-      </ActionButton>
-      <span className="similar-page-status" aria-live="polite" aria-busy={loading}>
-        <span>第 {pageIndex + 1} 页</span>
-        <span className="similar-page-loading">
-          {loading && !resultsStale && <LoaderCircle size={14} className="spin" aria-label="正在加载" />}
-        </span>
+    <nav className="similar-toolbar-pagination" aria-label="智能推荐分页" aria-busy={loading}>
+      <div className="similar-page-buttons">
+        <button className="btn" type="button" aria-label="上一页" title="上一页"
+          disabled={resultsDisabled || !!ignoringKey || currentPage === 1}
+          onClick={() => onSelectDinoPage(currentPage - 2)}><ChevronLeft size={16} /></button>
+        {pageNumbers.map((page, index) => <React.Fragment key={page}>
+          {index > 0 && page - pageNumbers[index - 1] > 1 && <span className="similar-page-gap">...</span>}
+          <button type="button" className={`btn${page === currentPage ? " btn-primary" : ""}`}
+            aria-label={`第 ${page} 页`} aria-current={page === currentPage ? "page" : undefined}
+            disabled={resultsDisabled || !!ignoringKey || paginationTotal === undefined || paginationTotal === 0}
+            onClick={() => onSelectDinoPage(page - 1)}>{page}</button>
+        </React.Fragment>)}
+        <button className="btn" type="button" aria-label="下一页" title="下一页"
+          disabled={resultsDisabled || !!ignoringKey || currentPage === pageCount}
+          onClick={() => onSelectDinoPage(currentPage)}><ChevronRight size={16} /></button>
+      </div>
+      <label className="similar-page-size">每页
+        <select aria-label="每页候选组数" value={pageSize} disabled={!!ignoringKey}
+          onChange={event => onSelectPageSize(Number(event.target.value))}>
+          {[20, 50, 100].map(size => <option key={size} value={size}>{size} 组</option>)}
+        </select>
+      </label>
+      <span className="similar-page-summary" aria-live="polite">
+        共 {paginationTotal?.toLocaleString("zh-CN") ?? "-"} 组 / {paginationTotal === undefined ? "-" : pageCount} 页
       </span>
-      <ActionButton
-        disabled={resultsDisabled || !!ignoringKey || !hasNextPage}
-        onClick={() => onTurnDinoPage(1)}
-      >
-        下一页
-      </ActionButton>
     </nav>
   );
 
@@ -779,6 +801,7 @@ export function SimilarWorkspaceView({
     <CurrentAlbumContext value="">
     <div className="similar-workspace">
       <div className="similar-review-toolbar">
+        <div className="similar-primary-toolbar">
         <div className="similar-mode-switches">
           <div
             className="similar-tabs motion-tabs"
@@ -841,13 +864,23 @@ export function SimilarWorkspaceView({
             </button>
           </div>
         </div>
+        {source === "dino" && dinoPager}
+        </div>
+        <div className="similar-secondary-toolbar">
         {source === "dino" && <div className="similar-score-toolbar">
           <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />
         </div>}
+        {source === "dino" && <form className="similar-page-jump" onSubmit={event => {
+          event.preventDefault();
+          if (!resultsDisabled && !ignoringKey && validJump) onSelectDinoPage(jumpTarget - 1);
+        }}>
+          <label>跳至<input type="number" min={1} max={pageCount} aria-label="跳转页码"
+            placeholder={String(currentPage)} value={jumpPage} disabled={resultsDisabled || !!ignoringKey}
+            onChange={event => setJumpPage(event.target.value)} />页</label>
+          <ActionButton type="submit" disabled={resultsDisabled || !!ignoringKey || !validJump}>前往</ActionButton>
+        </form>}
         <span className="similar-switch-status" role="status" aria-busy={loading}>
-          {loading ? <LoaderCircle size={14} className="spin" aria-label="正在更新候选" /> :
-            source === "dino" && !resultsStale && !error && (scoreRange[0] > .7 || scoreRange[1] < 1)
-              ? `${total.toLocaleString("zh-CN")} 组` : ""}
+          {loading && <LoaderCircle size={14} className="spin" aria-label="正在更新候选" />}
         </span>
         <button
           type="button"
@@ -857,6 +890,7 @@ export function SimilarWorkspaceView({
           <History size={14} />
           <span>已确认不同</span>
         </button>
+        </div>
       </div>
 
       <MotionPresence present={!!dinoIndex} variant="panel">
@@ -887,7 +921,6 @@ export function SimilarWorkspaceView({
 
       <div className={`similar-results${resultsStale && hasResults ? " is-updating" : ""}`}
         aria-busy={loading} inert={resultsStale || undefined}>
-      {resultsSource === "dino" && (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager}
 
       <MotionPresence present={!!lastIgnoredPair} variant="panel">
         {lastIgnoredPair && (
@@ -1003,9 +1036,7 @@ export function SimilarWorkspaceView({
         </div>
       )}
 
-      {resultsSource === "dino"
-        ? (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager
-        : hasNextPage && (
+      {resultsSource === "dhash" && hasNextPage && (
             <div className="similar-more-wrap">
               <ActionButton disabled={resultsDisabled || !!ignoringKey} onClick={onAppendDhash}>
                 {loading ? "正在加载" : "加载更多候选"}

@@ -55,9 +55,89 @@
 
 .similar-review-toolbar {
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.similar-primary-toolbar,
+.similar-secondary-toolbar {
+  display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.similar-toolbar-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+  flex: 0 1 478px;
+  min-height: 30px;
+  max-width: 100%;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .similar-toolbar-pagination {
+    min-height: 70px;
+    align-content: center;
+  }
+}
+
+.similar-page-buttons,
+.similar-page-size,
+.similar-page-jump,
+.similar-page-jump label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.similar-page-buttons {
+  gap: 4px;
+}
+
+.similar-page-buttons .btn {
+  min-width: 28px;
+  height: 30px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.similar-page-gap,
+.similar-page-summary {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.similar-page-size select,
+.similar-page-jump input {
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 0 6px;
+}
+
+.similar-page-jump {
+  font-size: 12px;
+}
+
+.similar-page-jump input {
+  width: 54px;
+}
+
+.similar-page-jump .btn {
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .similar-mode-switches {
@@ -70,6 +150,10 @@
 
 .similar-mode-switches .similar-tabs {
   flex-wrap: nowrap;
+}
+
+.similar-primary-toolbar .similar-tabs button {
+  padding: 0 10px;
 }
 
 .similar-mode-switches .similar-count {

@@ -163,14 +163,19 @@ func (l *Library) similarVideo(w http.ResponseWriter, r *http.Request) {
 			pairs = append(pairs, pair)
 		}
 	}
-	start := 0
+	limit := pageLimit(q, 20, 100)
+	start, page, err := similarNumberedPage(q, len(pairs), limit)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
 	if cursor.Left != "" {
 		start = sort.Search(len(pairs), func(i int) bool {
 			p := pairs[i]
 			return p.Score < cursor.Score || p.Score == cursor.Score && (p.Left > cursor.Left || p.Left == cursor.Left && p.Right > cursor.Right)
 		})
 	}
-	end := min(len(pairs), start+pageLimit(q, 20, 100))
+	end := min(len(pairs), start+limit)
 	items := pairs[start:end]
 	next := ""
 	if end < len(pairs) && len(items) > 0 {
@@ -185,5 +190,9 @@ func (l *Library) similarVideo(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": items, "assets": cards, "counts": counts, "total": len(pairs), "next": next, "index": l.videoSimilarityStatus()})
+	out := map[string]any{"items": items, "assets": cards, "counts": counts, "total": len(pairs), "next": next, "index": l.videoSimilarityStatus()}
+	if page > 0 {
+		out["page"], out["pageSize"] = page, limit
+	}
+	writeJSON(w, 200, out)
 }

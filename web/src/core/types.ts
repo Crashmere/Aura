@@ -237,6 +237,8 @@ export interface AssetSimilarPage extends CursorPage<CandidatePair> {
 
 export interface SimilarCandidatesPage extends AssetSimilarPage {
   counts: Record<"dhash" | "dino", number>;
+  page?: number;
+  pageSize?: number;
 }
 
 export type CurationHistoryType = "similar" | "split";

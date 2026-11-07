@@ -146,7 +146,7 @@ func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 		next = base64.RawURLEncoding.EncodeToString([]byte(cursors[limit-1]))
 	}
-	l.writeSimilar(w, r, items, next, paged, false, -1)
+	l.writeSimilar(w, r, items, next, paged, false, -1, 0, limit)
 }
 
 func similarityScoreRange(q url.Values) (float32, float32, error) {
@@ -172,6 +172,19 @@ func filterSimilarScores(pairs []similarPair, minScore, maxScore float32) []simi
 	start := sort.Search(len(pairs), func(i int) bool { return min(pairs[i].Score, 1) <= maxScore })
 	end := start + sort.Search(len(pairs)-start, func(i int) bool { return min(pairs[start+i].Score, 1) < minScore })
 	return pairs[start:end]
+}
+
+func similarNumberedPage(q url.Values, total, limit int) (start, page int, err error) {
+	if !q.Has("page") {
+		return 0, 0, nil
+	}
+	page, err = strconv.Atoi(q.Get("page"))
+	if err != nil || page < 1 || q.Get("cursor") != "" {
+		return 0, 0, fmt.Errorf("页码须为正整数，且不能与游标同时使用")
+	}
+	// A dismissal or index update can remove the requested last page.
+	page = min(page, max(1, (total+limit-1)/limit))
+	return (page - 1) * limit, page, nil
 }
 
 func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +217,11 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pairs := filterSimilarScores(value.([]similarPair), minScore, maxScore)
-	start := 0
+	start, page, err := similarNumberedPage(q, len(pairs), limit)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
 	if cursor.Left != "" {
 		start = sort.Search(len(pairs), func(i int) bool {
 			p := pairs[i]
@@ -218,7 +235,7 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 		last := items[len(items)-1]
 		next = base64.RawURLEncoding.EncodeToString([]byte(marshal(map[string]any{"score": last.Score, "left": last.Left, "right": last.Right})))
 	}
-	l.writeSimilar(w, r, items, next, paged, true, len(pairs))
+	l.writeSimilar(w, r, items, next, paged, true, len(pairs), page, limit)
 }
 
 func (l *Library) buildDINOPairs(ctx context.Context) ([]similarPair, error) {
@@ -297,7 +314,7 @@ func (l *Library) buildDINOPairs(ctx context.Context) ([]similarPair, error) {
 	return items, nil
 }
 
-func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []similarPair, next string, paged, dino bool, total int) {
+func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []similarPair, next string, paged, dino bool, total, page, pageSize int) {
 	if !paged {
 		writeJSON(w, 200, items)
 		return
@@ -325,6 +342,9 @@ func (l *Library) writeSimilar(w http.ResponseWriter, r *http.Request, items []s
 		total = counts[source]
 	}
 	out := map[string]any{"items": items, "next": next, "assets": cards, "total": total, "counts": counts}
+	if page > 0 {
+		out["page"], out["pageSize"] = page, pageSize
+	}
 	if dino {
 		out["index"] = l.dinoSnapshot()
 	}
