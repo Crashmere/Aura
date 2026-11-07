@@ -165,28 +165,9 @@ function AuraApplication() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [monthRailOpen, setMonthRailOpen] = useState(false);
-  const headerRef = useRef<HTMLElement>(null);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const navigationIndicator = useSlidingIndicator<HTMLElement>(route.view);
   const monthIndicator = useSlidingIndicator(`${route.from}:${route.to}`);
-
-  useLayoutEffect(() => {
-    const header = headerRef.current;
-    const main = header?.parentElement;
-    if (!header || !main) return;
-
-    // The command header can wrap, so the month rail must track its actual height.
-    const updateHeight = () => {
-      main.style.setProperty("--sticky-header-height", `${header.getBoundingClientRect().height}px`);
-    };
-    updateHeight();
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(header);
-    return () => {
-      observer.disconnect();
-      main.style.removeProperty("--sticky-header-height");
-    };
-  }, []);
 
   // Telemetry & Catalog
   const [telemetry, setTelemetry] = useState<LibraryTelemetry>();
@@ -1020,257 +1001,258 @@ function AuraApplication() {
 
       {/* Main Content Stage */}
       <div className="aura-main">
-        {/* Sticky Command Header */}
-        <header className="aura-header" ref={headerRef}>
-          <div className="header-left">
-            <button
-              type="button"
-              className="icon-btn mobile-menu-trigger"
-              aria-label="打开导航菜单"
-              onClick={() => setMobileNavOpen(true)}
-            >
-              <Menu size={20} />
-            </button>
-
-            {route.view === "albums" && route.album ? (
-              <div className="album-breadcrumb" key={`album:${route.album}`}>
-                <button
-                  type="button"
-                  className="btn btn-subtle"
-                  title="返回相片集 (Esc)"
-                  onClick={returnToAlbums}
-                >
-                  <ArrowLeft size={16} />
-                  <span>相片集</span>
-                </button>
-                {activeAlbumDetail && (
-                  <RoundIconButton
-                    title="重命名相片集"
-                    onClick={() => setAlbumModal({ kind: "rename", album: activeAlbumDetail })}
-                  >
-                    <Pencil size={16} />
-                  </RoundIconButton>
-                )}
-                <h1>{activeAlbumDetail?.name || "相片集"}</h1>
-                {activeAlbumDetail && (
-                  <small className="header-count-pill">{activeAlbumDetail.count} 项</small>
-                )}
-              </div>
-            ) : (
-              <div className="header-title-block" key={`view:${route.view}`}>
-                <h1>{VIEW_TITLES[route.view]}</h1>
-                {currentModule.subtitle && (
-                  <p className="header-subtitle">{currentModule.subtitle}</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="header-controls">
-            {currentModule.supportsSearch && !isAlbumOverview && (
-              <div className="header-search">
-                <Search size={15} />
-                <input
-                  type="search"
-                  aria-label="搜索照片文件名、相机或元数据"
-                  placeholder="搜索文件名、相机、镜头…"
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                />
-                {searchDraft && (
-                  <button
-                    type="button"
-                    aria-label="清空搜索"
-                    onClick={() => {
-                      setSearchDraft("");
-                      updateRoute((prev) => ({ ...prev, query: "" }), "replace");
-                    }}
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-            )}
-
-            {currentModule.supportsTimelineFilters && !isAlbumOverview && (
-              <>
-                <button
-                  ref={filterBtnRef}
-                  type="button"
-                  className={`btn ${activeChips.length || route.from || route.to ? "btn-active-filter" : ""}`}
-                  onClick={() => setFilterSheetOpen(true)}
-                >
-                  <SlidersHorizontal size={15} />
-                  <span>筛选</span>
-                  {activeChips.length > 0 && (
-                    <small className="chip-counter">{activeChips.length}</small>
-                  )}
-                </button>
-
-                {months.length > 0 && (
-                  <button
-                    type="button"
-                    className={`btn ${monthRailOpen ? "btn-active-filter" : ""}`}
-                    onClick={() => setMonthRailOpen((v) => !v)}
-                    title="按月份快速定位"
-                  >
-                    <CalendarDays size={15} />
-                    <span>月份</span>
-                  </button>
-                )}
-
-                <GridDensityControls
-                  zoom={gridPrefs.zoom}
-                  maxZoom={gridPrefs.maxZoom}
-                  desktopColumnSteps={gridPrefs.desktopColumnSteps}
-                  mobileColumnSteps={gridPrefs.mobileColumnSteps}
-                  onZoomChange={gridPrefs.setZoom}
-                  layout={gridPrefs.layout}
-                  onLayoutChange={gridPrefs.setLayout}
-                />
-              </>
-            )}
-
-            {isAlbumOverview && (
-              <ActionButton onClick={() => setAlbumModal({ kind: "group-create" })}>
-                <FolderPlus size={16} />
-                <span>新建分组</span>
-              </ActionButton>
-            )}
-            {isAlbumOverview && (
-              <ActionButton variant="primary" onClick={() => setAlbumModal({ kind: "create" })}>
-                <Plus size={16} />
-                <span>新建相片集</span>
-              </ActionButton>
-            )}
-
-            {route.view === "albums" && route.album && activeAlbumDetail && (
-              <div className="album-header-actions">
-                <ActionButton
-                  className="album-group-badge"
-                  title="移动到分组"
-                  onClick={() => setAlbumModal({ kind: "move", albums: [activeAlbumDetail] })}
-                >
-                  <FolderOpen size={15} />
-                  <span>{albumGroups.find((group) => group.id === activeAlbumDetail.groupId)?.name || "未分组"}</span>
-                </ActionButton>
-                <ActionButton
-                  variant="primary"
-                  onClick={() => setAlbumModal({ kind: "pick", album: activeAlbumDetail })}
-                >
-                  <Plus size={15} />
-                  <span>添加照片</span>
-                </ActionButton>
-                <RoundIconButton
-                  title="删除相片集"
-                  onClick={() => setAlbumModal({ kind: "delete", album: activeAlbumDetail })}
-                >
-                  <Trash2 size={16} />
-                </RoundIconButton>
-              </div>
-            )}
-
-            {(route.view === "automatic" ||
-              route.view === "merged" ||
-              route.view === "grouped") && (
-              <ActionButton onClick={() => setHistoryKind("split")}>
-                <History size={15} />
-                <span>分离记录</span>
-              </ActionButton>
-            )}
-
-            {currentModule.supportsBatchSelection && !isAlbumOverview && assets.length > 0 && (
-              <ActionButton
-                variant={selecting ? "primary" : "default"}
-                onClick={() => {
-                  if (selecting) {
-                    setSelecting(false);
-                    setSelectedIds(new Set());
-                  } else {
-                    setSelecting(true);
-                  }
-                }}
+        <div className="aura-command-region">
+          {/* Command Header */}
+          <header className="aura-header">
+            <div className="header-left">
+              <button
+                type="button"
+                className="icon-btn mobile-menu-trigger"
+                aria-label="打开导航菜单"
+                onClick={() => setMobileNavOpen(true)}
               >
-                {selecting ? `退出选择 (${selectedIds.size})` : "选择"}
-              </ActionButton>
-            )}
-          </div>
-        </header>
+                <Menu size={20} />
+              </button>
 
-        {/* Active Filters Strip */}
-        <CollapsibleRegion open={hasAnyFilter && !isAlbumOverview}>
-          <ActiveFiltersBar
-            query={route.query}
-            from={route.from}
-            to={route.to}
-            chips={activeChips}
-            isAlbumOverview={isAlbumOverview}
-            onClearSearch={() => {
-              setSearchDraft("");
-              updateRoute((prev) => ({ ...prev, query: "" }));
-            }}
-            onClearDates={() => updateRoute((prev) => ({ ...prev, from: "", to: "" }))}
-            onClearChip={(keys: FilterParameterKey[]) =>
-              updateRoute((prev) => {
-                const nextFilters = { ...prev.filters };
-                for (const k of keys) nextFilters[k] = "";
-                return { ...prev, filters: nextFilters };
-              })
-            }
-            onClearAll={() => {
-              setSearchDraft("");
-              updateRoute((prev) => ({
-                ...prev,
-                query: "",
-                from: "",
-                to: "",
-                filters: createEmptyFilters(),
-              }));
-            }}
-          />
-        </CollapsibleRegion>
+              {route.view === "albums" && route.album ? (
+                <div className="album-breadcrumb" key={`album:${route.album}`}>
+                  <button
+                    type="button"
+                    className="btn btn-subtle"
+                    title="返回相片集 (Esc)"
+                    onClick={returnToAlbums}
+                  >
+                    <ArrowLeft size={16} />
+                    <span>相片集</span>
+                  </button>
+                  {activeAlbumDetail && (
+                    <RoundIconButton
+                      title="重命名相片集"
+                      onClick={() => setAlbumModal({ kind: "rename", album: activeAlbumDetail })}
+                    >
+                      <Pencil size={16} />
+                    </RoundIconButton>
+                  )}
+                  <h1>{activeAlbumDetail?.name || "相片集"}</h1>
+                  {activeAlbumDetail && (
+                    <small className="header-count-pill">{activeAlbumDetail.count} 项</small>
+                  )}
+                </div>
+              ) : (
+                <div className="header-title-block" key={`view:${route.view}`}>
+                  <h1>{VIEW_TITLES[route.view]}</h1>
+                  {currentModule.subtitle && (
+                    <p className="header-subtitle">{currentModule.subtitle}</p>
+                  )}
+                </div>
+              )}
+            </div>
 
-        {/* Collapsible Month Timeline Strip */}
-        <CollapsibleRegion
-          open={monthRailOpen && months.length > 0 && isGalleryView}
-          className="month-filter-region"
-        >
-          <div
-            className="month-scrubber-bar motion-tabs"
-            ref={monthIndicator.ref}
-            style={monthIndicator.style}
-            aria-label="按拍摄月份筛选"
-          >
-            <button
-              type="button"
-              className={!route.from && !route.to ? "is-active" : ""}
-              onClick={() => updateRoute((prev) => ({ ...prev, from: "", to: "" }))}
-            >
-              <span>全部时间</span>
-            </button>
-            {months.map((m) => {
-              const bounds = resolveMonthBounds(m.month);
-              const isSelected = route.from === bounds.from && route.to === bounds.to;
-              return (
-                <button
-                  type="button"
-                  key={m.month}
-                  className={isSelected ? "is-active" : ""}
-                  onClick={() =>
-                    updateRoute((prev) =>
-                      isSelected
-                        ? { ...prev, from: "", to: "" }
-                        : { ...prev, from: bounds.from, to: bounds.to },
-                    )
-                  }
+            <div className="header-controls">
+              {currentModule.supportsSearch && !isAlbumOverview && (
+                <div className="header-search">
+                  <Search size={15} />
+                  <input
+                    type="search"
+                    aria-label="搜索照片文件名、相机或元数据"
+                    placeholder="搜索文件名、相机、镜头…"
+                    value={searchDraft}
+                    onChange={(e) => setSearchDraft(e.target.value)}
+                  />
+                  {searchDraft && (
+                    <button
+                      type="button"
+                      aria-label="清空搜索"
+                      onClick={() => {
+                        setSearchDraft("");
+                        updateRoute((prev) => ({ ...prev, query: "" }), "replace");
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {currentModule.supportsTimelineFilters && !isAlbumOverview && (
+                <>
+                  <button
+                    ref={filterBtnRef}
+                    type="button"
+                    className={`btn ${activeChips.length || route.from || route.to ? "btn-active-filter" : ""}`}
+                    onClick={() => setFilterSheetOpen(true)}
+                  >
+                    <SlidersHorizontal size={15} />
+                    <span>筛选</span>
+                    {activeChips.length > 0 && (
+                      <small className="chip-counter">{activeChips.length}</small>
+                    )}
+                  </button>
+
+                  {months.length > 0 && (
+                    <button
+                      type="button"
+                      className={`btn ${monthRailOpen ? "btn-active-filter" : ""}`}
+                      onClick={() => setMonthRailOpen((v) => !v)}
+                      title="按月份快速定位"
+                    >
+                      <CalendarDays size={15} />
+                      <span>月份</span>
+                    </button>
+                  )}
+
+                  <GridDensityControls
+                    zoom={gridPrefs.zoom}
+                    maxZoom={gridPrefs.maxZoom}
+                    desktopColumnSteps={gridPrefs.desktopColumnSteps}
+                    mobileColumnSteps={gridPrefs.mobileColumnSteps}
+                    onZoomChange={gridPrefs.setZoom}
+                    layout={gridPrefs.layout}
+                    onLayoutChange={gridPrefs.setLayout}
+                  />
+                </>
+              )}
+
+              {isAlbumOverview && (
+                <ActionButton onClick={() => setAlbumModal({ kind: "group-create" })}>
+                  <FolderPlus size={16} />
+                  <span>新建分组</span>
+                </ActionButton>
+              )}
+              {isAlbumOverview && (
+                <ActionButton variant="primary" onClick={() => setAlbumModal({ kind: "create" })}>
+                  <Plus size={16} />
+                  <span>新建相片集</span>
+                </ActionButton>
+              )}
+
+              {route.view === "albums" && route.album && activeAlbumDetail && (
+                <div className="album-header-actions">
+                  <ActionButton
+                    className="album-group-badge"
+                    title="移动到分组"
+                    onClick={() => setAlbumModal({ kind: "move", albums: [activeAlbumDetail] })}
+                  >
+                    <FolderOpen size={15} />
+                    <span>{albumGroups.find((group) => group.id === activeAlbumDetail.groupId)?.name || "未分组"}</span>
+                  </ActionButton>
+                  <ActionButton
+                    variant="primary"
+                    onClick={() => setAlbumModal({ kind: "pick", album: activeAlbumDetail })}
+                  >
+                    <Plus size={15} />
+                    <span>添加照片</span>
+                  </ActionButton>
+                  <RoundIconButton
+                    title="删除相片集"
+                    onClick={() => setAlbumModal({ kind: "delete", album: activeAlbumDetail })}
+                  >
+                    <Trash2 size={16} />
+                  </RoundIconButton>
+                </div>
+              )}
+
+              {(route.view === "automatic" ||
+                route.view === "merged" ||
+                route.view === "grouped") && (
+                <ActionButton onClick={() => setHistoryKind("split")}>
+                  <History size={15} />
+                  <span>分离记录</span>
+                </ActionButton>
+              )}
+
+              {currentModule.supportsBatchSelection && !isAlbumOverview && assets.length > 0 && (
+                <ActionButton
+                  variant={selecting ? "primary" : "default"}
+                  onClick={() => {
+                    if (selecting) {
+                      setSelecting(false);
+                      setSelectedIds(new Set());
+                    } else {
+                      setSelecting(true);
+                    }
+                  }}
                 >
-                  <strong>{m.month}</strong>
-                  <small>{m.count}</small>
-                </button>
-              );
-            })}
-          </div>
-        </CollapsibleRegion>
+                  {selecting ? `退出选择 (${selectedIds.size})` : "选择"}
+                </ActionButton>
+              )}
+            </div>
+          </header>
+
+          {/* Active Filters Strip */}
+          <CollapsibleRegion open={hasAnyFilter && !isAlbumOverview}>
+            <ActiveFiltersBar
+              query={route.query}
+              from={route.from}
+              to={route.to}
+              chips={activeChips}
+              isAlbumOverview={isAlbumOverview}
+              onClearSearch={() => {
+                setSearchDraft("");
+                updateRoute((prev) => ({ ...prev, query: "" }));
+              }}
+              onClearDates={() => updateRoute((prev) => ({ ...prev, from: "", to: "" }))}
+              onClearChip={(keys: FilterParameterKey[]) =>
+                updateRoute((prev) => {
+                  const nextFilters = { ...prev.filters };
+                  for (const k of keys) nextFilters[k] = "";
+                  return { ...prev, filters: nextFilters };
+                })
+              }
+              onClearAll={() => {
+                setSearchDraft("");
+                updateRoute((prev) => ({
+                  ...prev,
+                  query: "",
+                  from: "",
+                  to: "",
+                  filters: createEmptyFilters(),
+                }));
+              }}
+            />
+          </CollapsibleRegion>
+
+          {/* Collapsible Month Timeline Strip */}
+          <CollapsibleRegion
+            open={monthRailOpen && months.length > 0 && isGalleryView}
+          >
+            <div
+              className="month-scrubber-bar motion-tabs"
+              ref={monthIndicator.ref}
+              style={monthIndicator.style}
+              aria-label="按拍摄月份筛选"
+            >
+              <button
+                type="button"
+                className={!route.from && !route.to ? "is-active" : ""}
+                onClick={() => updateRoute((prev) => ({ ...prev, from: "", to: "" }))}
+              >
+                <span>全部时间</span>
+              </button>
+              {months.map((m) => {
+                const bounds = resolveMonthBounds(m.month);
+                const isSelected = route.from === bounds.from && route.to === bounds.to;
+                return (
+                  <button
+                    type="button"
+                    key={m.month}
+                    className={isSelected ? "is-active" : ""}
+                    onClick={() =>
+                      updateRoute((prev) =>
+                        isSelected
+                          ? { ...prev, from: "", to: "" }
+                          : { ...prev, from: bounds.from, to: bounds.to },
+                      )
+                    }
+                  >
+                    <strong>{m.month}</strong>
+                    <small>{m.count}</small>
+                  </button>
+                );
+              })}
+            </div>
+          </CollapsibleRegion>
+        </div>
 
         {/* Permanent Deletion Progress Banner */}
         {(route.view === "trash" || (telemetry?.pendingDeletions || 0) > 0) && (

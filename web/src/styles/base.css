@@ -540,10 +540,13 @@ a {
 }
 
 /* Header & Filter Bars */
-.aura-header {
+.aura-command-region {
   position: sticky;
   top: 0;
   z-index: 30;
+}
+
+.aura-header {
   min-height: var(--header-height);
   padding: 10px 24px;
   background: var(--bg-elevated);
@@ -700,12 +703,6 @@ a {
   border-color: transparent;
   color: var(--accent);
   font-weight: 500;
-}
-
-.month-filter-region {
-  position: sticky;
-  top: var(--sticky-header-height, var(--header-height));
-  z-index: 29;
 }
 
 .month-scrubber-bar {
