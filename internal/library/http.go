@@ -660,7 +660,8 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", f.Mime)
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": f.Name}))
 	case "source":
-		if !strings.HasPrefix(f.Mime, "video/") {
+		sourceMime := playbackSourceMime(f.Mime)
+		if sourceMime == "" {
 			http.NotFound(w, r)
 			return
 		}
@@ -669,10 +670,6 @@ func (l *Library) media(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		path = l.Object(hash)
-		sourceMime := f.Mime
-		if sourceMime == "video/quicktime" {
-			sourceMime = "video/mp4"
-		}
 		w.Header().Set("Content-Type", sourceMime)
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Name}))
 	case "thumb":

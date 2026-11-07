@@ -62,7 +62,7 @@ export interface PlaybackDescriptor {
   source?: {
     url: string;
     mime: string;
-    codecs?: string;
+    audio?: { start: number; duration?: number };
   };
   stream: { url: string };
   duration?: number;

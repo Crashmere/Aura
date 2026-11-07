@@ -14,6 +14,7 @@ import {
   PictureInPicture2,
   Play,
   RefreshCw,
+  ShieldCheck,
   StepBack,
   StepForward,
   Volume2,
@@ -1106,6 +1107,22 @@ export function StageVideoPlayer({
           </div>
 
           <div className="player-options">
+            {!framePicker && playbackRepresentation === "source" && (
+              <button
+                type="button"
+                title="使用兼容模式播放（转码）"
+                aria-label="使用兼容模式播放"
+                disabled={locked || !sourceReady}
+                onClick={() => {
+                  if (playbackRef.current?.useCompatibility()) {
+                    setErrorMsg("");
+                    setBuffering(true);
+                  }
+                }}
+              >
+                <ShieldCheck size={18} />
+              </button>
+            )}
             <button
               type="button"
               className="player-speed"

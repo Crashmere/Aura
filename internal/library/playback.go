@@ -18,9 +18,14 @@ import (
 )
 
 type playbackSource struct {
-	URL    string `json:"url"`
-	Mime   string `json:"mime"`
-	Codecs string `json:"codecs,omitempty"`
+	URL   string         `json:"url"`
+	Mime  string         `json:"mime"`
+	Audio *playbackAudio `json:"audio,omitempty"`
+}
+
+type playbackAudio struct {
+	Start    float64 `json:"start"`
+	Duration float64 `json:"duration,omitempty"`
 }
 
 type playbackDescriptor struct {
@@ -39,7 +44,8 @@ type playbackSpec struct {
 	hdrPeak                    float64
 	transfer                   string
 	colorPrimaries, colorSpace string
-	sourceCodecs               string
+	sourceMime                 string
+	sourceAudio                *playbackAudio
 }
 
 func (l *Library) playbackOriginal(hash string) (File, os.FileInfo, error) {
@@ -102,7 +108,8 @@ func (p *playbackCache) specification(ctx context.Context, l *Library, f File, s
 }
 
 func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playbackSpec, error) {
-	if _, _, err := l.playbackOriginal(hash); err != nil {
+	f, _, err := l.playbackOriginal(hash)
+	if err != nil {
 		return nil, err
 	}
 	release, err := l.acquirePlaybackCPU(ctx)
@@ -111,17 +118,13 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 	}
 	defer release()
 	output := &limitedBuffer{max: 256 << 10}
-	err = l.commandOutput(ctx, "ffprobe", output, "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=format_name,duration,start_time:stream=codec_type,codec_name,codec_tag_string,profile,width,height,pix_fmt,duration,start_time,avg_frame_rate,color_transfer,color_primaries,color_space:stream_side_data=rotation", "-of", "json", l.Object(hash))
+	err = l.commandOutput(ctx, "ffprobe", output, "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration,start_time:stream=codec_type,width,height,duration,start_time,avg_frame_rate,color_transfer,color_primaries,color_space:stream_side_data=rotation", "-of", "json", l.Object(hash))
 	if err != nil {
 		return nil, err
 	}
 	var raw struct {
 		Streams []struct {
 			Type      string `json:"codec_type"`
-			Codec     string `json:"codec_name"`
-			Tag       string `json:"codec_tag_string"`
-			Profile   string `json:"profile"`
-			Pixels    string `json:"pix_fmt"`
 			Width     int    `json:"width"`
 			Height    int    `json:"height"`
 			Duration  string `json:"duration"`
@@ -135,7 +138,6 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 			} `json:"side_data_list"`
 		} `json:"streams"`
 		Format struct {
-			Name     string `json:"format_name"`
 			Duration string `json:"duration"`
 			Start    string `json:"start_time"`
 		} `json:"format"`
@@ -144,12 +146,14 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 		return nil, err
 	}
 	spec := &playbackSpec{hash: hash, stamp: stamp, path: l.Object(hash)}
-	video, audio, audioCompatible, audioAAC := false, false, true, false
+	video := false
 	for _, stream := range raw.Streams {
-		if stream.Type == "audio" && !audio {
-			audioAAC = stream.Codec == "aac" && stream.Profile == "LC"
-			// PCM16 QuickTime Live Photos can play without converting the video.
-			audio, audioCompatible = true, audioAAC || stream.Codec == "pcm_s16le"
+		if stream.Type == "audio" && spec.sourceAudio == nil {
+			start, _ := strconv.ParseFloat(stream.Start, 64)
+			if math.IsNaN(start) || math.IsInf(start, 0) {
+				start = 0
+			}
+			spec.sourceAudio = &playbackAudio{Start: start, Duration: playbackNumber(stream.Duration)}
 		}
 		if stream.Type != "video" || video {
 			continue
@@ -176,12 +180,6 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 				spec.nativeRotation = *data.Rotation
 			}
 		}
-		if stream.Codec == "h264" && (stream.Tag == "avc1" || stream.Tag == "avc3") && (stream.Profile == "Constrained Baseline" || stream.Profile == "Baseline" || stream.Profile == "Main" || stream.Profile == "High") && (stream.Pixels == "yuv420p" || stream.Pixels == "yuvj420p") {
-			spec.sourceCodecs = stream.Tag
-		}
-		if stream.Codec == "hevc" && (stream.Tag == "hvc1" || stream.Tag == "hev1") && (stream.Profile == "Main" || stream.Profile == "Main 10") {
-			spec.sourceCodecs = stream.Tag
-		}
 	}
 	if spec.duration <= 0 {
 		spec.duration = playbackNumber(raw.Format.Duration)
@@ -189,16 +187,12 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 	if !video || spec.width <= 0 || spec.height <= 0 || spec.duration <= 0 || math.IsNaN(spec.start) || math.IsInf(spec.start, 0) {
 		return nil, errPlaybackTime
 	}
-	container := strings.Split(raw.Format.Name, ",")
-	iso := false
-	for _, name := range container {
-		iso = iso || name == "mov" || name == "mp4"
-	}
 	// Native playback exposes the original PTS, while frame APIs use time from the first frame.
-	if !iso || !audioCompatible || math.Abs(spec.start) > 0.001 {
-		spec.sourceCodecs = ""
-	} else if audioAAC && spec.sourceCodecs != "" {
-		spec.sourceCodecs += ", mp4a.40.2"
+	if math.Abs(spec.start) <= 0.001 {
+		spec.sourceMime = playbackSourceMime(f.Mime)
+	}
+	if spec.sourceAudio != nil {
+		spec.sourceAudio.Start -= spec.start
 	}
 	if spec.hdr {
 		spec.hdrPeak = l.probePlaybackHDRPeak(ctx, spec.path, spec.transfer)
@@ -207,6 +201,16 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 		return nil, err
 	}
 	return spec, nil
+}
+
+func playbackSourceMime(mime string) string {
+	if !strings.HasPrefix(mime, "video/") {
+		return ""
+	}
+	if mime == "video/quicktime" {
+		return "video/mp4"
+	}
+	return mime
 }
 
 func playbackNumber(text string) float64 {
@@ -270,8 +274,8 @@ func (l *Library) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result := playbackDescriptor{Stream: playbackSource{URL: fmt.Sprintf("/aura/media/%s/stream/index.m3u8?rotation=%d", spec.hash, rotation), Mime: "application/vnd.apple.mpegurl"}, Duration: spec.duration, FrameRate: spec.frameRate}
-	if rotation == 0 && spec.sourceCodecs != "" {
-		result.Source = &playbackSource{URL: "/aura/media/" + spec.hash + "/source?rotation=0", Mime: "video/mp4", Codecs: spec.sourceCodecs}
+	if rotation == 0 && spec.sourceMime != "" {
+		result.Source = &playbackSource{URL: "/aura/media/" + spec.hash + "/source?rotation=0", Mime: spec.sourceMime, Audio: spec.sourceAudio}
 	}
 	if err = originalDeletion(l.DB, spec.hash, ""); err != nil {
 		playbackFailure(w, err)

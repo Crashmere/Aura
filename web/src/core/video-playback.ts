@@ -5,6 +5,12 @@ import type { PlaybackDescriptor } from "./types";
 type PlaybackMode = "source" | "native-hls" | "mse-hls" | "switching";
 export type PlaybackRepresentation = "source" | "compatibility" | null;
 
+type NativeMediaDiagnostics = HTMLVideoElement & {
+  webkitAudioDecodedByteCount?: number;
+  mozHasAudio?: boolean;
+  audioTracks?: { length: number };
+};
+
 interface PlaybackCallbacks {
   onReady: (ready: boolean) => void;
   onModeChange: (representation: PlaybackRepresentation) => void;
@@ -28,6 +34,7 @@ export class VideoPlayback {
   private loaded = false;
   private targetTime = 0;
   private rate = 1;
+  private silentAudioStart?: number;
 
   constructor(
     private video: HTMLVideoElement,
@@ -39,6 +46,8 @@ export class VideoPlayback {
     this.targetTime = position?.time || 0;
     this.setRate(position?.rate || 1);
     video.addEventListener("loadedmetadata", this.restorePosition);
+    video.addEventListener("timeupdate", this.checkSourceAudio);
+    video.addEventListener("seeking", this.resetAudioCheck);
   }
 
   get changingSource(): boolean {
@@ -65,11 +74,8 @@ export class VideoPlayback {
     this.descriptor = descriptor;
     this.callbacks.onDescriptor(descriptor);
     const source = descriptor.source;
-    const type = source?.codecs
-      ? `${source.mime}; codecs="${source.codecs}"`
-      : source?.mime || "";
-    // Incomplete codec hints can be rejected even when the native decoder supports the file.
-    if (!this.sourceFailed && source && type && (this.video.canPlayType(type) || this.video.canPlayType(source.mime))) {
+    // Container/codec hints cannot prove that the native decoder will accept the tracks.
+    if (!this.sourceFailed && source) {
       this.mode = "source";
       this.video.src = source.url;
       this.callbacks.onModeChange("source");
@@ -210,6 +216,10 @@ export class VideoPlayback {
   }
 
   handleMediaError(): boolean {
+    return this.useCompatibility();
+  }
+
+  useCompatibility(): boolean {
     if (this.mode === "switching") return true;
     if (this.mode !== "source" || !this.descriptor) return false;
     this.sourceFailed = true;
@@ -252,6 +262,28 @@ export class VideoPlayback {
     await this.prepare();
   }
 
+  private resetAudioCheck = (): void => {
+    this.silentAudioStart = undefined;
+  };
+
+  private checkSourceAudio = (): void => {
+    const video = this.video as NativeMediaDiagnostics;
+    const audio = this.descriptor?.source?.audio;
+    const time = video.currentTime;
+    // Decoded bytes count silence too. A missing counter is not evidence of failed audio.
+    const missingAudio = video.webkitAudioDecodedByteCount === 0 ||
+      video.mozHasAudio === false || video.audioTracks?.length === 0;
+    if (this.disposed || this.mode !== "source" || !audio || !missingAudio ||
+      video.paused || video.seeking || video.muted || video.volume === 0 ||
+      time < Math.max(0, audio.start) ||
+      (audio.duration !== undefined && time >= audio.start + audio.duration)) {
+      this.resetAudioCheck();
+      return;
+    }
+    this.silentAudioStart ??= time;
+    if (time - this.silentAudioStart >= 0.75) this.handleMediaError();
+  };
+
   private restorePosition = (): void => {
     if (this.disposed) return;
     // A supported container can silently play only audio when its video codec is unavailable.
@@ -270,6 +302,7 @@ export class VideoPlayback {
   };
 
   private resetMedia(): void {
+    this.resetAudioCheck();
     this.ready = false;
     this.loaded = false;
     if (!this.disposed) {
@@ -287,6 +320,8 @@ export class VideoPlayback {
     this.disposed = true;
     this.abort.abort();
     this.video.removeEventListener("loadedmetadata", this.restorePosition);
+    this.video.removeEventListener("timeupdate", this.checkSourceAudio);
+    this.video.removeEventListener("seeking", this.resetAudioCheck);
     this.resetMedia();
   }
 }
