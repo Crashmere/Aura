@@ -55,16 +55,31 @@
 
 .similar-review-toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.similar-primary-toolbar,
-.similar-secondary-toolbar {
-  display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.similar-filter-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 460px;
+  max-width: 100%;
+}
+
+.similar-filter-tools.is-compact {
+  flex: 1 1 14px;
+}
+
+.similar-filter-tools .similar-score-toolbar {
+  flex: 1 1 290px;
+}
+
+.similar-filter-tools .similar-score-filter {
+  flex: 1;
+  width: auto;
 }
 
 .similar-toolbar-pagination {
@@ -74,7 +89,7 @@
   flex-wrap: wrap;
   gap: 10px;
   margin-left: auto;
-  flex: 0 1 478px;
+  flex: 0 1 auto;
   min-height: 30px;
   max-width: 100%;
   font-size: 12px;
@@ -152,7 +167,7 @@
   flex-wrap: nowrap;
 }
 
-.similar-primary-toolbar .similar-tabs button {
+.similar-mode-switches .similar-tabs button {
   padding: 0 10px;
 }
 
@@ -164,7 +179,7 @@
 .similar-switch-status {
   display: inline-flex;
   align-items: center;
-  flex: 0 0 64px;
+  flex: 0 0 14px;
   height: 20px;
   color: var(--text-muted);
   font-size: 12px;
@@ -184,7 +199,7 @@
 }
 
 .similar-review-toolbar .review-history-link {
-  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .similar-index-banner,

@@ -801,7 +801,6 @@ export function SimilarWorkspaceView({
     <CurrentAlbumContext value="">
     <div className="similar-workspace">
       <div className="similar-review-toolbar">
-        <div className="similar-primary-toolbar">
         <div className="similar-mode-switches">
           <div
             className="similar-tabs motion-tabs"
@@ -864,24 +863,24 @@ export function SimilarWorkspaceView({
             </button>
           </div>
         </div>
-        {source === "dino" && dinoPager}
+        <div className={`similar-filter-tools${source === "dhash" ? " is-compact" : ""}`}>
+          {source === "dino" && <div className="similar-score-toolbar">
+            <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />
+          </div>}
+          {source === "dino" && <form className="similar-page-jump" onSubmit={event => {
+            event.preventDefault();
+            if (!resultsDisabled && !ignoringKey && validJump) onSelectDinoPage(jumpTarget - 1);
+          }}>
+            <label>跳至<input type="number" min={1} max={pageCount} aria-label="跳转页码"
+              placeholder={String(currentPage)} value={jumpPage} disabled={resultsDisabled || !!ignoringKey}
+              onChange={event => setJumpPage(event.target.value)} />页</label>
+            <ActionButton type="submit" disabled={resultsDisabled || !!ignoringKey || !validJump}>前往</ActionButton>
+          </form>}
+          <span className="similar-switch-status" role="status" aria-busy={loading}>
+            {loading && <LoaderCircle size={14} className="spin" aria-label="正在更新候选" />}
+          </span>
         </div>
-        <div className="similar-secondary-toolbar">
-        {source === "dino" && <div className="similar-score-toolbar">
-          <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />
-        </div>}
-        {source === "dino" && <form className="similar-page-jump" onSubmit={event => {
-          event.preventDefault();
-          if (!resultsDisabled && !ignoringKey && validJump) onSelectDinoPage(jumpTarget - 1);
-        }}>
-          <label>跳至<input type="number" min={1} max={pageCount} aria-label="跳转页码"
-            placeholder={String(currentPage)} value={jumpPage} disabled={resultsDisabled || !!ignoringKey}
-            onChange={event => setJumpPage(event.target.value)} />页</label>
-          <ActionButton type="submit" disabled={resultsDisabled || !!ignoringKey || !validJump}>前往</ActionButton>
-        </form>}
-        <span className="similar-switch-status" role="status" aria-busy={loading}>
-          {loading && <LoaderCircle size={14} className="spin" aria-label="正在更新候选" />}
-        </span>
+        {source === "dino" && dinoPager}
         <button
           type="button"
           className="btn review-history-link"
@@ -890,7 +889,6 @@ export function SimilarWorkspaceView({
           <History size={14} />
           <span>已确认不同</span>
         </button>
-        </div>
       </div>
 
       <MotionPresence present={!!dinoIndex} variant="panel">
