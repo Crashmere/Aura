@@ -1,4 +1,5 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { TrackpadSwipe } from "./trackpad-swipe";
 
 let scrollLocks = 0;
 let restoreScroll: (() => void) | undefined;
@@ -79,7 +80,7 @@ export function usePhotoViewGestures({
   const viewRef = useRef<PhotoView>({ scale, pan });
   const wheelRef = useRef<{
     time: number; pinch: boolean; trackpad: boolean;
-    action: "pan" | "navigate"; x: number; y: number; navigationTime: number;
+    action: "pan" | "navigate"; swipe: TrackpadSwipe;
   } | null>(null);
   const safariRef = useRef<{ scale: number; viewport: HTMLElement } | null>(null);
   const safariUntilRef = useRef(0);
@@ -149,7 +150,7 @@ export function usePhotoViewGestures({
         time: now, pinch: event.ctrlKey,
         trackpad: event.deltaMode === 0 && (event.deltaX !== 0 || Math.abs(event.deltaY) < 50 || !Number.isInteger(event.deltaY)),
         action: viewRef.current.scale > 1.01 ? "pan" : "navigate",
-        x: 0, y: 0, navigationTime: -Infinity,
+        swipe: new TrackpadSwipe(),
       };
       wheelRef.current = wheel;
     }
@@ -168,21 +169,8 @@ export function usePhotoViewGestures({
       }, view.scale, viewport.clientWidth, viewport.clientHeight) });
       return;
     }
-    // Discard motion during the image transition instead of queuing jumps.
-    if (now - wheel.navigationTime < 220) return;
-    if (wheel.x * event.deltaX < 0) {
-      wheel.x = 0;
-      wheel.y = 0;
-    }
-    wheel.x += event.deltaX;
-    wheel.y += Math.abs(event.deltaY);
-    if (Math.abs(wheel.x) >= 80 && Math.abs(wheel.x) > wheel.y * 1.3) {
-      const direction = wheel.x > 0 ? 1 : -1;
-      wheel.navigationTime = now;
-      wheel.x = 0;
-      wheel.y = 0;
-      onNavigate?.(direction);
-    }
+    const direction = wheel.swipe.consume(event.deltaX, event.deltaY);
+    if (direction) onNavigate?.(direction);
   });
 
   const handleGesture = useEffectEvent((event: Event) => {
