@@ -758,6 +758,21 @@ export function SimilarWorkspaceView({
   const tabsIndicator = useSlidingIndicator(source, ".active");
   const mediaIndicator = useSlidingIndicator(video ? "video" : "photo", ".active");
   const resultsDisabled = loading || resultsStale || !!error;
+  const moreRef = useRef<HTMLDivElement>(null);
+  const canAppendDhash = source === "dhash" && resultsSource === "dhash"
+    && hasNextPage && !resultsDisabled && !ignoringKey;
+  const appendVisibleDhash = useEffectEvent(() => {
+    if (canAppendDhash) onAppendDhash();
+  });
+  useEffect(() => {
+    const more = moreRef.current;
+    if (!canAppendDhash || !more) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) appendVisibleDhash();
+    }, { rootMargin: "0px 0px 200px 0px" });
+    observer.observe(more);
+    return () => observer.disconnect();
+  }, [canAppendDhash]);
   const pageCount = Math.max(1, Math.ceil((paginationTotal || 0) / pageSize));
   const currentPage = Math.min(pageCount, pageIndex + 1);
   const windowStart = Math.max(2, Math.min(currentPage - 1, pageCount - 3));
@@ -1035,12 +1050,12 @@ export function SimilarWorkspaceView({
       )}
 
       {resultsSource === "dhash" && hasNextPage && (
-            <div className="similar-more-wrap">
-              <ActionButton disabled={resultsDisabled || !!ignoringKey} onClick={onAppendDhash}>
-                {loading ? "正在加载" : "加载更多候选"}
-              </ActionButton>
-            </div>
-          )}
+        <div className="similar-more-wrap" ref={moreRef}>
+          <ActionButton disabled={resultsDisabled || !!ignoringKey} onClick={onAppendDhash}>
+            {loading ? "正在加载" : "加载更多候选"}
+          </ActionButton>
+        </div>
+      )}
       {resultsVideo && <p className="video-similarity-note">按抽样画面判断，不比较音轨；归并后所有原件均保留。</p>}
       </div>
     </div>

@@ -336,8 +336,11 @@ function AuraApplication() {
   const [similarLoading, setSimilarLoading] = useState(false);
   const similarRequestIdRef = useRef(0);
   const similarRequestRef = useRef<AbortController | null>(null);
-  const similarPageRef = useRef<{ source: "dhash" | "dino"; cursor: string; pageIndex: number; scoreRange: SimilarityScoreRange; pageSize: number }>({
-    source: "dhash", cursor: "", pageIndex: 0, scoreRange: [.7, 1], pageSize: 20,
+  const similarPageRef = useRef<{
+    source: "dhash" | "dino"; cursor: string; appendCursor: string;
+    pageIndex: number; scoreRange: SimilarityScoreRange; pageSize: number;
+  }>({
+    source: "dhash", cursor: "", appendCursor: "", pageIndex: 0, scoreRange: [.7, 1], pageSize: 20,
   });
   const [ignoringKey, setIgnoringKey] = useState("");
   const [lastIgnoredPair, setLastIgnoredPair] = useState<CandidatePair | null>(null);
@@ -763,7 +766,11 @@ function AuraApplication() {
     similarRequestRef.current?.abort();
     const controller = new AbortController();
     similarRequestRef.current = controller;
-    similarPageRef.current = { source: src, cursor: append ? similarPageRef.current.cursor : cursor, pageIndex, scoreRange, pageSize };
+    // Refresh from the original anchor; retry an append from its own cursor.
+    similarPageRef.current = {
+      source: src, cursor: append ? similarPageRef.current.cursor : cursor,
+      appendCursor: append ? cursor : "", pageIndex, scoreRange, pageSize,
+    };
     setSimilarLoading(true);
     setSimilarError("");
     try {
@@ -1449,7 +1456,8 @@ function AuraApplication() {
               error={similarError}
               onRetry={() => {
                 const page = similarPageRef.current;
-                void fetchSimilarCandidates(page.source, page.cursor, false, page.pageIndex, page.scoreRange);
+                void fetchSimilarCandidates(page.source, page.appendCursor || page.cursor, !!page.appendCursor,
+                  page.pageIndex, page.scoreRange, page.pageSize);
               }}
               dinoIndex={isVideoSimilarity ? telemetry?.videoSimilarityIndex || similarIndexes.video
                 : similarIndexes.photo || telemetry?.similarityIndex}
@@ -1465,7 +1473,7 @@ function AuraApplication() {
                 void fetchSimilarCandidates("dino", "", false, nextIdx);
               }}
               onAppendDhash={() => {
-                if (!similarResultsMatch || similarRequestRef.current || ignoringKey) return;
+                if (similarSource !== "dhash" || !similarNext || !similarResultsMatch || similarRequestRef.current || ignoringKey) return;
                 void fetchSimilarCandidates("dhash", similarNext, true);
               }}
               onOpenHistory={() => setHistoryKind("similar")}
