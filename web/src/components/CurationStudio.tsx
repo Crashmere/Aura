@@ -763,7 +763,7 @@ export function SimilarWorkspaceView({
       <span className="similar-page-status" aria-live="polite" aria-busy={loading}>
         <span>第 {pageIndex + 1} 页</span>
         <span className="similar-page-loading">
-          {loading && <LoaderCircle size={14} className="spin" aria-label="正在加载" />}
+          {loading && !resultsStale && <LoaderCircle size={14} className="spin" aria-label="正在加载" />}
         </span>
       </span>
       <ActionButton
@@ -843,11 +843,12 @@ export function SimilarWorkspaceView({
         </div>
         {source === "dino" && <div className="similar-score-toolbar">
           <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />
-          <span className="similar-score-result" role="status">
-            {loading ? <LoaderCircle size={14} className="spin" aria-label="正在筛选" /> :
-              !resultsStale && !error && (scoreRange[0] > .7 || scoreRange[1] < 1) ? `${total.toLocaleString("zh-CN")} 组` : ""}
-          </span>
         </div>}
+        <span className="similar-switch-status" role="status" aria-busy={loading}>
+          {loading ? <LoaderCircle size={14} className="spin" aria-label="正在更新候选" /> :
+            source === "dino" && !resultsStale && !error && (scoreRange[0] > .7 || scoreRange[1] < 1)
+              ? `${total.toLocaleString("zh-CN")} 组` : ""}
+        </span>
         <button
           type="button"
           className="btn review-history-link"
@@ -856,13 +857,10 @@ export function SimilarWorkspaceView({
           <History size={14} />
           <span>已确认不同</span>
         </button>
-        <span className="similar-switch-status" role="status">
-          {loading && source === "dhash" && <LoaderCircle size={14} className="spin" aria-label="正在更新候选" />}
-        </span>
       </div>
 
-      <MotionPresence present={(source === "dino" || video) && !!dinoIndex} variant="panel">
-        {(source === "dino" || video) && dinoIndex && (
+      <MotionPresence present={!!dinoIndex} variant="panel">
+        {dinoIndex && (
           <div className="similar-index-banner">
             {dinoIndex.state === "processing" && (
               <LoaderCircle size={14} className="spin" />

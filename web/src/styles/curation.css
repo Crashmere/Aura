@@ -73,15 +73,18 @@
 }
 
 .similar-mode-switches .similar-count {
-  min-width: 5ch;
+  min-width: calc(5ch + 12px);
   text-align: center;
 }
 
 .similar-switch-status {
   display: inline-flex;
   align-items: center;
-  width: 14px;
-  height: 14px;
+  flex: 0 0 64px;
+  height: 20px;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .similar-results {
@@ -92,7 +95,7 @@
 }
 
 .similar-results.is-updating {
-  opacity: 0.82;
+  opacity: 0.96;
   transition-delay: 120ms;
 }
 
@@ -152,15 +155,13 @@
 }
 
 .similar-score-toolbar,
-.similar-score-filter,
-.similar-score-result {
+.similar-score-filter {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .similar-score-toolbar {
-  flex-wrap: wrap;
   flex: 0 1 384px;
   max-width: 100%;
 }
@@ -240,16 +241,6 @@
 
 .similar-score-filter[aria-disabled="true"] {
   opacity: .5;
-}
-
-.similar-score-result {
-  min-height: 20px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.similar-score-result:empty {
-  display: none;
 }
 
 .similar-pairs-grid {
