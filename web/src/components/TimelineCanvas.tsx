@@ -43,8 +43,8 @@ export const DEFAULT_ZOOM_STEP = 3;
 
 const LEGACY_ZOOM_PREF_KEY = "aura-grid-zoom-v2";
 const ZOOM_PREF_KEY = "aura-grid-zoom-v3";
-const DESKTOP_COLUMN_OFFSETS = [5, 3, 1, 0, -1, -2, -3] as const;
-const MOBILE_COLUMN_OFFSETS = [3, 2, 1, 0, -1, -2, -3] as const;
+const DESKTOP_COLUMN_OFFSETS = [13, 7, 3, 0, -1, -2, -3] as const;
+const MOBILE_COLUMN_OFFSETS = [8, 4, 2, 0, -1, -2, -3] as const;
 const ASPECT_PREF_KEY = "aura-grid-layout-v1";
 const MAX_FLIP_TILES = 300;
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
