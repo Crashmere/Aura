@@ -40,6 +40,8 @@ CREATE TRIGGER IF NOT EXISTS index_purge_complete AFTER INSERT ON decisions WHEN
 CREATE TABLE IF NOT EXISTS dino_dirty(hash TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS dino_tasks(hash TEXT PRIMARY KEY,thumbnail TEXT NOT NULL,queued_at TEXT NOT NULL,retry_at TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS dino_tasks_due ON dino_tasks(retry_at,queued_at,hash);
+CREATE TABLE IF NOT EXISTS video_tasks(hash TEXT PRIMARY KEY REFERENCES files(hash) ON DELETE CASCADE,queued_at TEXT NOT NULL,retry_at TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS video_tasks_due ON video_tasks(retry_at,queued_at,hash);
 CREATE TABLE IF NOT EXISTS job_activity(hash TEXT PRIMARY KEY REFERENCES files(hash) ON DELETE CASCADE,activity_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS job_activity_time ON job_activity(activity_at DESC,hash DESC);
 `

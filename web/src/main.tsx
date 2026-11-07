@@ -89,6 +89,7 @@ import { PipelineTaskCenter } from "./components/PipelineCenter";
 import { CurrentAlbumContext } from "./components/AssetAlbumBadges";
 import { MergePhotosModal } from "./components/MergePhotosModal";
 import { SimilarPhotosModal } from "./components/SimilarPhotosModal";
+import { VideoComparisonModal } from "./components/VideoComparisonModal";
 import {
   type DayAssetGroup,
   type TimelineJump,
@@ -97,6 +98,7 @@ import {
   VirtualizedTimelineCanvas,
 } from "./components/TimelineCanvas";
 import "./styles/aura.css";
+import "./styles/video-similarity.css";
 import "./styles/motion.css";
 import "./styles/motion-gallery.css";
 import "./styles/motion-studios.css";
@@ -148,6 +150,7 @@ function ModuleIcon({ id }: { id: WorkspaceViewId }) {
     case "grouped":
       return <Copy size={17} />;
     case "similar":
+    case "similar-videos":
       return <Sparkles size={17} />;
     case "jobs":
       return <ListChecks size={17} />;
@@ -244,6 +247,7 @@ function AuraApplication() {
   const [comparePair, setComparePair] = useState<{
     left: CatalogAsset;
     right: CatalogAsset;
+    evidence?: CandidatePair;
   } | null>(null);
   const [mergePair, setMergePair] = useState<{ left: CatalogAsset; right: CatalogAsset } | null>(null);
   const [historyKind, setHistoryKind] = useState<CurationHistoryType | null>(null);
@@ -318,6 +322,7 @@ function AuraApplication() {
 
   // Similar studio state
   const [similarSource, setSimilarSource] = useState<"dhash" | "dino">("dhash");
+  const similarMediaRef = useRef<"photo" | "video">("photo");
   const [dinoScoreRange, setDinoScoreRange] = useState<SimilarityScoreRange>([.7, 1]);
   const [similarPairs, setSimilarPairs] = useState<CandidatePair[]>([]);
   const [similarAssets, setSimilarAssets] = useState<Record<string, CatalogAsset>>({});
@@ -427,13 +432,15 @@ function AuraApplication() {
   );
 
   const isAlbumOverview = route.view === "albums" && !route.album;
-  const isGalleryView = route.view !== "similar" && route.view !== "jobs" && !isAlbumOverview;
+  const isVideoSimilarity = route.view === "similar-videos";
+  const isSimilarityView = route.view === "similar" || isVideoSimilarity;
+  const isGalleryView = !isSimilarityView && route.view !== "jobs" && !isAlbumOverview;
 
   // Build shared query parameters for /api/assets and /api/timeline
   const buildCatalogQuery = useCallback(
     (includeCaptureDates = true, cursor = "") => {
       const params = new URLSearchParams(serializeFilterParams(route.filters));
-      if (route.view !== "all" && route.view !== "similar" && route.view !== "jobs") {
+      if (route.view !== "all" && route.view !== "similar" && route.view !== "similar-videos" && route.view !== "jobs") {
         params.set("view", route.view);
       }
       if (route.view === "albums" && route.album) {
@@ -538,7 +545,7 @@ function AuraApplication() {
     const similarRequestId = similarRequestIdRef.current;
     const similarWasLoading = !!similarRequestRef.current;
     await Promise.all([fetchOverview(), fetchTimelineMonths()]);
-    if (route.view === "similar") {
+    if (route.view === "similar" || route.view === "similar-videos") {
       // A delayed background refresh must not replace a page the user just requested.
       if (similarWasLoading || similarRequestRef.current || similarRequestId !== similarRequestIdRef.current) return;
       const page = similarPageRef.current;
@@ -656,13 +663,14 @@ function AuraApplication() {
   useEffect(() => {
     const hasActiveWork =
       (telemetry?.queued || 0) > 0 ||
-      ((telemetry?.similarityIndex?.pending || 0) > 0 && (isGalleryView || route.view === "similar"));
+      (((telemetry?.similarityIndex?.pending || 0) > 0 || (telemetry?.videoSimilarityIndex?.pending || 0) > 0) &&
+        (isGalleryView || isSimilarityView));
     if (!hasActiveWork) return;
     const t = setInterval(() => {
       if (!document.hidden) void refreshBoundedCatalog();
     }, 4500);
     return () => clearInterval(t);
-  }, [telemetry?.queued, telemetry?.similarityIndex?.pending, isGalleryView, route.view, refreshBoundedCatalog]);
+  }, [telemetry?.queued, telemetry?.similarityIndex?.pending, telemetry?.videoSimilarityIndex?.pending, isGalleryView, isSimilarityView, refreshBoundedCatalog]);
 
   // Infinite scroll pagination trigger for gallery
   useEffect(() => {
@@ -732,6 +740,7 @@ function AuraApplication() {
         limit: "20",
         ...(cursor ? { cursor } : {}),
       });
+      if (route.view === "similar-videos") q.set("media", "video");
       if (src === "dino") {
         q.set("minScore", String(scoreRange[0]));
         q.set("maxScore", String(scoreRange[1]));
@@ -758,13 +767,16 @@ function AuraApplication() {
   }
 
   useEffect(() => {
-    if (route.view !== "similar") return;
+    if (route.view !== "similar" && route.view !== "similar-videos") return;
     dinoCursorsRef.current = [""];
-    if (similarPageRef.current.source !== similarSource) {
+    setDinoIndex(undefined);
+    const media = route.view === "similar-videos" ? "video" : "photo";
+    if (similarPageRef.current.source !== similarSource || similarMediaRef.current !== media) {
       setDinoPageIdx(0);
       setSimilarPairs([]);
       setSimilarNext("");
     }
+    similarMediaRef.current = media;
     void fetchSimilarCandidates(similarSource, "", false, 0, dinoScoreRange);
     return () => {
       similarRequestIdRef.current++;
@@ -1385,8 +1397,9 @@ function AuraApplication() {
               onLocateAsset={(id) => void locateAssetInLibrary(id)}
               onCatalogMutated={() => void refreshBoundedCatalog()}
             />
-          ) : route.view === "similar" ? (
+          ) : isSimilarityView ? (
             <SimilarWorkspaceView
+              video={isVideoSimilarity}
               source={similarSource}
               onSelectSource={setSimilarSource}
               pairs={similarPairs}
@@ -1400,7 +1413,7 @@ function AuraApplication() {
                 const page = similarPageRef.current;
                 void fetchSimilarCandidates(page.source, page.cursor, false, page.pageIndex, page.scoreRange);
               }}
-              dinoIndex={dinoIndex || telemetry?.similarityIndex}
+              dinoIndex={isVideoSimilarity ? telemetry?.videoSimilarityIndex : dinoIndex || telemetry?.similarityIndex}
               pageIndex={dinoPageIdx}
               hasNextPage={!!similarNext}
               loading={similarLoading}
@@ -1418,7 +1431,7 @@ function AuraApplication() {
               onAppendDhash={() => void fetchSimilarCandidates("dhash", similarNext, true)}
               onOpenHistory={() => setHistoryKind("similar")}
               onOpenAsset={(asset) => updateRoute((prev) => ({ ...prev, asset: asset.id }), "push")}
-              onComparePair={(left, right) => setComparePair({ left, right })}
+              onComparePair={(left, right, evidence) => setComparePair({ left, right, evidence })}
               onMergePair={(left, right) => setMergePair({ left, right })}
               onIgnorePair={async (pair) => {
                 const key = `${pair.left}:${pair.right}`;
@@ -1722,9 +1735,9 @@ function AuraApplication() {
             setOpenAssetObj(target);
             updateRoute((prev) => ({ ...prev, asset: target.id }), "push");
           }}
-          onCompare={(target) => {
+          onCompare={(target, evidence) => {
             setSimilarPhoto(null);
-            setComparePair({ left: similarPhoto.asset, right: target });
+            setComparePair({ left: similarPhoto.asset, right: target, evidence });
           }} />}
       </MotionPresence>
 
@@ -1790,6 +1803,10 @@ function AuraApplication() {
       {/* Photo Comparison Studio */}
       <MotionPresence present={!!comparePair}>
         {comparePair && (
+          comparePair.left.kind === "video" && comparePair.right.kind === "video" ?
+          <VideoComparisonModal left={comparePair.left} right={comparePair.right} evidence={comparePair.evidence}
+            onClose={() => setComparePair(null)}
+            onMergePair={(left, right) => { setComparePair(null); setMergePair({ left, right }); }} /> :
           <PhotoComparisonModal
             left={comparePair.left}
             right={comparePair.right}

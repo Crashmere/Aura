@@ -73,7 +73,7 @@ func (l *Library) addAssetSimilarCounts(ctx context.Context, assets []Asset) err
 		}
 		asset.SimilarCounts = counts
 	}
-	return nil
+	return l.addVideoSimilarCounts(ctx, assets)
 }
 
 func (l *Library) assetSimilar(w http.ResponseWriter, r *http.Request) {
@@ -142,10 +142,10 @@ func (l *Library) assetSimilar(w http.ResponseWriter, r *http.Request) {
 		return assetSimilarCursor{ID: target, Distance: pair.Distance, Score: pair.Score}
 	}
 	less := func(a, b assetSimilarCursor) bool {
-		if source == "dhash" && a.Distance != b.Distance {
+		if source == "dhash" && asset.Kind != "video" && a.Distance != b.Distance {
 			return a.Distance < b.Distance
 		}
-		if source == "dino" && a.Score != b.Score {
+		if (source == "dino" || asset.Kind == "video") && a.Score != b.Score {
 			return a.Score > b.Score
 		}
 		return a.ID < b.ID
@@ -183,11 +183,30 @@ func (l *Library) assetSimilar(w http.ResponseWriter, r *http.Request) {
 	if source == "dino" {
 		out["index"] = l.dinoSnapshot()
 	}
+	if asset.Kind == "video" {
+		out["index"] = l.videoSimilarityStatus()
+	}
 	writeJSON(w, 200, out)
 }
 
 func (l *Library) assetSimilarPairs(ctx context.Context, id, source string, excluded map[string]bool) ([]similarPair, error) {
 	pairs := []similarPair{}
+	var kind string
+	if err := l.DB.QueryRowContext(ctx, "SELECT kind FROM assets WHERE id=?", id).Scan(&kind); err != nil {
+		return nil, err
+	}
+	if kind == "video" {
+		value, err := l.cachedCatalog(ctx, "video-pairs", "review", func() (any, error) { return l.buildVideoPairs(ctx) })
+		if err != nil {
+			return nil, err
+		}
+		for _, pair := range value.([]similarPair) {
+			if pair.Source == source && (pair.Left == id || pair.Right == id) && !excluded[pair.Left] && !excluded[pair.Right] {
+				pairs = append(pairs, pair)
+			}
+		}
+		return pairs, nil
+	}
 	if source == "dino" {
 		value, err := l.cachedCatalog(ctx, "dino-pairs", "review", func() (any, error) { return l.buildDINOPairs(ctx) })
 		if err != nil {

@@ -684,6 +684,7 @@ export function CurationHistoryModal({
 // ============================================================================
 
 export function SimilarWorkspaceView({
+  video = false,
   source,
   onSelectSource,
   pairs,
@@ -709,6 +710,7 @@ export function SimilarWorkspaceView({
   onIgnorePair,
   onUndoIgnore,
 }: {
+  video?: boolean;
   source: "dhash" | "dino";
   onSelectSource: (src: "dhash" | "dino") => void;
   pairs: CandidatePair[];
@@ -729,7 +731,7 @@ export function SimilarWorkspaceView({
   onAppendDhash: () => void;
   onOpenHistory: () => void;
   onOpenAsset: (asset: CatalogAsset) => void;
-  onComparePair: (left: CatalogAsset, right: CatalogAsset) => void;
+  onComparePair: (left: CatalogAsset, right: CatalogAsset, evidence?: CandidatePair) => void;
   onMergePair: (left: CatalogAsset, right: CatalogAsset) => void;
   onIgnorePair: (pair: CandidatePair) => Promise<void>;
   onUndoIgnore: (pair: CandidatePair) => Promise<void>;
@@ -774,7 +776,7 @@ export function SimilarWorkspaceView({
             aria-pressed={source === "dhash"}
             onClick={() => onSelectSource("dhash")}
           >
-            <span>算法判定</span>
+            <span>{video ? "近似版本" : "算法判定"}</span>
             {counts && (
               <small className="similar-count" title="候选总数">
                 {counts.dhash.toLocaleString("zh-CN")}
@@ -787,7 +789,7 @@ export function SimilarWorkspaceView({
             aria-pressed={source === "dino"}
             onClick={() => onSelectSource("dino")}
           >
-            <span>智能推荐</span>
+            <span>{video ? "内容相似" : "智能推荐"}</span>
             {counts && (
               <small className="similar-count" title="候选总数">
                 {counts.dino.toLocaleString("zh-CN")}
@@ -812,8 +814,8 @@ export function SimilarWorkspaceView({
         </button>
       </div>
 
-      <MotionPresence present={source === "dino" && !!dinoIndex} variant="panel">
-        {source === "dino" && dinoIndex && (
+      <MotionPresence present={(source === "dino" || video) && !!dinoIndex} variant="panel">
+        {(source === "dino" || video) && dinoIndex && (
           <div className="similar-index-banner">
             {dinoIndex.state === "processing" && (
               <LoaderCircle size={14} className="spin" />
@@ -825,10 +827,10 @@ export function SimilarWorkspaceView({
                   ? "智能分析已暂停"
                   : dinoIndex.pending
                     ? `${dinoIndex.state === "processing" ? "正在分析" : "等待批量分析"} · ${dinoIndex.ready} / ${dinoIndex.total}`
-                    : `已分析 ${dinoIndex.ready} 张照片`}
+                    : `已分析 ${dinoIndex.ready} ${video ? "条视频" : "张照片"}`}
             </span>
             {dinoIndex.engine && <span className="index-engine-pill">{dinoIndex.engine}</span>}
-            {!!dinoIndex.errors && <span>{dinoIndex.errors} 张稍后重试</span>}
+            {!!dinoIndex.errors && <span>{dinoIndex.errors} {video ? "条" : "张"}稍后重试</span>}
           </div>
         )}
       </MotionPresence>
@@ -837,6 +839,7 @@ export function SimilarWorkspaceView({
         <span>{error}</span>
         <button className="btn" type="button" disabled={loading} onClick={onRetry}>重试</button>
       </div>}
+      {video && <p className="video-similarity-note">按抽样画面判断，不比较音轨；归并后所有原件均保留。</p>}
 
       {source === "dino" && (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager}
 
@@ -858,7 +861,7 @@ export function SimilarWorkspaceView({
       {loading && !pairs.length ? (
         <div className="loading-inline">
           <LoaderCircle className="spin" size={20} />
-          <span>正在查找相似照片</span>
+          <span>{video ? "正在查找相似视频" : "正在查找相似照片"}</span>
         </div>
       ) : !pairs.length && !hasNextPage && !error ? (
         <div className="empty-state">
@@ -866,7 +869,8 @@ export function SimilarWorkspaceView({
             <Copy size={28} strokeWidth={1.3} />
           </div>
           <h2>
-            {source === "dino" && pageIndex > 0
+            {video ? (dinoIndex?.pending ? "索引更新后会显示相似视频" : "未找到符合条件的相似视频") :
+            source === "dino" && pageIndex > 0
               ? "当前页暂无推荐照片"
               : source === "dino" && (scoreRange[0] > .7 || scoreRange[1] < 1)
                 ? "没有符合相似度范围的照片"
@@ -910,13 +914,14 @@ export function SimilarWorkspaceView({
                       <LoaderCircle size={14} className="spin" aria-label="正在整理" />
                     )}
                     <strong>
-                      {source === "dino" ? "画面内容相近" : "图像指纹相近"}
+                      {source === "dino" ? "画面内容相近" : video ? "多帧时序相近" : "图像指纹相近"}
                     </strong>
                     {source === "dino" && pair.score !== undefined && (
                       <small className="similar-score">
                         特征相似度 {(100 * Math.min(1, pair.score)).toFixed(1)}%
                       </small>
                     )}
+                    {video && pair.coverage !== undefined && <small>抽样帧匹配率 {(pair.coverage * 100).toFixed(0)}%</small>}
                     <small>
                       {left.width} × {left.height} · {right.width} × {right.height}
                     </small>
@@ -924,7 +929,7 @@ export function SimilarWorkspaceView({
                   <div className="pair-buttons">
                     <ActionButton
                       disabled={loading || !!error || !!left.deletionPending || !!right.deletionPending}
-                      onClick={() => onComparePair(left, right)}
+                      onClick={() => onComparePair(left, right, pair)}
                     >
                       <Columns2 size={15} />
                       <span>对比</span>

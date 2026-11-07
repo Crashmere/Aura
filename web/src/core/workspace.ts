@@ -93,6 +93,14 @@ export const WORKSPACE_MODULES: readonly WorkspaceModuleDescriptor[] = [
     supportsBatchSelection: false,
   },
   {
+    id: "similar-videos",
+    title: "相似视频",
+    section: "curation",
+    supportsSearch: false,
+    supportsTimelineFilters: false,
+    supportsBatchSelection: false,
+  },
+  {
     id: "jobs",
     title: "任务中心",
     section: "system",

@@ -105,6 +105,9 @@ func (l *Library) Worker(ctx context.Context) {
 		l.dinoLoop(ctx)
 	}()
 	defer func() { <-dinoStopped }()
+	videoStopped := make(chan struct{})
+	go func() { defer close(videoStopped); l.videoSimilarityLoop(ctx) }()
+	defer func() { <-videoStopped }()
 	slog.Info("media processing concurrency", "workers", l.ProcessingLimits.Workers, "gpuOperations", l.ProcessingLimits.GPUOperations, "cpuOperations", l.ProcessingLimits.CPUOperations)
 	var running sync.WaitGroup
 	// Drain jobs before shutting down their GPU contexts or the catalog connection.

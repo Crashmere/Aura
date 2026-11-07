@@ -470,6 +470,7 @@ func planDeletion(tx *sql.Tx, ids []string) (deletionPlan, error) {
 
 func (l *Library) cancelProcessing(hashes []string) {
 	l.cancelDINO(hashes)
+	l.cancelVideoSimilarity(hashes)
 	l.cancelPlayback(hashes)
 	l.processingMu.Lock()
 	defer l.processingMu.Unlock()
@@ -494,6 +495,9 @@ func (l *Library) waitProcessing(ctx context.Context, hashes []string) error {
 	}
 	l.processingMu.Unlock()
 	if job := l.cancelDINO(hashes); job != nil {
+		jobs = append(jobs, job)
+	}
+	if job := l.cancelVideoSimilarity(hashes); job != nil {
 		jobs = append(jobs, job)
 	}
 	for _, job := range jobs {
@@ -607,7 +611,7 @@ func (l *Library) runDeletion(ctx context.Context, id string, plan deletionPlan)
 		if e := l.removeOriginalWork(hash); e != nil {
 			return e
 		}
-		paths := []string{l.Object(hash), l.Derived(hash, "-thumb.jpg"), l.Derived(hash, "-preview.jpg"), l.Derived(hash, "-play.mp4"), l.Derived(hash, dinoSuffix), filepath.Join(l.Root, "incoming", hash)}
+		paths := []string{l.Object(hash), l.Derived(hash, "-thumb.jpg"), l.Derived(hash, "-preview.jpg"), l.Derived(hash, "-play.mp4"), l.Derived(hash, dinoSuffix), l.Derived(hash, videoFeatureSuffix), filepath.Join(l.Root, "incoming", hash)}
 		for _, rotation := range []int{90, 180, 270} {
 			for _, kind := range []string{"thumb", "preview"} {
 				path := l.rotationPath(hash, kind, rotation)

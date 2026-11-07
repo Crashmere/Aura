@@ -469,7 +469,9 @@ export function PhotoTile({
   const dinoCount = asset.similarCounts?.dino || 0;
   const showSimilar = !!onOpenSimilar && !asset.trashedAt && !asset.deletionPending &&
     (dhashCount > 0 || dinoCount > 0);
-  const similarLabel = `相似照片${dhashCount ? `，算法判定 ${dhashCount} 张` : ""}${dinoCount ? `，智能推荐 ${dinoCount} 张` : ""}`;
+  const similarLabel = asset.kind === "video" ?
+    `相似视频，近似版本 ${dhashCount} 条，内容相似 ${dinoCount} 条` :
+    `相似照片${dhashCount ? `，算法判定 ${dhashCount} 张` : ""}${dinoCount ? `，智能推荐 ${dinoCount} 张` : ""}`;
 
   useEffect(() => {
     setBroken(false);

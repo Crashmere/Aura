@@ -4,7 +4,7 @@ import { Columns2, Copy, LoaderCircle, RefreshCw, Sparkles, X } from "lucide-rea
 import { buildMediaUrl, requestJson } from "../core/client";
 import { useIsPresent, useSlidingIndicator } from "../core/motion";
 import { usePageScrollLock } from "../core/photo-view";
-import type { AssetSimilarPage, CatalogAsset, SimilarityScoreRange } from "../core/types";
+import type { AssetSimilarPage, CandidatePair, CatalogAsset, SimilarityScoreRange } from "../core/types";
 import { PhotoTile } from "./TimelineCanvas";
 import { SimilarityScoreFilter } from "./SimilarityScoreFilter";
 import { CurrentAlbumContext } from "./AssetAlbumBadges";
@@ -19,11 +19,13 @@ function SimilarPhotoSection({
   outsideAlbums: boolean;
   refreshSeq: number;
   onOpenAsset: (target: CatalogAsset) => void;
-  onCompare: (target: CatalogAsset) => void;
+  onCompare: (target: CatalogAsset, evidence?: CandidatePair) => void;
 }) {
   const isPresent = useIsPresent();
+  const video = asset.kind === "video";
+  const mediaName = video ? "视频" : "照片";
   const [scoreRange, setScoreRange] = useState<SimilarityScoreRange>([.7, 1]);
-  const scope = `${asset.id}:${source}:${album}:${outsideAlbums}:${refreshSeq}:${scoreRange.join(":")}`;
+  const scope = `${asset.id}:${asset.primary}:${source}:${album}:${outsideAlbums}:${refreshSeq}:${scoreRange.join(":")}`;
   const [page, setPage] = useState<(AssetSimilarPage & { scope: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -73,10 +75,10 @@ function SimilarPhotoSection({
     }
     if (page?.scope !== scope) void fetchPage();
     return () => requestRef.current?.abort();
-  }, [active, asset.id, source, album, outsideAlbums, refreshSeq, scoreRange]);
+  }, [active, asset.id, asset.primary, source, album, outsideAlbums, refreshSeq, scoreRange]);
 
   const dinoState = page?.index?.state;
-  const indexNote = source !== "dino" ? "" :
+  const indexNote = source !== "dino" && !video ? "" :
     dinoState === "disabled" ? "智能推荐已暂停" :
     dinoState === "unavailable" ? "智能推荐暂不可用" :
     dinoState && dinoState !== "idle" ? "智能推荐索引更新中，可刷新查看新结果" : "";
@@ -85,13 +87,13 @@ function SimilarPhotoSection({
     <section className="asset-similar-section" role="tabpanel" id={`asset-similar-panel-${source}`}
       aria-labelledby={`asset-similar-tab-${source}`} hidden={!active} aria-busy={loading}>
       <header>
-        <p className="asset-similar-method">{source === "dhash" ? "dHash · 图像指纹" : "DINO · 视觉特征"}</p>
-        {!stale && <span className="asset-similar-count">{page.total} 张</span>}
+        <p className="asset-similar-method">{source === "dhash" ? (video ? "dHash · 多帧时序" : "dHash · 图像指纹") : (video ? "DINO · 多帧视觉特征" : "DINO · 视觉特征")}</p>
+        {!stale && <span className="asset-similar-count">{page.total} {video ? "条" : "张"}</span>}
       </header>
       {source === "dino" && <SimilarityScoreFilter range={scoreRange} disabled={!isPresent}
         onChange={setScoreRange} />}
       {indexNote && !stale && <p className="asset-similar-status">{indexNote}</p>}
-      {loading && <p className="loading-inline" role="status"><LoaderCircle size={16} className="spin" />正在查找相似照片</p>}
+      {loading && <p className="loading-inline" role="status"><LoaderCircle size={16} className="spin" />正在查找相似{mediaName}</p>}
       {error && <div className="asset-similar-error" role="alert">
         <span>{error}</span>
         <button className="btn" type="button" disabled={loading || !isPresent}
@@ -105,16 +107,17 @@ function SimilarPhotoSection({
             <PhotoTile asset={target} originalAspect disabled={stale || !isPresent}
               onClick={() => onOpenAsset(target)} />
             <div className="asset-similar-card-actions">
-              <span>{source === "dhash" ? `指纹距离 ${pair.distance}` : `特征相似度 ${(100 * Math.min(1, pair.score || 0)).toFixed(1)}%`}</span>
-              <button className="icon-btn" type="button" title="与当前照片对比" aria-label={`与 ${target.name} 对比`}
-                disabled={stale || !isPresent} onClick={() => onCompare(target)}><Columns2 size={16} /></button>
+              <span>{video ? `抽样帧匹配率 ${((pair.coverage || 0) * 100).toFixed(0)}%` :
+                source === "dhash" ? `指纹距离 ${pair.distance}` : `特征相似度 ${(100 * Math.min(1, pair.score || 0)).toFixed(1)}%`}</span>
+              <button className="icon-btn" type="button" title={`与当前${mediaName}对比`} aria-label={`与 ${target.name} 对比`}
+                disabled={stale || !isPresent} onClick={() => onCompare(target, pair)}><Columns2 size={16} /></button>
             </div>
           </article>;
         })}
       </div>}
       {!stale && !loading && !error && !page.items.length && <p className="asset-similar-empty">
-        {source === "dino" && (scoreRange[0] > .7 || scoreRange[1] < 1) ? "未找到符合相似度范围的照片" :
-          outsideAlbums ? "未找到所在相片集之外的相似照片" : "未找到相似照片"}
+        {source === "dino" && (scoreRange[0] > .7 || scoreRange[1] < 1) ? `未找到符合相似度范围的${mediaName}` :
+          outsideAlbums ? `未找到所在相片集之外的相似${mediaName}` : `未找到相似${mediaName}`}
       </p>}
       {!stale && page.next && !error && <button className="btn asset-similar-more" type="button"
         disabled={loading || !isPresent} onClick={() => void fetchPage(page.next)}>
@@ -130,9 +133,11 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
   initialSource?: "dhash" | "dino";
   onClose: () => void;
   onOpenAsset: (target: CatalogAsset) => void;
-  onCompare: (target: CatalogAsset) => void;
+  onCompare: (target: CatalogAsset, evidence?: CandidatePair) => void;
 }) {
   const isPresent = useIsPresent();
+  const video = asset.kind === "video";
+  const mediaName = video ? "视频" : "照片";
   const rootRef = useRef<HTMLElement>(null);
   const [source, setSource] = useState(initialSource);
   const tabsIndicator = useSlidingIndicator(source, '[aria-selected="true"]');
@@ -175,11 +180,11 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
       <section className="modal-card asset-similar-modal" role="dialog" aria-modal="true"
         aria-labelledby="asset-similar-title" ref={rootRef} tabIndex={-1} onClick={event => event.stopPropagation()}>
         <header className="modal-header">
-          <h2 id="asset-similar-title"><Sparkles size={18} />相似照片</h2>
+          <h2 id="asset-similar-title"><Sparkles size={18} />相似{mediaName}</h2>
           <div className="asset-similar-header-actions">
-            <button className="icon-btn" type="button" title="刷新相似照片" aria-label="刷新相似照片"
+            <button className="icon-btn" type="button" title={`刷新相似${mediaName}`} aria-label={`刷新相似${mediaName}`}
               onClick={() => setRefreshSeq(value => value + 1)}><RefreshCw size={17} /></button>
-            <button className="icon-btn" type="button" aria-label="关闭相似照片" onClick={onClose}><X size={19} /></button>
+            <button className="icon-btn" type="button" aria-label={`关闭相似${mediaName}`} onClick={onClose}><X size={19} /></button>
           </div>
         </header>
         <div className="asset-similar-reference">
@@ -188,7 +193,7 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
             {albums.length ? albums.map(item => item.name).join("、") : "不属于任何相片集"}
           </span></div>
           <label className="asset-similar-filter">
-            <span>排除所在相片集照片</span>
+            <span>排除所在相片集{mediaName}</span>
             <input type="checkbox" role="switch" checked={outsideAlbums} disabled={!filterAlbums.length}
               onChange={event => setOutsideAlbums(event.target.checked)} />
             <span className="asset-similar-switch" aria-hidden="true" />
@@ -201,7 +206,7 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
             aria-selected={source === item} className={source === item ? "active" : ""}
             onClick={() => setSource(item)}>
             {item === "dhash" ? <Copy size={16} /> : <Sparkles size={16} />}
-            {item === "dhash" ? "算法判定" : "智能推荐"}
+            {item === "dhash" ? (video ? "近似版本" : "算法判定") : (video ? "内容相似" : "智能推荐")}
           </button>)}
         </div>
         <div className="modal-body asset-similar-results">

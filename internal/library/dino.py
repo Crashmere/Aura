@@ -63,9 +63,16 @@ mean = np.array([.485, .456, .406], dtype=np.float32)
 std = np.array([.229, .224, .225], dtype=np.float32)
 
 
-def preprocess(path):
+def preprocess(path, full_frame=False):
     with Image.open(path) as opened:
         im = opened.convert("RGB")
+        if full_frame:
+            ratio = 224 / max(im.size)
+            im = im.resize((max(1, round(im.width * ratio)), max(1, round(im.height * ratio))), Image.Resampling.BICUBIC)
+            canvas = Image.new("RGB", (224, 224), (124, 116, 104))
+            canvas.paste(im, ((224 - im.width) // 2, (224 - im.height) // 2))
+            pixels = (np.asarray(canvas, dtype=np.float32) / 255 - mean) / std
+            return torch.from_numpy(np.ascontiguousarray(pixels.transpose(2, 0, 1)))
         ratio = 256 / min(im.size)
         im = im.resize((round(im.width * ratio), round(im.height * ratio)), Image.Resampling.BICUBIC)
         left, top = (im.width - 224) // 2, (im.height - 224) // 2
@@ -97,6 +104,20 @@ def infer(tensors):
 
 
 def process(request):
+    if request.get("featuresOnly"):
+        outputs, tensors, items = [], [], []
+        for item in request["items"]:
+            try:
+                tensors.append(preprocess(item["path"], full_frame=True))
+                items.append(item)
+            except Exception as error:
+                outputs.append({"hash": item["hash"], "error": str(error)[:500]})
+        note = startup_note
+        if items:
+            features, fallback_note = infer(tensors)
+            note = fallback_note or note
+            outputs.extend({"hash": item["hash"], "vector": vector.tolist()} for item, vector in zip(items, features))
+        return {"items": outputs, "engine": "NVIDIA GPU" if device == "cuda" else "CPU", "note": note}
     records = Path(request["records"])
     if request.get("reset"):
         cached.clear()

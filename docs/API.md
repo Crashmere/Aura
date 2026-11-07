@@ -130,6 +130,14 @@ Cursor pagination sorts by capture date and asset ID descending. Pass the return
 
 For example, `/api/assets?kind=live&format=heic&location=with&versions=single&minMP=12&addedFrom=2026-10-01&limit=24` lists matching Live Photos; `/api/timeline` with the same filter parameters counts them by capture month. These read-only endpoints use catalog/resource indexes and rebuildable metadata projections. Pending projection updates are synchronized before filtering; existing original metadata is not rewritten.
 
+## Video similarity
+
+`GET /api/similar?media=video&source=dhash|dino` returns a paged `{items,assets,total,counts,next,index}` response for independent, ready, visible video primaries. The default source is `dhash`; `limit` defaults to 20 and is bounded to 100. Both sources sort by descending score, then asset IDs. Cursors are source- and media-specific; reset them when changing sources or filters. Omitting `media` retains the existing photo API. `source=dino` accepts the existing `minScore` and `maxScore` bounds.
+
+Video pairs include `media:"video"`, `score`, `coverage` and up to three `samples:[{left,right}]` entries in normalized playback seconds for the corresponding sides. Near-version scores describe mean dHash similarity across ordered samples; content scores describe bidirectional frame-feature similarity. Coverage is the smaller matched fraction of the two informative sampled-frame sets, not measured whole-video overlap or a duplicate probability. Neither source compares audio.
+
+`GET /api/assets/{id}/similar` automatically selects the video graph for a video item, retaining source, pagination and outside-album filtering. Video cards use the existing `similarCounts:{dhash,dino}` field for near-version and content counts. `GET /api/info.videoSimilarityIndex` and video candidate responses expose independent total/ready/pending/error counts and the actual processing engine. Dismissal, undo and manual merge use the existing endpoints; recently deleted and pending-deletion items are excluded. Live Photo motions remain part of their native item and do not enter the independent video graph.
+
 ## Deletion and restore
 
 `PATCH /api/assets/{id}` with `trash:true` moves an item to recently deleted; `trash:false` restores it. All originals, native paired resources, and album memberships remain stored. `PATCH /api/assets` accepts 1–1000 exact IDs and a required boolean `trash`, validates the entire batch, and returns `{updated:[assetId]}`. Invalid or unavailable items reject the batch without partially applying it. Ordinary removal has no automatic expiry.

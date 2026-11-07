@@ -160,8 +160,9 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 }
 func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"name": "Aura", "version": "0.3.0", "chunkSize": chunkSize, "processingConcurrency": l.ProcessingLimits,
-		"similarityIndex": l.dinoSnapshot(),
-		"capabilities":    map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true, "rotation": true, "coverFrames": true}}
+		"similarityIndex":      l.dinoSnapshot(),
+		"videoSimilarityIndex": l.videoSimilarityStatus(),
+		"capabilities":         map[string]bool{"originalPresence": true, "albumImport": true, "processingPages": true, "uploadPages": true, "similarReview": true, "dinoSimilarity": true, "timeline": true, "permanentDelete": true, "rotation": true, "coverFrames": true}}
 	value, err := l.cachedCatalog(r.Context(), "info", "library", func() (any, error) {
 		values := map[string]int64{}
 		counts := map[string]string{

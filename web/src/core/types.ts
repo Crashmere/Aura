@@ -148,6 +148,7 @@ export interface LibraryTelemetry {
   pendingDeletions?: number;
   processingConcurrency?: ConcurrencyLimits;
   similarityIndex?: DinoIndexStatus;
+  videoSimilarityIndex?: DinoIndexStatus;
   capabilities?: {
     originalPresence?: boolean;
     albumImport?: boolean;
@@ -219,6 +220,9 @@ export interface CandidatePair {
   distance: number;
   source?: "dhash" | "dino";
   score?: number;
+  media?: "video";
+  coverage?: number;
+  samples?: { left: number; right: number }[];
 }
 
 export type SimilarityScoreRange = [number, number];
@@ -277,5 +281,6 @@ export type WorkspaceViewId =
   | "automatic"
   | "merged"
   | "similar"
+  | "similar-videos"
   | "trash"
   | "jobs";

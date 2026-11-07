@@ -50,6 +50,12 @@ type Library struct {
 	dinoItems        map[string]dinoItem
 	dinoDelta        map[string]dinoItem
 	dinoWake         chan struct{}
+	videoMu          sync.RWMutex
+	videoRecords     map[string]videoFeatureRecord
+	videoStatus      dinoStatus
+	videoActive      *processingJob
+	videoHash        string
+	videoWake        chan struct{}
 	facetMu          sync.Mutex
 	cacheMu          sync.Mutex
 	cache            map[string]catalogCache
@@ -226,7 +232,7 @@ func Open(root string) (*Library, error) {
 		db.Close()
 		return nil, err
 	}
-	l := &Library{DB: db, Root: root, Wake: make(chan struct{}, 1), dinoWake: make(chan struct{}, 1), cache: map[string]catalogCache{}}
+	l := &Library{DB: db, Root: root, Wake: make(chan struct{}, 1), dinoWake: make(chan struct{}, 1), videoWake: make(chan struct{}, 1), cache: map[string]catalogCache{}}
 	if err = l.initializeIndexes(); err != nil {
 		db.Close()
 		return nil, err
@@ -254,6 +260,10 @@ func (l *Library) Notify() {
 	}
 	select {
 	case l.dinoWake <- struct{}{}:
+	default:
+	}
+	select {
+	case l.videoWake <- struct{}{}:
 	default:
 	}
 }

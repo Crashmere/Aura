@@ -22,11 +22,14 @@ type similarItem struct {
 }
 
 type similarPair struct {
-	Left     string  `json:"left"`
-	Right    string  `json:"right"`
-	Distance int     `json:"distance"`
-	Source   string  `json:"source,omitempty"`
-	Score    float32 `json:"score,omitempty"`
+	Left     string             `json:"left"`
+	Right    string             `json:"right"`
+	Distance int                `json:"distance"`
+	Source   string             `json:"source,omitempty"`
+	Score    float32            `json:"score,omitempty"`
+	Media    string             `json:"media,omitempty"`
+	Coverage float32            `json:"coverage,omitempty"`
+	Samples  []videoMatchSample `json:"samples,omitempty"`
 }
 
 type similarMatch struct {
@@ -67,6 +70,14 @@ func (l *Library) ignoredPairs() (map[string]bool, error) {
 
 func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if q.Get("media") == "video" {
+		l.similarVideo(w, r)
+		return
+	}
+	if media := q.Get("media"); media != "" && media != "photo" {
+		fail(w, 400, "媒体类型无效")
+		return
+	}
 	if source := q.Get("source"); source == "dino" {
 		l.similarDINO(w, r)
 		return
