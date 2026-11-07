@@ -320,14 +320,16 @@ function AuraApplication() {
   // Similar studio state
   const similarSource = route.similarSource || "dhash";
   const similarMediaRef = useRef<"photo" | "video">("photo");
-  const [similarResultScope, setSimilarResultScope] = useState("");
+  const [similarResultScope, setSimilarResultScope] = useState<{
+    media: "photo" | "video"; source: "dhash" | "dino"; scoreRange: SimilarityScoreRange;
+  } | null>(null);
   const [dinoScoreRange, setDinoScoreRange] = useState<SimilarityScoreRange>([.7, 1]);
   const [similarPairs, setSimilarPairs] = useState<CandidatePair[]>([]);
   const [similarAssets, setSimilarAssets] = useState<Record<string, CatalogAsset>>({});
-  const [similarCounts, setSimilarCounts] = useState<Record<"dhash" | "dino", number>>();
+  const [similarCounts, setSimilarCounts] = useState<Partial<Record<"photo" | "video", Record<"dhash" | "dino", number>>>>({});
   const [similarTotal, setSimilarTotal] = useState(0);
   const [similarError, setSimilarError] = useState("");
-  const [dinoIndex, setDinoIndex] = useState<DinoIndexStatus>();
+  const [similarIndexes, setSimilarIndexes] = useState<Partial<Record<"photo" | "video", DinoIndexStatus>>>({});
   const [similarNext, setSimilarNext] = useState("");
   const [dinoPageIdx, setDinoPageIdx] = useState(0);
   const dinoCursorsRef = useRef<string[]>([""]);
@@ -455,7 +457,9 @@ function AuraApplication() {
   const isAlbumOverview = route.view === "albums" && !route.album;
   const isVideoSimilarity = route.similarMedia === "video";
   const isSimilarityView = route.view === "similar";
-  const similarResultsMatch = similarResultScope === `${route.similarMedia || "photo"}:${similarSource}`;
+  const similarResultsMatch = similarResultScope?.media === (route.similarMedia || "photo")
+    && similarResultScope.source === similarSource
+    && (similarSource === "dhash" || similarResultScope.scoreRange.every((score, index) => score === dinoScoreRange[index]));
   const isGalleryView = !isSimilarityView && route.view !== "jobs" && !isAlbumOverview;
 
   // Build shared query parameters for /api/assets and /api/timeline
@@ -775,14 +779,14 @@ function AuraApplication() {
       }
       const res = await requestJson<SimilarCandidatesPage>(`similar?${q.toString()}`, undefined, undefined, controller.signal);
       if (requestId !== similarRequestIdRef.current) return;
-      setSimilarResultScope(`${media}:${src}`);
+      setSimilarResultScope({ media, source: src, scoreRange });
       setSimilarPairs((prev) => (append ? [...prev, ...res.items] : res.items));
       setSimilarAssets((prev) => (append ? { ...prev, ...res.assets } : res.assets || {}));
-      setSimilarCounts(res.counts);
+      setSimilarCounts((prev) => ({ ...prev, [media]: res.counts }));
       setSimilarTotal(res.total);
-      if (res.index) setDinoIndex(res.index);
+      if (res.index) setSimilarIndexes((prev) => ({ ...prev, [media]: res.index }));
       setSimilarNext(res.next || "");
-      if (src === "dino") setDinoPageIdx(pageIndex);
+      setDinoPageIdx(src === "dino" ? pageIndex : 0);
     } catch (err) {
       if (requestId === similarRequestIdRef.current && !controller.signal.aborted) {
         setSimilarError(err instanceof Error ? err.message : String(err));
@@ -798,16 +802,7 @@ function AuraApplication() {
   useEffect(() => {
     if (route.view !== "similar") return;
     dinoCursorsRef.current = [""];
-    setDinoIndex(undefined);
     const media = route.similarMedia || "photo";
-    if (similarPageRef.current.source !== similarSource || similarMediaRef.current !== media) {
-      setDinoPageIdx(0);
-      setSimilarPairs([]);
-      setSimilarAssets({});
-      setSimilarCounts(undefined);
-      setSimilarTotal(0);
-      setSimilarNext("");
-    }
     if (similarMediaRef.current !== media) setLastIgnoredPair(null);
     similarMediaRef.current = media;
     void fetchSimilarCandidates(similarSource, "", false, 0, dinoScoreRange);
@@ -1431,13 +1426,19 @@ function AuraApplication() {
           ) : isSimilarityView ? (
             <SimilarWorkspaceView
               video={isVideoSimilarity}
-              onSelectMedia={(similarMedia) => updateRoute((prev) => ({ ...prev, similarMedia }), "push")}
+              onSelectMedia={(similarMedia) => updateRoute((prev) => ({
+                ...prev, similarMedia, similarSource: prev.similarSource || "dhash",
+              }), "push")}
               source={similarSource}
               onSelectSource={(similarSource) => updateRoute((prev) => ({ ...prev, similarSource }), "push")}
-              pairs={similarResultsMatch ? similarPairs : []}
-              assetsMap={similarResultsMatch ? similarAssets : {}}
-              counts={similarResultsMatch ? similarCounts : undefined}
-              total={similarResultsMatch ? similarTotal : 0}
+              pairs={similarPairs}
+              assetsMap={similarAssets}
+              counts={similarCounts[route.similarMedia || "photo"]}
+              total={similarTotal}
+              resultsSource={similarResultScope?.source || similarSource}
+              resultsVideo={similarResultScope ? similarResultScope.media === "video" : isVideoSimilarity}
+              hasResults={!!similarResultScope}
+              resultsStale={!similarResultsMatch}
               scoreRange={dinoScoreRange}
               onSelectScoreRange={setDinoScoreRange}
               error={similarError}
@@ -1445,14 +1446,15 @@ function AuraApplication() {
                 const page = similarPageRef.current;
                 void fetchSimilarCandidates(page.source, page.cursor, false, page.pageIndex, page.scoreRange);
               }}
-              dinoIndex={isVideoSimilarity ? telemetry?.videoSimilarityIndex : dinoIndex || telemetry?.similarityIndex}
-              pageIndex={similarResultsMatch ? dinoPageIdx : 0}
-              hasNextPage={similarResultsMatch && !!similarNext}
+              dinoIndex={isVideoSimilarity ? telemetry?.videoSimilarityIndex || similarIndexes.video
+                : similarIndexes.photo || telemetry?.similarityIndex}
+              pageIndex={dinoPageIdx}
+              hasNextPage={!!similarNext}
               loading={similarLoading || (!similarResultsMatch && !similarError)}
               ignoringKey={ignoringKey}
               lastIgnoredPair={lastIgnoredPair}
               onTurnDinoPage={(delta) => {
-                if (similarRequestRef.current || ignoringKey) return;
+                if (!similarResultsMatch || similarRequestRef.current || ignoringKey) return;
                 const nextIdx = dinoPageIdx + delta;
                 if (nextIdx < 0 || (delta > 0 && !similarNext)) return;
                 if (delta > 0 && similarNext) {
@@ -1460,7 +1462,10 @@ function AuraApplication() {
                 }
                 void fetchSimilarCandidates("dino", dinoCursorsRef.current[nextIdx] || "", false, nextIdx);
               }}
-              onAppendDhash={() => void fetchSimilarCandidates("dhash", similarNext, true)}
+              onAppendDhash={() => {
+                if (!similarResultsMatch || similarRequestRef.current || ignoringKey) return;
+                void fetchSimilarCandidates("dhash", similarNext, true);
+              }}
               onOpenHistory={() => setHistoryKind("similar")}
               onOpenAsset={(asset) => {
                 setViewerGroup(null);

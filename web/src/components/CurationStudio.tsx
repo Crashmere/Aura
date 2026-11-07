@@ -16,6 +16,7 @@ import {
   Layers3,
   LoaderCircle,
   RotateCcw,
+  Sparkles,
   Video,
   X,
 } from "lucide-react";
@@ -694,6 +695,10 @@ export function SimilarWorkspaceView({
   assetsMap,
   counts,
   total,
+  resultsSource,
+  resultsVideo,
+  hasResults,
+  resultsStale,
   scoreRange,
   onSelectScoreRange,
   error,
@@ -721,6 +726,10 @@ export function SimilarWorkspaceView({
   assetsMap: Record<string, CatalogAsset>;
   counts?: Record<"dhash" | "dino", number>;
   total: number;
+  resultsSource: "dhash" | "dino";
+  resultsVideo: boolean;
+  hasResults: boolean;
+  resultsStale: boolean;
   scoreRange: SimilarityScoreRange;
   onSelectScoreRange: (range: SimilarityScoreRange) => void;
   error: string;
@@ -742,10 +751,11 @@ export function SimilarWorkspaceView({
 }) {
   const tabsIndicator = useSlidingIndicator(source, ".active");
   const mediaIndicator = useSlidingIndicator(video ? "video" : "photo", ".active");
+  const resultsDisabled = loading || resultsStale || !!error;
   const dinoPager = (
     <nav className="similar-pagination" aria-label="智能推荐分页">
       <ActionButton
-        disabled={loading || !!error || !!ignoringKey || pageIndex === 0}
+        disabled={resultsDisabled || !!ignoringKey || pageIndex === 0}
         onClick={() => onTurnDinoPage(-1)}
       >
         上一页
@@ -757,7 +767,7 @@ export function SimilarWorkspaceView({
         </span>
       </span>
       <ActionButton
-        disabled={loading || !!error || !!ignoringKey || !hasNextPage}
+        disabled={resultsDisabled || !!ignoringKey || !hasNextPage}
         onClick={() => onTurnDinoPage(1)}
       >
         下一页
@@ -810,12 +820,11 @@ export function SimilarWorkspaceView({
               disabled={!!ignoringKey}
               onClick={() => onSelectSource("dhash")}
             >
-              <span>算法</span>
-              {counts && (
-                <small className="similar-count" title="候选总数">
-                  {counts.dhash.toLocaleString("zh-CN")}
-                </small>
-              )}
+              <Copy size={16} />
+              <span>算法判定</span>
+              <small className="similar-count" title="候选总数">
+                {counts ? counts.dhash.toLocaleString("zh-CN") : "-"}
+              </small>
             </button>
             <button
               type="button"
@@ -824,12 +833,11 @@ export function SimilarWorkspaceView({
               disabled={!!ignoringKey}
               onClick={() => onSelectSource("dino")}
             >
-              <span>推荐</span>
-              {counts && (
-                <small className="similar-count" title="候选总数">
-                  {counts.dino.toLocaleString("zh-CN")}
-                </small>
-              )}
+              <Sparkles size={16} />
+              <span>智能推荐</span>
+              <small className="similar-count" title="候选总数">
+                {counts ? counts.dino.toLocaleString("zh-CN") : "-"}
+              </small>
             </button>
           </div>
         </div>
@@ -837,7 +845,7 @@ export function SimilarWorkspaceView({
           <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />
           <span className="similar-score-result" role="status">
             {loading ? <LoaderCircle size={14} className="spin" aria-label="正在筛选" /> :
-              !error && (scoreRange[0] > .7 || scoreRange[1] < 1) ? `${total.toLocaleString("zh-CN")} 组` : ""}
+              !resultsStale && !error && (scoreRange[0] > .7 || scoreRange[1] < 1) ? `${total.toLocaleString("zh-CN")} 组` : ""}
           </span>
         </div>}
         <button
@@ -848,6 +856,9 @@ export function SimilarWorkspaceView({
           <History size={14} />
           <span>已确认不同</span>
         </button>
+        <span className="similar-switch-status" role="status">
+          {loading && source === "dhash" && <LoaderCircle size={14} className="spin" aria-label="正在更新候选" />}
+        </span>
       </div>
 
       <MotionPresence present={(source === "dino" || video) && !!dinoIndex} variant="panel">
@@ -875,9 +886,10 @@ export function SimilarWorkspaceView({
         <span>{error}</span>
         <button className="btn" type="button" disabled={loading} onClick={onRetry}>重试</button>
       </div>}
-      {video && <p className="video-similarity-note">按抽样画面判断，不比较音轨；归并后所有原件均保留。</p>}
 
-      {source === "dino" && (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager}
+      <div className={`similar-results${resultsStale && hasResults ? " is-updating" : ""}`}
+        aria-busy={loading} inert={resultsStale || undefined}>
+      {resultsSource === "dino" && (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager}
 
       <MotionPresence present={!!lastIgnoredPair} variant="panel">
         {lastIgnoredPair && (
@@ -885,7 +897,7 @@ export function SimilarWorkspaceView({
             <span>已确认一组候选不同，后续不再提示。</span>
             <button
               type="button"
-              disabled={loading || !!ignoringKey}
+              disabled={resultsDisabled || !!ignoringKey}
               onClick={() => void onUndoIgnore(lastIgnoredPair)}
             >
               撤销
@@ -894,7 +906,7 @@ export function SimilarWorkspaceView({
         )}
       </MotionPresence>
 
-      {loading && !pairs.length ? (
+      {loading && !hasResults ? (
         <div className="loading-inline">
           <LoaderCircle className="spin" size={20} />
           <span>{video ? "正在查找相似视频" : "正在查找相似照片"}</span>
@@ -905,14 +917,14 @@ export function SimilarWorkspaceView({
             <Copy size={28} strokeWidth={1.3} />
           </div>
           <h2>
-            {video ? (dinoIndex?.pending ? "索引更新后会显示相似视频" : "未找到符合条件的相似视频") :
-            source === "dino" && pageIndex > 0
+            {resultsVideo ? (!resultsStale && dinoIndex?.pending ? "索引更新后会显示相似视频" : "未找到符合条件的相似视频") :
+            resultsSource === "dino" && pageIndex > 0
               ? "当前页暂无推荐照片"
-              : source === "dino" && (scoreRange[0] > .7 || scoreRange[1] < 1)
+              : resultsSource === "dino" && !resultsStale && (scoreRange[0] > .7 || scoreRange[1] < 1)
                 ? "没有符合相似度范围的照片"
-              : source === "dino" && dinoIndex?.pending
+              : resultsSource === "dino" && !resultsStale && dinoIndex?.pending
                 ? "分析完成后会显示推荐照片"
-                : source === "dino"
+                : resultsSource === "dino"
                   ? "暂无智能推荐"
                   : "没有算法判定相似的照片"}
           </h2>
@@ -935,13 +947,13 @@ export function SimilarWorkspaceView({
                 <PhotoTile
                   asset={left}
                   originalAspect
-                  disabled={loading || !!error}
+                  disabled={resultsDisabled}
                   onClick={() => onOpenAsset(left)}
                 />
                 <PhotoTile
                   asset={right}
                   originalAspect
-                  disabled={loading || !!error}
+                  disabled={resultsDisabled}
                   onClick={() => onOpenAsset(right)}
                 />
                 <div className="pair-actions">
@@ -950,21 +962,21 @@ export function SimilarWorkspaceView({
                       <LoaderCircle size={14} className="spin" aria-label="正在整理" />
                     )}
                     <strong>
-                      {source === "dino" ? "画面内容相近" : video ? "多帧时序相近" : "图像指纹相近"}
+                      {resultsSource === "dino" ? "画面内容相近" : resultsVideo ? "多帧时序相近" : "图像指纹相近"}
                     </strong>
-                    {source === "dino" && pair.score !== undefined && (
+                    {resultsSource === "dino" && pair.score !== undefined && (
                       <small className="similar-score">
                         特征相似度 {(100 * Math.min(1, pair.score)).toFixed(1)}%
                       </small>
                     )}
-                    {video && pair.coverage !== undefined && <small>抽样帧匹配率 {(pair.coverage * 100).toFixed(0)}%</small>}
+                    {resultsVideo && pair.coverage !== undefined && <small>抽样帧匹配率 {(pair.coverage * 100).toFixed(0)}%</small>}
                     <small>
                       {left.width} × {left.height} · {right.width} × {right.height}
                     </small>
                   </div>
                   <div className="pair-buttons">
                     <ActionButton
-                      disabled={loading || !!error || !!left.deletionPending || !!right.deletionPending}
+                      disabled={resultsDisabled || !!left.deletionPending || !!right.deletionPending}
                       onClick={() => onComparePair(left, right, pair)}
                     >
                       <Columns2 size={15} />
@@ -972,7 +984,7 @@ export function SimilarWorkspaceView({
                     </ActionButton>
                     <ActionButton
                       variant="primary"
-                      disabled={loading || !!error || !!ignoringKey || !!left.deletionPending || !!right.deletionPending}
+                      disabled={resultsDisabled || !!ignoringKey || !!left.deletionPending || !!right.deletionPending}
                       onClick={() => void onMergePair(left, right)}
                     >
                       <Layers3 size={15} />
@@ -980,7 +992,7 @@ export function SimilarWorkspaceView({
                     </ActionButton>
                     <ActionButton
                       className="similar-ignore-btn"
-                      disabled={loading || !!error || !!ignoringKey}
+                      disabled={resultsDisabled || !!ignoringKey}
                       onClick={() => void onIgnorePair(pair)}
                     >
                       确认不同
@@ -993,15 +1005,17 @@ export function SimilarWorkspaceView({
         </div>
       )}
 
-      {source === "dino"
+      {resultsSource === "dino"
         ? (pairs.length > 0 || hasNextPage || pageIndex > 0) && dinoPager
         : hasNextPage && (
             <div className="similar-more-wrap">
-              <ActionButton disabled={loading || !!ignoringKey} onClick={onAppendDhash}>
+              <ActionButton disabled={resultsDisabled || !!ignoringKey} onClick={onAppendDhash}>
                 {loading ? "正在加载" : "加载更多候选"}
               </ActionButton>
             </div>
           )}
+      {resultsVideo && <p className="video-similarity-note">按抽样画面判断，不比较音轨；归并后所有原件均保留。</p>}
+      </div>
     </div>
     </CurrentAlbumContext>
   );

@@ -72,6 +72,30 @@
   flex-wrap: nowrap;
 }
 
+.similar-mode-switches .similar-count {
+  min-width: 5ch;
+  text-align: center;
+}
+
+.similar-switch-status {
+  display: inline-flex;
+  align-items: center;
+  width: 14px;
+  height: 14px;
+}
+
+.similar-results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: opacity 160ms var(--ease-out);
+}
+
+.similar-results.is-updating {
+  opacity: 0.82;
+  transition-delay: 120ms;
+}
+
 .similar-review-toolbar .review-history-link {
   margin-left: auto;
 }
@@ -232,7 +256,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
-  animation: aura-view-enter 0.24s var(--ease-out);
 }
 
 .similar-pair-card {
@@ -819,6 +842,7 @@ article.task-row:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .similar-results,
   .asset-similar-switch,
   .asset-similar-switch::after,
   .asset-similar-grid {
