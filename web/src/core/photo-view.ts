@@ -78,7 +78,7 @@ export function usePhotoViewGestures({
   const viewRef = useRef<PhotoView>({ scale, pan });
   const wheelRef = useRef<{
     time: number; pinch: boolean; trackpad: boolean;
-    action: "pan" | "navigate"; x: number; y: number; navigated: boolean;
+    action: "pan" | "navigate"; x: number; y: number; navigationTime: number;
   } | null>(null);
   const safariRef = useRef<{ scale: number; viewport: HTMLElement } | null>(null);
   const safariUntilRef = useRef(0);
@@ -147,7 +147,7 @@ export function usePhotoViewGestures({
         time: now, pinch: event.ctrlKey,
         trackpad: event.deltaMode === 0 && (event.deltaX !== 0 || Math.abs(event.deltaY) < 50 || !Number.isInteger(event.deltaY)),
         action: viewRef.current.scale > 1.01 ? "pan" : "navigate",
-        x: 0, y: 0, navigated: false,
+        x: 0, y: 0, navigationTime: -Infinity,
       };
       wheelRef.current = wheel;
     }
@@ -165,12 +165,20 @@ export function usePhotoViewGestures({
       }, view.scale, viewport.clientWidth, viewport.clientHeight) });
       return;
     }
+    // Discard motion during the image transition instead of queuing jumps.
+    if (now - wheel.navigationTime < 220) return;
+    if (wheel.x * event.deltaX < 0) {
+      wheel.x = 0;
+      wheel.y = 0;
+    }
     wheel.x += event.deltaX;
     wheel.y += Math.abs(event.deltaY);
-    if (!wheel.navigated && Math.abs(wheel.x) >= 80 && Math.abs(wheel.x) > wheel.y * 1.3) {
-      // Keep this latch across photo changes so the inertial tail cannot skip items.
-      wheel.navigated = true;
-      onNavigate?.(wheel.x > 0 ? 1 : -1);
+    if (Math.abs(wheel.x) >= 80 && Math.abs(wheel.x) > wheel.y * 1.3) {
+      const direction = wheel.x > 0 ? 1 : -1;
+      wheel.navigationTime = now;
+      wheel.x = 0;
+      wheel.y = 0;
+      onNavigate?.(direction);
     }
   });
 
