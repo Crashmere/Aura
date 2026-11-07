@@ -51,6 +51,18 @@ type videoFeatureRecord struct {
 	Error      string              `json:"error,omitempty"`
 }
 
+func videoEngineSummary(engine string) string {
+	parts := []string{}
+	seen := map[string]bool{}
+	for _, part := range strings.Split(engine, " · ") {
+		if part != "" && !seen[part] {
+			parts = append(parts, part)
+			seen[part] = true
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
 func (l *Library) videoSimilarityStatus() dinoStatus {
 	l.videoMu.RLock()
 	defer l.videoMu.RUnlock()
@@ -59,6 +71,7 @@ func (l *Library) videoSimilarityStatus() dinoStatus {
 		status.State = "starting"
 	}
 	status.BatchSize = 1
+	status.Engine = videoEngineSummary(status.Engine)
 	return status
 }
 
@@ -261,6 +274,9 @@ func (l *Library) extractVideoFrames(ctx context.Context, hash, work string) (vi
 	var output string
 	var times []float64
 	for _, mode := range modes {
+		l.videoMu.Lock()
+		l.videoStatus.Engine = mode
+		l.videoMu.Unlock()
 		times = nil
 		for index, seek := range seeks {
 			args := []string{"-nostdin", "-v", "info", "-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-filter_complex_threads", "1"}
@@ -448,7 +464,10 @@ func (l *Library) inferVideoBatch(ctx context.Context, worker **dinoProcess, rec
 		seen[i] = true
 		record.Frames[i].Vector = item.Vector
 	}
-	record.Engine += " · " + response.Engine + " 特征"
+	record.Engine = videoEngineSummary(record.Engine + " · " + response.Engine + " 特征")
+	l.videoMu.Lock()
+	l.videoStatus.Engine = record.Engine
+	l.videoMu.Unlock()
 	return nil
 }
 
@@ -703,6 +722,7 @@ func (l *Library) analyzeVideo(ctx context.Context, hash string, worker **dinoPr
 	job := &processingJob{cancel: cancel, done: make(chan struct{})}
 	l.videoMu.Lock()
 	l.videoActive, l.videoHash, l.videoStatus.State = job, hash, "processing"
+	l.videoStatus.Engine = ""
 	l.videoMu.Unlock()
 	defer func() {
 		cancel()
