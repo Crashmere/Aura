@@ -12,9 +12,11 @@ import {
   Columns2,
   Copy,
   History,
+  Images,
   Layers3,
   LoaderCircle,
   RotateCcw,
+  Video,
   X,
 } from "lucide-react";
 import {
@@ -680,11 +682,12 @@ export function CurationHistoryModal({
 }
 
 // ============================================================================
-// 3. Similar Photos Workspace (dHash & DINOv2)
+// 3. Similar Media Workspace (dHash & DINOv2)
 // ============================================================================
 
 export function SimilarWorkspaceView({
   video = false,
+  onSelectMedia,
   source,
   onSelectSource,
   pairs,
@@ -711,6 +714,7 @@ export function SimilarWorkspaceView({
   onUndoIgnore,
 }: {
   video?: boolean;
+  onSelectMedia: (media: "photo" | "video") => void;
   source: "dhash" | "dino";
   onSelectSource: (src: "dhash" | "dino") => void;
   pairs: CandidatePair[];
@@ -737,6 +741,7 @@ export function SimilarWorkspaceView({
   onUndoIgnore: (pair: CandidatePair) => Promise<void>;
 }) {
   const tabsIndicator = useSlidingIndicator(source, ".active");
+  const mediaIndicator = useSlidingIndicator(video ? "video" : "photo", ".active");
   const dinoPager = (
     <nav className="similar-pagination" aria-label="智能推荐分页">
       <ActionButton
@@ -764,38 +769,69 @@ export function SimilarWorkspaceView({
     <CurrentAlbumContext value="">
     <div className="similar-workspace">
       <div className="similar-review-toolbar">
-        <div
-          className="similar-tabs motion-tabs"
-          aria-label="相似类型"
-          ref={tabsIndicator.ref}
-          style={tabsIndicator.style}
-        >
-          <button
-            type="button"
-            className={source === "dhash" ? "active" : ""}
-            aria-pressed={source === "dhash"}
-            onClick={() => onSelectSource("dhash")}
+        <div className="similar-mode-switches">
+          <div
+            className="similar-tabs motion-tabs"
+            aria-label="媒体类型"
+            ref={mediaIndicator.ref}
+            style={mediaIndicator.style}
           >
-            <span>算法判定</span>
-            {counts && (
-              <small className="similar-count" title="候选总数">
-                {counts.dhash.toLocaleString("zh-CN")}
-              </small>
-            )}
-          </button>
-          <button
-            type="button"
-            className={source === "dino" ? "active" : ""}
-            aria-pressed={source === "dino"}
-            onClick={() => onSelectSource("dino")}
+            <button
+              type="button"
+              className={!video ? "active" : ""}
+              aria-pressed={!video}
+              disabled={!!ignoringKey}
+              onClick={() => onSelectMedia("photo")}
+            >
+              <Images size={15} />
+              <span>照片</span>
+            </button>
+            <button
+              type="button"
+              className={video ? "active" : ""}
+              aria-pressed={video}
+              disabled={!!ignoringKey}
+              onClick={() => onSelectMedia("video")}
+            >
+              <Video size={15} />
+              <span>视频</span>
+            </button>
+          </div>
+          <div
+            className="similar-tabs motion-tabs"
+            aria-label="分析方式"
+            ref={tabsIndicator.ref}
+            style={tabsIndicator.style}
           >
-            <span>智能推荐</span>
-            {counts && (
-              <small className="similar-count" title="候选总数">
-                {counts.dino.toLocaleString("zh-CN")}
-              </small>
-            )}
-          </button>
+            <button
+              type="button"
+              className={source === "dhash" ? "active" : ""}
+              aria-pressed={source === "dhash"}
+              disabled={!!ignoringKey}
+              onClick={() => onSelectSource("dhash")}
+            >
+              <span>算法</span>
+              {counts && (
+                <small className="similar-count" title="候选总数">
+                  {counts.dhash.toLocaleString("zh-CN")}
+                </small>
+              )}
+            </button>
+            <button
+              type="button"
+              className={source === "dino" ? "active" : ""}
+              aria-pressed={source === "dino"}
+              disabled={!!ignoringKey}
+              onClick={() => onSelectSource("dino")}
+            >
+              <span>推荐</span>
+              {counts && (
+                <small className="similar-count" title="候选总数">
+                  {counts.dino.toLocaleString("zh-CN")}
+                </small>
+              )}
+            </button>
+          </div>
         </div>
         {source === "dino" && <div className="similar-score-toolbar">
           <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />

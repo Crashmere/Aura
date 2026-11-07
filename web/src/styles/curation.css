@@ -1,4 +1,4 @@
-/* Similar Photos Workspace */
+/* Similar Media Workspace */
 .similar-workspace {
   display: flex;
   flex-direction: column;
@@ -58,6 +58,18 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.similar-mode-switches {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  max-width: 100%;
+}
+
+.similar-mode-switches .similar-tabs {
+  flex-wrap: nowrap;
 }
 
 .similar-review-toolbar .review-history-link {
@@ -125,7 +137,7 @@
 
 .similar-score-toolbar {
   flex-wrap: wrap;
-  flex: 0 1 480px;
+  flex: 0 1 384px;
   max-width: 100%;
 }
 
@@ -210,6 +222,10 @@
   min-height: 20px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.similar-score-result:empty {
+  display: none;
 }
 
 .similar-pairs-grid {

@@ -76,15 +76,7 @@ export const WORKSPACE_MODULES: readonly WorkspaceModuleDescriptor[] = [
   },
   {
     id: "similar",
-    title: "相似照片",
-    section: "curation",
-    supportsSearch: false,
-    supportsTimelineFilters: false,
-    supportsBatchSelection: false,
-  },
-  {
-    id: "similar-videos",
-    title: "相似视频",
+    title: "相似内容",
     section: "curation",
     supportsSearch: false,
     supportsTimelineFilters: false,
@@ -276,6 +268,8 @@ export function buildActiveFilterChips(filters: LibraryFilterValues): ActiveFilt
 
 export interface WorkspaceRouteState {
   view: WorkspaceViewId;
+  similarMedia?: "photo" | "video";
+  similarSource?: "dhash" | "dino";
   album: string;
   query: string;
   from: string;
@@ -291,15 +285,21 @@ const cleanIsoDate = (raw: string | null): string =>
 export function readRouteFromWindow(): WorkspaceRouteState {
   const params = new URLSearchParams(window.location.search);
   const rawView = params.get("view") || "all";
-  const view: WorkspaceViewId = VALID_VIEWS.has(rawView)
-    ? (rawView as WorkspaceViewId)
-    : "all";
+  const view: WorkspaceViewId = rawView === "similar-videos"
+    ? "similar"
+    : VALID_VIEWS.has(rawView) ? (rawView as WorkspaceViewId) : "all";
   const filters = parseFiltersFromQuery(params);
   if (!params.has("albumState") && params.get("unfiled") === "1") {
     filters.albumState = "none";
   }
   return {
     view,
+    similarMedia: view === "similar"
+      ? (rawView === "similar-videos" || params.get("media") === "video" ? "video" : "photo")
+      : undefined,
+    similarSource: view === "similar"
+      ? (params.get("source") === "dino" ? "dino" : "dhash")
+      : undefined,
     album: view === "albums" ? params.get("album") || "" : "",
     query: params.get("q") || "",
     from: cleanIsoDate(params.get("from")),
@@ -313,6 +313,10 @@ export function readRouteFromWindow(): WorkspaceRouteState {
 export function syncRouteToWindow(state: WorkspaceRouteState, mode: "push" | "replace"): void {
   const params = new URLSearchParams(serializeFilterParams(state.filters));
   if (state.view !== "all") params.set("view", state.view);
+  if (state.view === "similar") {
+    if (state.similarMedia === "video") params.set("media", "video");
+    if (state.similarSource === "dino") params.set("source", "dino");
+  }
   if (state.view === "albums" && state.album) params.set("album", state.album);
   if (state.query) params.set("q", state.query);
   if (state.from) params.set("from", state.from);

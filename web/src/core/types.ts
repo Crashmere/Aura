@@ -282,6 +282,5 @@ export type WorkspaceViewId =
   | "automatic"
   | "merged"
   | "similar"
-  | "similar-videos"
   | "trash"
   | "jobs";
