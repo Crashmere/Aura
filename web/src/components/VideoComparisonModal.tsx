@@ -27,6 +27,10 @@ function waitForComparisonFrame(element: HTMLVideoElement, signal: AbortSignal):
   });
 }
 
+function comparisonDuration(element: HTMLVideoElement | null, fallback: number): number {
+  return element && Number.isFinite(element.duration) ? element.duration : fallback;
+}
+
 function useComparisonVideo(asset: CatalogAsset) {
   const ref = useRef<HTMLVideoElement>(null);
   const playback = useRef<VideoPlayback | null>(null);
@@ -67,6 +71,7 @@ export function VideoComparisonModal({ left, right, evidence, onClose, onMergePa
   const first = useComparisonVideo(left);
   const second = useComparisonVideo(right);
   const [playing, setPlaying] = useState(false);
+  const [completed, setCompleted] = useState(false);
   const [time, setTime] = useState(0);
   const [audio, setAudio] = useState<"left" | "right" | "none">("left");
   const [error, setError] = useState("");
@@ -136,6 +141,24 @@ export function VideoComparisonModal({ left, right, evidence, onClose, onMergePa
     setError("");
     setNotice("");
     try {
+      const durations = [first, second].map(player => comparisonDuration(player.ref.current, player.duration));
+      if (completed || [first, second].some((player, index) => {
+        const element = player.ref.current!;
+        return element.ended || (durations[index] > 0 && element.currentTime >= durations[index] - .01);
+      })) {
+        // Restart the shared timeline, not just the ended element. Match anchors
+        // retain their offset when both sides still have a playable interval.
+        let leftStart = Math.max(0, -offset.current);
+        let rightStart = Math.max(0, offset.current);
+        if (leftStart >= durations[0] - .01 || rightStart >= durations[1] - .01) {
+          offset.current = 0;
+          leftStart = rightStart = 0;
+        }
+        first.playback.current!.loadFrame(leftStart);
+        second.playback.current!.loadFrame(rightStart);
+        setTime(leftStart);
+        setCompleted(false);
+      }
       // Load both sides while paused so a slow compatibility segment cannot
       // let the original reach its end before comparison playback starts.
       for (const player of [first, second]) {
@@ -170,9 +193,12 @@ export function VideoComparisonModal({ left, right, evidence, onClose, onMergePa
 
   function seek(leftTime: number, rightTime = leftTime + offset.current) {
     pause();
+    setCompleted(false);
+    leftTime = Math.max(0, Math.min(comparisonDuration(first.ref.current, first.duration) - .001, leftTime));
+    rightTime = Math.max(0, Math.min(comparisonDuration(second.ref.current, second.duration) - .001, rightTime));
     offset.current = rightTime - leftTime;
-    first.playback.current?.loadFrame(Math.max(0, Math.min(first.duration - .001, leftTime)));
-    second.playback.current?.loadFrame(Math.max(0, Math.min(second.duration - .001, rightTime)));
+    first.playback.current?.loadFrame(leftTime);
+    second.playback.current?.loadFrame(rightTime);
     setTime(leftTime);
   }
 
@@ -217,7 +243,7 @@ export function VideoComparisonModal({ left, right, evidence, onClose, onMergePa
               });
             }
           }}
-          onEnded={pause}
+          onEnded={() => { setCompleted(true); pause(); }}
           onError={() => { if (!player.playback.current?.handleMediaError()) player.setError("视频加载失败"); }} />
       </div>
       <header>
@@ -239,7 +265,7 @@ export function VideoComparisonModal({ left, right, evidence, onClose, onMergePa
         <div className="video-compare-panes">{pane(left, first, "left")}{pane(right, second, "right")}</div>
         <div className="video-compare-controls">
           <button className="btn" type="button" disabled={blocked || preparing} onClick={() => void play()}>
-            {preparing ? <LoaderCircle className="spin" size={17} /> : playing ? <Pause size={17} /> : <Play size={17} />}{preparing ? "正在准备" : playing ? "暂停" : "同时播放"}
+            {preparing ? <LoaderCircle className="spin" size={17} /> : playing ? <Pause size={17} /> : <Play size={17} />}{preparing ? "正在准备" : playing ? "暂停" : completed ? "重新播放" : "同时播放"}
           </button>
           <span className="video-compare-clock">{formatDurationClock(time)} / {formatDurationClock(first.duration)}</span>
           <input type="range" min="0" max={Math.max(0, first.duration - .001)} step=".01" value={time}

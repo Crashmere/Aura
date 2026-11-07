@@ -296,7 +296,7 @@ export class VideoPlayback {
     const target = Number.isFinite(duration)
       ? Math.min(this.targetTime, Math.max(0, duration - 0.001))
       : this.targetTime;
-    if (target > 0 && Math.abs(this.video.currentTime - target) > 0.001) {
+    if (Math.abs(this.video.currentTime - target) > 0.001) {
       this.video.currentTime = target;
     }
   };
