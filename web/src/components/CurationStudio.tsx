@@ -794,7 +794,16 @@ export function SimilarWorkspaceView({
   const jumpTarget = Number(jumpPage);
   const validJump = Number.isInteger(jumpTarget) && jumpTarget >= 1 && jumpTarget <= pageCount;
   const dinoPager = (
-    <nav className="similar-toolbar-pagination" aria-label="智能推荐分页" aria-busy={loading}>
+    <nav className="similar-pagination-controls" aria-label="智能推荐分页" aria-busy={loading}>
+      <form className="similar-page-jump" onSubmit={event => {
+        event.preventDefault();
+        if (!resultsDisabled && !ignoringKey && validJump) onSelectDinoPage(jumpTarget - 1);
+      }}>
+        <label>跳至<input type="number" min={1} max={pageCount} aria-label="跳转页码"
+          placeholder={String(currentPage)} value={jumpPage} disabled={resultsDisabled || !!ignoringKey}
+          onChange={event => setJumpPage(event.target.value)} />页</label>
+        <ActionButton type="submit" disabled={resultsDisabled || !!ignoringKey || !validJump}>前往</ActionButton>
+      </form>
       <div className="similar-page-buttons">
         <button className="btn" type="button" aria-label="上一页" title="上一页"
           disabled={resultsDisabled || !!ignoringKey || currentPage === 1}
@@ -902,20 +911,10 @@ export function SimilarWorkspaceView({
           {source === "dino" && <div className="similar-score-toolbar">
             <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />
           </div>}
-          {source === "dino" && <form className="similar-page-jump" onSubmit={event => {
-            event.preventDefault();
-            if (!resultsDisabled && !ignoringKey && validJump) onSelectDinoPage(jumpTarget - 1);
-          }}>
-            <label>跳至<input type="number" min={1} max={pageCount} aria-label="跳转页码"
-              placeholder={String(currentPage)} value={jumpPage} disabled={resultsDisabled || !!ignoringKey}
-              onChange={event => setJumpPage(event.target.value)} />页</label>
-            <ActionButton type="submit" disabled={resultsDisabled || !!ignoringKey || !validJump}>前往</ActionButton>
-          </form>}
           <span className="similar-switch-status" role="status" aria-busy={loading}>
             {loading && <LoaderCircle size={14} className="spin" aria-label="正在更新候选" />}
           </span>
         </div>
-        {source === "dino" && dinoPager}
         <button
           type="button"
           className="btn review-history-link"
@@ -1070,6 +1069,7 @@ export function SimilarWorkspaceView({
       )}
       {resultsVideo && <p className="video-similarity-note">按抽样画面判断，不比较音轨；归并后所有原件均保留。</p>}
       </div>
+      {source === "dino" && dinoPager}
     </div>
     </CurrentAlbumContext>
   );

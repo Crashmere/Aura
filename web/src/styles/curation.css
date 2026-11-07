@@ -65,7 +65,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  flex: 1 1 460px;
+  flex: 1 1 322px;
   max-width: 100%;
 }
 
@@ -75,6 +75,7 @@
 
 .similar-filter-tools .similar-score-toolbar {
   flex: 1 1 290px;
+  max-width: 384px;
 }
 
 .similar-filter-tools .similar-score-filter {
@@ -82,21 +83,19 @@
   width: auto;
 }
 
-.similar-toolbar-pagination {
+.similar-pagination-controls {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 10px;
-  margin-left: auto;
-  flex: 0 1 auto;
   min-height: 30px;
   max-width: 100%;
   font-size: 12px;
 }
 
 @media (max-width: 720px) {
-  .similar-toolbar-pagination {
+  .similar-pagination-controls {
     min-height: 70px;
     align-content: center;
   }
