@@ -7,15 +7,18 @@ export function usePageScrollLock() {
   useLayoutEffect(() => {
     if (scrollLocks++ === 0) {
       const root = document.documentElement;
-      const body = document.body;
       const rootOverflow = root.style.overflow;
-      const bodyOverflow = body.style.overflow;
+      const rootGutter = root.style.getPropertyValue("scrollbar-gutter");
       const { scrollX, scrollY } = window;
+      if (window.innerWidth > root.clientWidth &&
+        !getComputedStyle(root).getPropertyValue("scrollbar-gutter").includes("stable")) {
+        root.style.setProperty("scrollbar-gutter", "stable");
+      }
+      // A body overflow lock would capture sticky headers in a non-scrolling ancestor.
       root.style.overflow = "hidden";
-      body.style.overflow = "hidden";
       restoreScroll = () => {
         root.style.overflow = rootOverflow;
-        body.style.overflow = bodyOverflow;
+        root.style.setProperty("scrollbar-gutter", rootGutter);
         window.scrollTo({ left: scrollX, top: scrollY, behavior: "instant" });
       };
     }
