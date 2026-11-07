@@ -707,7 +707,8 @@ export function SimilarWorkspaceView({
   onSelectScoreRange,
   error,
   onRetry,
-  dinoIndex,
+  photoIndex,
+  videoIndex,
   pageIndex,
   hasNextPage,
   loading,
@@ -740,7 +741,8 @@ export function SimilarWorkspaceView({
   onSelectScoreRange: (range: SimilarityScoreRange) => void;
   error: string;
   onRetry: () => void;
-  dinoIndex?: DinoIndexStatus;
+  photoIndex?: DinoIndexStatus;
+  videoIndex?: DinoIndexStatus;
   pageIndex: number;
   hasNextPage: boolean;
   loading: boolean;
@@ -757,6 +759,14 @@ export function SimilarWorkspaceView({
 }) {
   const tabsIndicator = useSlidingIndicator(source, ".active");
   const mediaIndicator = useSlidingIndicator(video ? "video" : "photo", ".active");
+  const dinoIndex = video ? videoIndex : photoIndex;
+  const indexNote = !dinoIndex ? ""
+    : dinoIndex.state === "unavailable" ? "智能分析暂不可用，稍后自动重试"
+    : dinoIndex.state === "disabled" ? "智能分析已暂停"
+    : dinoIndex.state === "starting" ? "智能分析正在启动"
+    : dinoIndex.pending
+      ? `${dinoIndex.state === "processing" ? "正在分析" : "等待批量分析"} · ${dinoIndex.ready} / ${dinoIndex.total}`
+    : dinoIndex.errors ? "等待重新分析" : "";
   const resultsDisabled = loading || resultsStale || !!error;
   const moreRef = useRef<HTMLDivElement>(null);
   const canAppendDhash = source === "dhash" && resultsSource === "dhash"
@@ -831,7 +841,12 @@ export function SimilarWorkspaceView({
               onClick={() => onSelectMedia("photo")}
             >
               <Images size={15} />
-              <span>照片</span>
+              <span className="similar-media-label">
+                <span>照片</span>
+                <small className="similar-media-count" title={photoIndex ? `已分析 ${photoIndex.ready} 张照片` : "正在读取分析数量"}>
+                  {photoIndex?.ready.toLocaleString("zh-CN") ?? "-"}
+                </small>
+              </span>
             </button>
             <button
               type="button"
@@ -841,7 +856,12 @@ export function SimilarWorkspaceView({
               onClick={() => onSelectMedia("video")}
             >
               <Video size={15} />
-              <span>视频</span>
+              <span className="similar-media-label">
+                <span>视频</span>
+                <small className="similar-media-count" title={videoIndex ? `已分析 ${videoIndex.ready} 条视频` : "正在读取分析数量"}>
+                  {videoIndex?.ready.toLocaleString("zh-CN") ?? "-"}
+                </small>
+              </span>
             </button>
           </div>
           <div
@@ -906,21 +926,13 @@ export function SimilarWorkspaceView({
         </button>
       </div>
 
-      <MotionPresence present={!!dinoIndex} variant="panel">
-        {dinoIndex && (
+      <MotionPresence present={!!indexNote} variant="panel">
+        {indexNote && dinoIndex && (
           <div className="similar-index-banner">
             {dinoIndex.state === "processing" && (
               <LoaderCircle size={14} className="spin" />
             )}
-            <span>
-              {dinoIndex.state === "unavailable"
-                ? "智能分析暂不可用，稍后自动重试"
-                : dinoIndex.state === "disabled"
-                  ? "智能分析已暂停"
-                  : dinoIndex.pending
-                    ? `${dinoIndex.state === "processing" ? "正在分析" : "等待批量分析"} · ${dinoIndex.ready} / ${dinoIndex.total}`
-                    : `已分析 ${dinoIndex.ready} ${video ? "条视频" : "张照片"}`}
-            </span>
+            <span>{indexNote}</span>
             {dinoIndex.engine && <span className="index-engine-pill">{dinoIndex.engine}</span>}
             {!!dinoIndex.errors && <span>{dinoIndex.errors} {video ? "条" : "张"}稍后重试</span>}
           </div>

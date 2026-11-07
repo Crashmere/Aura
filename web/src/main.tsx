@@ -498,6 +498,11 @@ function AuraApplication() {
         requestJson<AlbumGroup[]>("album-groups"),
       ]);
       setTelemetry(infoRes);
+      setSimilarIndexes(previous => ({
+        ...previous,
+        ...(infoRes.similarityIndex ? { photo: infoRes.similarityIndex } : {}),
+        ...(infoRes.videoSimilarityIndex ? { video: infoRes.videoSimilarityIndex } : {}),
+      }));
       setAlbums(albumsRes);
       setAlbumGroups(groupsRes);
       if (route.view === "albums" && route.album) {
@@ -1459,8 +1464,8 @@ function AuraApplication() {
                 void fetchSimilarCandidates(page.source, page.appendCursor || page.cursor, !!page.appendCursor,
                   page.pageIndex, page.scoreRange, page.pageSize);
               }}
-              dinoIndex={isVideoSimilarity ? telemetry?.videoSimilarityIndex || similarIndexes.video
-                : similarIndexes.photo || telemetry?.similarityIndex}
+              photoIndex={similarIndexes.photo}
+              videoIndex={similarIndexes.video}
               pageIndex={similarResultsMatch ? dinoPageIdx : 0}
               hasNextPage={!!similarNext}
               loading={similarLoading || (!similarResultsMatch && !similarError)}
