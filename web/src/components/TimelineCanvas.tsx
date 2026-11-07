@@ -32,6 +32,7 @@ import {
 } from "../core/workspace";
 import { AspectRatioGlyph, LiveRingsIcon, TimelineCrosshairIcon } from "./Icons";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
+import { whenPageScrollUnlocked } from "../core/photo-view";
 
 // ============================================================================
 // 1. Grid Density & Aspect Ratio Controller with FLIP Animation
@@ -676,6 +677,7 @@ export interface TimelineJump {
   date: string;
   viewportTop: number;
   highlight: boolean;
+  alignAsset?: boolean;
 }
 
 interface VirtualRowSlice {
@@ -838,22 +840,27 @@ export function VirtualizedTimelineCanvas({
     const el = rootRef.current;
     if (!jump || completedJump.current === jump.id || !viewport.measured || !el) return;
     if (Math.abs(viewport.width - el.getBoundingClientRect().width) >= 0.5) return;
-    const heading = rows.find((row) => !row.assets && row.group.date === jump.date);
-    if (!heading) return;
+    const target = jump.alignAsset
+      ? rows.find((row) => row.assets?.some((asset) => asset.id === jump.assetId))
+      : rows.find((row) => !row.assets && row.group.date === jump.date);
+    if (!target) return;
 
-    // Use virtual row geometry even when the date heading is outside the mounted window.
-    window.scrollTo({
-      top: window.scrollY + el.getBoundingClientRect().top + heading.top - jump.viewportTop,
-      behavior: "instant",
+    // Wait for departing photo dialogs to restore their source scroll before the jump.
+    return whenPageScrollUnlocked(() => {
+      window.scrollTo({
+        top: window.scrollY + el.getBoundingClientRect().top + target.top +
+          (jump.alignAsset ? target.height / 2 : 0) - jump.viewportTop,
+        behavior: "instant",
+      });
+      const top = el.getBoundingClientRect().top;
+      setVisibleWindow({
+        top: Math.max(0, -top - 700),
+        bottom: Math.max(0, window.innerHeight - top + 700),
+      });
+      completedJump.current = jump.id;
+      setHighlight(jump.highlight ? { assetId: jump.assetId, jumpId: jump.id } : null);
+      onJumpComplete(jump.id);
     });
-    const top = el.getBoundingClientRect().top;
-    setVisibleWindow({
-      top: Math.max(0, -top - 700),
-      bottom: Math.max(0, window.innerHeight - top + 700),
-    });
-    completedJump.current = jump.id;
-    setHighlight(jump.highlight ? { assetId: jump.assetId, jumpId: jump.id } : null);
-    onJumpComplete(jump.id);
   }, [jump, viewport.measured, viewport.width, rows, onJumpComplete]);
 
   useEffect(() => {

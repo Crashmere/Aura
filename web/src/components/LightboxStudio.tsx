@@ -69,7 +69,7 @@ import {
   useIsPresent,
   useSlidingIndicator,
 } from "../core/motion";
-import { ActionButton, LiveRingsIcon, RoundIconButton } from "./Icons";
+import { ActionButton, LiveRingsIcon, RoundIconButton, TimelineCrosshairIcon } from "./Icons";
 import { usePageScrollLock, zoomPhotoWithWheel } from "../core/photo-view";
 import {
   type FramePlayheadState,
@@ -109,6 +109,7 @@ export function LightboxStudio({
   hasMorePages,
   onClose,
   onSelectAsset,
+  onLocateAsset,
   onUpdateAsset,
   onRemoveFromAlbum,
   onOpenAlbumAdd,
@@ -128,6 +129,7 @@ export function LightboxStudio({
   hasMorePages: boolean;
   onClose: () => void;
   onSelectAsset: (target: CatalogAsset) => void;
+  onLocateAsset: (target: CatalogAsset, albumId: string) => Promise<void>;
   onUpdateAsset: (patch: Record<string, unknown>) => Promise<void>;
   onRemoveFromAlbum?: () => Promise<void>;
   onOpenAlbumAdd: () => void;
@@ -154,6 +156,9 @@ export function LightboxStudio({
   const inspectorTabs = useSlidingIndicator(`${infoOpen}:${infoTab}`, '[aria-selected="true"]');
   const [metaFilter, setMetaFilter] = useState("");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [locateMenuOpen, setLocateMenuOpen] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const locateMenuRef = useRef<HTMLDivElement>(null);
   const [chromeHidden, setChromeHidden] = useState(false);
 
   const [rotationDeltaState, setRotationDelta] = useState(0);
@@ -221,6 +226,7 @@ export function LightboxStudio({
     setRotationDelta(0);
     setCoverPickerOpen(false);
     setMoreMenuOpen(false);
+    setLocateMenuOpen(false);
     setZoomScale(1);
     setPanOffset({ x: 0, y: 0 });
     setIsDragging(false);
@@ -232,6 +238,17 @@ export function LightboxStudio({
   }, [asset.id]);
 
   useEffect(() => () => clearTimeout(wheelZoomTimer.current), []);
+
+  useEffect(() => {
+    if (!locateMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !locateMenuRef.current?.contains(event.target)) {
+        setLocateMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [locateMenuOpen]);
 
   // Fetch full detail payload
   useEffect(() => {
@@ -292,6 +309,18 @@ export function LightboxStudio({
     const priFile = files.find((f) => f.hash === detail.asset.primary);
     return priFile ? projectVersionAsAsset(detail.asset, priFile, files) : detail.asset;
   }, [detail, asset, files]);
+  const assetAlbums = (detail?.asset || asset).albums || [];
+
+  async function locateAsset(albumId: string) {
+    if (locating || isLocked) return;
+    setLocateMenuOpen(false);
+    setLocating(true);
+    try {
+      await onLocateAsset(asset, albumId);
+    } finally {
+      setLocating(false);
+    }
+  }
 
   const canNavigatePrev = positionIndex > 0;
   const canNavigateNext = positionIndex >= 0 && (positionIndex < totalLoaded - 1 || hasMorePages);
@@ -478,7 +507,9 @@ export function LightboxStudio({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopImmediatePropagation();
-        if (moreMenuOpen) {
+        if (locateMenuOpen) {
+          setLocateMenuOpen(false);
+        } else if (moreMenuOpen) {
           setMoreMenuOpen(false);
         } else if (coverPickerOpen) {
           setCoverPickerOpen(false);
@@ -785,6 +816,39 @@ export function LightboxStudio({
           )}
 
           {!asset.trashedAt && (
+            <div className="lightbox-more-wrap" ref={locateMenuRef}>
+              <button type="button"
+                className={`icon-btn ${locateMenuOpen ? "is-active" : ""}`}
+                title="定位照片" aria-label="定位照片"
+                aria-haspopup={assetAlbums.length > 1 ? "menu" : undefined}
+                aria-expanded={assetAlbums.length > 1 ? locateMenuOpen : undefined}
+                disabled={isLocked || locating}
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  if (assetAlbums.length > 1) setLocateMenuOpen((open) => !open);
+                  else void locateAsset(assetAlbums[0]?.id || "");
+                }}>
+                {locating ? <LoaderCircle size={18} className="spin" /> : <TimelineCrosshairIcon />}
+              </button>
+              <MotionPresence present={locateMenuOpen} variant="menu">
+                {locateMenuOpen && (
+                  <div className="lightbox-dropdown lightbox-locate-dropdown" role="menu" aria-label="定位到">
+                    <button type="button" role="menuitem" onClick={() => void locateAsset("")}>
+                      照片库
+                    </button>
+                    {assetAlbums.map((album) => (
+                      <button key={album.id} type="button" role="menuitem" title={album.name}
+                        onClick={() => void locateAsset(album.id)}>
+                        {album.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </MotionPresence>
+            </div>
+          )}
+
+          {!asset.trashedAt && (
             <RoundIconButton
               title="加入相片集"
               disabled={isLocked}
@@ -847,7 +911,10 @@ export function LightboxStudio({
             <RoundIconButton
               title="更多操作与画质策略"
               active={moreMenuOpen}
-              onClick={() => setMoreMenuOpen((v) => !v)}
+              onClick={() => {
+                setLocateMenuOpen(false);
+                setMoreMenuOpen((v) => !v);
+              }}
             >
               <MoreHorizontal size={18} />
             </RoundIconButton>

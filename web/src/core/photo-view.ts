@@ -2,6 +2,16 @@ import { useLayoutEffect } from "react";
 
 let scrollLocks = 0;
 let restoreScroll: (() => void) | undefined;
+const pendingScrolls = new Set<() => void>();
+
+export function whenPageScrollUnlocked(scroll: () => void): () => void {
+  if (scrollLocks === 0) {
+    scroll();
+    return () => {};
+  }
+  pendingScrolls.add(scroll);
+  return () => { pendingScrolls.delete(scroll); };
+}
 
 export function usePageScrollLock() {
   useLayoutEffect(() => {
@@ -27,6 +37,9 @@ export function usePageScrollLock() {
       if (--scrollLocks === 0) {
         restoreScroll?.();
         restoreScroll = undefined;
+        const scrolls = [...pendingScrolls];
+        pendingScrolls.clear();
+        for (const scroll of scrolls) scroll();
       }
     };
   }, []);

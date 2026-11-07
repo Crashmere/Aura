@@ -525,6 +525,17 @@
   margin: 4px 0;
 }
 
+.lightbox-locate-dropdown {
+  max-height: min(360px, 50dvh);
+  overflow-y: auto;
+}
+
+.lightbox-locate-dropdown button {
+  flex-shrink: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .lightbox-action-bar,
 .lightbox-cover-editor {
   padding: 10px 18px;

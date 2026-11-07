@@ -975,6 +975,7 @@ function AuraApplication() {
     view: "all" | "albums",
     album: string,
     viewportTop: number,
+    alignAsset = false,
   ) => {
     const requestId = ++pageReqIdRef.current;
     timelineNavigationRef.current = requestId;
@@ -995,7 +996,8 @@ function AuraApplication() {
       do {
         if (cursor) params.set("cursor", cursor);
         const page = await requestJson<{ items: CatalogAsset[]; next: string }>(`assets?${params}`);
-        if (requestId !== pageReqIdRef.current) return;
+        if (requestId !== pageReqIdRef.current ||
+          (alignAsset && readRouteFromWindow().asset !== asset.id)) return;
         items.push(...page.items);
         cursor = page.next;
         if (targetIndex < 0) targetIndex = items.findIndex((item) => item.id === asset.id);
@@ -1012,10 +1014,14 @@ function AuraApplication() {
       setNextCursor(cursor);
       setSearchDraft("");
       setMobileNavOpen(false);
+      if (alignAsset) {
+        setSimilarPhoto(null);
+        setViewerGroup(null);
+      }
       setGalleryJump({
         id: requestId, assetId: asset.id,
         date: (items[targetIndex].capturedAt || "").slice(0, 10) || "未知日期",
-        viewportTop, highlight: view === "albums",
+        viewportTop, highlight: alignAsset || view === "albums", alignAsset,
       });
       updateRoute(() => nextRoute, "push");
     } catch (err) {
@@ -1821,6 +1827,9 @@ function AuraApplication() {
               setOpenAssetObj(target);
               updateRoute((prev) => ({ ...prev, asset: target.id }), "replace");
             }}
+            onLocateAsset={(asset, albumId) => navigateTimeline(
+              asset, albumId ? "albums" : "all", albumId, window.innerHeight / 2, true,
+            )}
             onUpdateAsset={async (patch) => {
               const updated = await requestJson<CatalogAsset>(
                 `assets/${openAssetObj.id}`,
