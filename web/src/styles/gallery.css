@@ -248,6 +248,10 @@
   right: calc((100% - var(--frame-w, 100%)) / 2 + 4px);
   bottom: calc((100% - var(--frame-h, 100%)) / 2 + 4px);
   z-index: 2;
+  transition:
+    left 0.28s var(--ease-spring),
+    right 0.28s var(--ease-spring),
+    bottom 0.28s var(--ease-spring);
 }
 
 .photo-albums:empty {
