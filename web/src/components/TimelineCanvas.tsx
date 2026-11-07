@@ -593,8 +593,12 @@ export function PhotoTile({
             onClick={(event) => {
               event.stopPropagation();
               abortSpeculativePreloads();
-              const bounds = event.currentTarget.getBoundingClientRect();
-              onOpenSimilar?.(event.detail === 0 || event.clientX < bounds.left + bounds.width / 2 ? "dhash" : "dino");
+              let source: "dhash" | "dino" = dhashCount > 0 ? "dhash" : "dino";
+              if (dhashCount > 0 && dinoCount > 0) {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                source = event.detail === 0 || event.clientX < bounds.left + bounds.width / 2 ? "dhash" : "dino";
+              }
+              onOpenSimilar?.(source);
             }}>
             {dhashCount > 0 && <span className="photo-similar-dhash">{dhashCount}</span>}
             <Sparkles size={13} aria-hidden="true" />
