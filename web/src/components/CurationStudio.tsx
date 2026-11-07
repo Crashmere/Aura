@@ -28,7 +28,7 @@ import {
   requestJson,
 } from "../core/client";
 import { CollapsibleRegion, MotionPresence, useIsPresent, useSlidingIndicator } from "../core/motion";
-import { usePageScrollLock, zoomPhotoWithWheel } from "../core/photo-view";
+import { clampPhotoPan, usePageScrollLock, usePhotoViewGestures } from "../core/photo-view";
 import type {
   CandidatePair,
   CatalogAsset,
@@ -92,16 +92,11 @@ export function PhotoComparisonModal({
     }
   }, [zoomScale]);
 
-  const handleStageWheel = useEffectEvent((event: WheelEvent) => {
-    if (!isPresent) return;
-    event.preventDefault();
-    setZoomScale(previous => zoomPhotoWithWheel(previous, event, stageRef.current!.clientHeight));
+  usePhotoViewGestures({
+    stageRef, scale: zoomScale, pan: panOffset, enabled: isPresent,
+    getViewport: target => target.closest("section"),
+    onChange: view => { setZoomScale(view.scale); setPanOffset(view.pan); },
   });
-  useEffect(() => {
-    const stage = stageRef.current!;
-    stage.addEventListener("wheel", handleStageWheel, { passive: false });
-    return () => stage.removeEventListener("wheel", handleStageWheel);
-  }, []);
 
   const toggleAbSide = () => {
     setMode("switch");
@@ -282,12 +277,10 @@ export function PhotoComparisonModal({
         onPointerMove={(e) => {
           const drag = dragRef.current;
           if (!drag || drag.pointerId !== e.pointerId || zoomScale <= 1.01) return;
-          const maxX = (drag.width * (zoomScale - 1)) / 2;
-          const maxY = (drag.height * (zoomScale - 1)) / 2;
-          setPanOffset({
-            x: Math.max(-maxX, Math.min(maxX, drag.panX + e.clientX - drag.x)),
-            y: Math.max(-maxY, Math.min(maxY, drag.panY + e.clientY - drag.y)),
-          });
+          setPanOffset(clampPhotoPan({
+            x: drag.panX + e.clientX - drag.x,
+            y: drag.panY + e.clientY - drag.y,
+          }, zoomScale, drag.width, drag.height));
         }}
         onPointerUp={finishDrag}
         onPointerCancel={finishDrag}

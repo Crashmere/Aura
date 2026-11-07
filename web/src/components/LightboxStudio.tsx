@@ -1,6 +1,5 @@
 import React, {
   useEffect,
-  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -70,7 +69,7 @@ import {
   useSlidingIndicator,
 } from "../core/motion";
 import { ActionButton, LiveRingsIcon, RoundIconButton, TimelineCrosshairIcon } from "./Icons";
-import { usePageScrollLock, zoomPhotoWithWheel } from "../core/photo-view";
+import { clampPhotoPan, usePageScrollLock, usePhotoViewGestures } from "../core/photo-view";
 import {
   type FramePlayheadState,
   FrameTimelineStrip,
@@ -177,8 +176,6 @@ export function LightboxStudio({
   const [zoomScaleState, setZoomScale] = useState(1);
   const [panOffsetState, setPanOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const [wheelZooming, setWheelZooming] = useState(false);
-  const wheelZoomTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [navDir, setNavDir] = useState<"next" | "prev" | "fade">("fade");
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -230,14 +227,10 @@ export function LightboxStudio({
     setZoomScale(1);
     setPanOffset({ x: 0, y: 0 });
     setIsDragging(false);
-    setWheelZooming(false);
-    clearTimeout(wheelZoomTimer.current);
     pointersRef.current.clear();
     gestureStartRef.current = null;
     lastTapRef.current = 0;
   }, [asset.id]);
-
-  useEffect(() => () => clearTimeout(wheelZoomTimer.current), []);
 
   useEffect(() => {
     if (!locateMenuOpen) return;
@@ -354,20 +347,12 @@ export function LightboxStudio({
     (effectiveAsset.kind === "live" && !!effectiveAsset.motion);
   const hasRotationChange = normalizeQuarterAngle(rotationDelta) !== 0;
 
-  const handleStageWheel = useEffectEvent((event: WheelEvent) => {
-    if (!isPresent || isVideoStage) return;
-    event.preventDefault();
-    clearTimeout(wheelZoomTimer.current);
-    setWheelZooming(true);
-    wheelZoomTimer.current = setTimeout(() => setWheelZooming(false), 120);
-    setZoomScale(previous => zoomPhotoWithWheel(previous, event, stageRef.current!.clientHeight));
+  const trackpadActive = usePhotoViewGestures({
+    stageRef, scale: zoomScale, pan: panOffset,
+    enabled: isPresent && !covered && !isVideoStage,
+    onChange: view => { setZoomScale(view.scale); setPanOffset(view.pan); },
+    onNavigate: direction => { if (!isLocked) navigateBy(direction); },
   });
-  useEffect(() => {
-    const stage = stageRef.current!;
-    // A native non-passive listener can suppress the browser's default wheel action.
-    stage.addEventListener("wheel", handleStageWheel, { passive: false });
-    return () => stage.removeEventListener("wheel", handleStageWheel);
-  }, []);
 
   // Rotate handler
   const rotateBy = (step: -90 | 90) => {
@@ -630,12 +615,8 @@ export function LightboxStudio({
         setIsDragging(true);
       }
       if (zoomScale > 1.01) {
-        const maxPanX = ((stageRef.current?.clientWidth || 800) * (zoomScale - 1)) / 2;
-        const maxPanY = ((stageRef.current?.clientHeight || 600) * (zoomScale - 1)) / 2;
-        setPanOffset({
-          x: Math.max(-maxPanX, Math.min(maxPanX, start.panX + dx)),
-          y: Math.max(-maxPanY, Math.min(maxPanY, start.panY + dy)),
-        });
+        setPanOffset(clampPhotoPan({ x: start.panX + dx, y: start.panY + dy }, zoomScale,
+          stageRef.current?.clientWidth || 800, stageRef.current?.clientHeight || 600));
       }
     }
   };
@@ -1112,7 +1093,7 @@ export function LightboxStudio({
 
           <div
             key={`${asset.id}:${effectiveAsset.primary}`}
-            className={`lightbox-canvas nav-${navDir} ${isDragging || wheelZooming ? "is-dragging" : ""}`}
+            className={`lightbox-canvas nav-${navDir} ${isDragging || trackpadActive ? "is-dragging" : ""}`}
             style={
               !isVideoStage && zoomScale > 1.01
                 ? ({

@@ -54,6 +54,7 @@
   justify-content: center;
   overflow: hidden;
   touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .lightbox-canvas {
@@ -824,6 +825,7 @@
 .comparison-workspace {
   overflow: hidden;
   touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .comparison-workspace section {
