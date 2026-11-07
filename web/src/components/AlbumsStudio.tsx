@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Check,
   ChevronDown,
@@ -18,6 +18,7 @@ import { buildMediaUrl, requestJson } from "../core/client";
 import { CollapsibleRegion, useIsPresent } from "../core/motion";
 import type { AlbumGroup, AlbumItem, CatalogAsset } from "../core/types";
 import { PhotoTile } from "./TimelineCanvas";
+import { createAlbumDragMotion } from "./albumDragMotion";
 
 export type AlbumModalState =
   | { kind: "create"; assets?: string[]; groupId?: string }
@@ -92,6 +93,7 @@ function AlbumGridCard({
   selecting,
   selected,
   onDrag,
+  dragging,
 }: {
   album: AlbumItem;
   onSelect: (album: AlbumItem) => void;
@@ -99,14 +101,15 @@ function AlbumGridCard({
   selecting: boolean;
   selected: boolean;
   onDrag: (e: ReactPointerEvent<HTMLButtonElement>) => void;
+  dragging: boolean;
 }) {
   const [broken, setBroken] = useState(false);
   const [retrySeq, setRetrySeq] = useState(0);
 
   return (
-    <div className="album-card-wrapper">
+    <div className="album-card-wrapper" data-album-id={album.id} data-album-dragging={dragging || undefined}>
       <button type="button" className={`album-card ${selected ? "is-selected" : ""}`}
-        onPointerDown={(e) => { if (e.pointerType === "mouse") onDrag(e); }}
+        onPointerDown={onDrag}
         aria-pressed={selecting ? selected : undefined} onClick={() => onSelect(album)}>
         <AlbumCoverThumb
           album={album}
@@ -117,10 +120,6 @@ function AlbumGridCard({
           <strong>{album.name}</strong>
           <small>{album.count.toLocaleString("zh-CN")} 项</small>
         </div>
-      </button>
-      <button type="button" className="album-drag-handle" title="拖动到分组"
-        aria-label={`拖动“${album.name}”到分组`} onPointerDown={onDrag}>
-        <GripVertical size={17} />
       </button>
       {selecting ? (
         <span className={`album-selection-mark ${selected ? "is-selected" : ""}`} aria-hidden="true">
@@ -148,32 +147,34 @@ function AlbumGridCard({
 }
 
 type OrganizationDrag =
-  | { kind: "albums"; ids: string[]; name: string }
-  | { kind: "group"; id: string; name: string };
+  | { kind: "albums"; ids: string[] }
+  | { kind: "group"; id: string };
+
+type OrganizationPointer = {
+  item: OrganizationDrag; pointerId: number; source: HTMLElement;
+  startX: number; startY: number; x: number; y: number;
+  active: boolean; target: string | null; after: boolean;
+  pointerType: string; pressTimer?: number;
+};
 
 function useOrganizationDrag(onDrop: (drag: OrganizationDrag, target: string, after: boolean) => void) {
   const [drag, setDrag] = useState<{ item: OrganizationDrag; target: string | null; after: boolean } | null>(null);
-  const preview = useRef<HTMLDivElement>(null);
-  const tracking = useRef<{
-    item: OrganizationDrag; pointerId: number; source: HTMLElement;
-    startX: number; startY: number; x: number; y: number;
-    active: boolean; target: string | null; after: boolean;
-  } | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const [motion] = useState(() => createAlbumDragMotion(() => root.current));
+  const landing = useRef<(() => void) | null>(null);
+  const tracking = useRef<OrganizationPointer | null>(null);
   const frame = useRef(0);
   const ignoreClick = useRef(false);
 
   function locate() {
     const current = tracking.current;
     if (!current?.active) return;
-    if (preview.current) {
-      preview.current.style.left = `${Math.max(8, Math.min(current.x + 14, innerWidth - 280))}px`;
-      preview.current.style.top = `${Math.min(current.y + 14, innerHeight - 50)}px`;
-    }
+    motion.move(current.x, current.y);
     const section = document.elementFromPoint(current.x, current.y)?.closest<HTMLElement>("[data-album-group-id]");
     let target = section?.dataset.albumGroupId ?? null;
     if (current.item.kind === "group" && (!target || target === current.item.id)) target = null;
-    const header = section?.querySelector("header")?.getBoundingClientRect();
-    const after = !!header && current.y > header.top + header.height / 2;
+    const bounds = section?.getBoundingClientRect();
+    const after = !!bounds && current.y > bounds.top + bounds.height / 2;
     if (target !== current.target || after !== current.after) {
       current.target = target;
       current.after = after;
@@ -195,11 +196,29 @@ function useOrganizationDrag(onDrop: (drag: OrganizationDrag, target: string, af
     const current = tracking.current;
     tracking.current = null;
     cancelAnimationFrame(frame.current);
+    clearTimeout(current?.pressTimer);
+    motion.clearPreview();
     // Pointer release after completion or cancellation must not also open the album.
     if (current?.active) ignoreClick.current = true;
     if (current?.source.hasPointerCapture(current.pointerId)) current.source.releasePointerCapture(current.pointerId);
+    if (current && root.current?.hasPointerCapture(current.pointerId)) root.current.releasePointerCapture(current.pointerId);
     setDrag(null);
   }
+
+  function activate(current: OrganizationPointer) {
+    current.active = true;
+    // Keep capture on the stable list while cards and headers change their presentation.
+    root.current?.setPointerCapture(current.pointerId);
+    motion.start(current.source, current.x, current.y, current.item.kind === "albums" ? current.item.ids.length : 1);
+    setDrag({ item: current.item, target: null, after: false });
+    frame.current = requestAnimationFrame(scroll);
+  }
+
+  useLayoutEffect(() => {
+    const land = landing.current;
+    landing.current = null;
+    land?.();
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -208,28 +227,48 @@ function useOrganizationDrag(onDrop: (drag: OrganizationDrag, target: string, af
         cancel();
       }
     };
+    const onTouchMove = (e: TouchEvent) => {
+      if (tracking.current?.active && tracking.current.pointerType === "touch") e.preventDefault();
+    };
+    const cancelPending = () => { if (tracking.current && !tracking.current.active) cancel(); };
     window.addEventListener("keydown", onKey);
     window.addEventListener("blur", cancel);
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("pointerup", cancelPending);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", cancel);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("pointerup", cancelPending);
       cancelAnimationFrame(frame.current);
+      clearTimeout(tracking.current?.pressTimer);
+      motion.dispose();
     };
   }, []);
 
   return {
     drag,
-    preview,
+    root,
+    prepareDrop(ids: string[]) { landing.current = motion.captureDrop(ids); },
     start(e: ReactPointerEvent<HTMLButtonElement>, item: OrganizationDrag) {
       if (e.button !== 0 || tracking.current) return;
-      e.preventDefault();
+      if (e.pointerType !== "touch") {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
       e.stopPropagation();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      tracking.current = { item, pointerId: e.pointerId, source: e.currentTarget,
+      const current: OrganizationPointer = { item, pointerId: e.pointerId, source: e.currentTarget,
         startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
-        active: false, target: null, after: false };
+        active: false, target: null, after: false, pointerType: e.pointerType };
+      tracking.current = current;
+      if (e.pointerType === "touch" && item.kind === "albums") current.pressTimer = window.setTimeout(() => {
+        if (tracking.current === current) activate(current);
+      }, 350);
     },
     events: {
+      onContextMenu(e: React.MouseEvent<HTMLDivElement>) {
+        if (tracking.current) e.preventDefault();
+      },
       onPointerDownCapture() {
         if (!tracking.current) ignoreClick.current = false;
       },
@@ -242,9 +281,8 @@ function useOrganizationDrag(onDrop: (drag: OrganizationDrag, target: string, af
         current.x = e.clientX;
         current.y = e.clientY;
         if (!current.active && Math.hypot(current.x - current.startX, current.y - current.startY) >= 6) {
-          current.active = true;
-          setDrag({ item: current.item, target: null, after: false });
-          frame.current = requestAnimationFrame(scroll);
+          if (current.pointerType === "touch" && current.item.kind === "albums") { cancel(); return; }
+          activate(current);
         }
         if (current.active) { e.preventDefault(); locate(); }
       },
@@ -260,7 +298,9 @@ function useOrganizationDrag(onDrop: (drag: OrganizationDrag, target: string, af
         if (active && target !== null) onDrop(item, target, after);
       },
       onPointerCancel: cancel,
-      onLostPointerCapture: cancel,
+      onLostPointerCapture(e: ReactPointerEvent<HTMLDivElement>) {
+        if (e.target === root.current && tracking.current?.pointerId === e.pointerId) cancel();
+      },
     },
   };
 }
@@ -284,29 +324,65 @@ export function AlbumsCollectionGrid({
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [assignments, setAssignments] = useState<Map<string, string>>(new Map());
+  const [groupOrder, setGroupOrder] = useState<string[] | null>(null);
   const dragging = useOrganizationDrag((item, target, after) => { void drop(item, target, after); });
+  const shownAlbums = albums.map((album) => assignments.has(album.id) ? { ...album, groupId: assignments.get(album.id)! } : album);
+  const ranks = new Map(groupOrder?.map((id, index) => [id, index]));
+  const shownGroups = [...groups].sort((a, b) => (ranks.get(a.id) ?? groups.length) - (ranks.get(b.id) ?? groups.length));
+  const draggedIds = new Set(dragging.drag?.item.kind === "albums" ? dragging.drag.item.ids : []);
+  const draggedGroups = new Set(shownAlbums.filter((album) => draggedIds.has(album.id)).map((album) => album.groupId));
+
+  function isAlbumDropTarget(id: string) {
+    return dragging.drag?.item.kind === "albums" && dragging.drag.target === id &&
+      (draggedGroups.size > 1 || draggedGroups.size === 1 && !draggedGroups.has(id));
+  }
+
+  useEffect(() => {
+    // Keep confirmed optimistic moves visible until a refresh actually observes them.
+    const current = new Map(albums.map((album) => [album.id, album.groupId]));
+    setAssignments((prev) => {
+      const next = new Map([...prev].filter(([id, groupId]) => current.has(id) && current.get(id) !== groupId));
+      return next.size === prev.size ? prev : next;
+    });
+    setGroupOrder((prev) => prev?.join() === groups.map((group) => group.id).join() ? null : prev);
+  }, [albums, groups]);
 
   async function drop(item: OrganizationDrag, target: string, after: boolean) {
     if (busy) return;
+    const requested = new Set(item.kind === "albums" ? item.ids : []);
+    const ids = shownAlbums.filter((album) => requested.has(album.id) && album.groupId !== target).map((album) => album.id);
+    const order = shownGroups.map((group) => group.id).filter((id) => item.kind !== "group" || id !== item.id);
+    if (item.kind === "albums" && !ids.length) return;
+    if (item.kind === "group") {
+      const index = order.indexOf(target);
+      if (index < 0) return;
+      order.splice(index + (after ? 1 : 0), 0, item.id);
+      if (order.every((id, i) => id === shownGroups[i]?.id)) return;
+    }
+    const previousAssignments = assignments, previousOrder = groupOrder;
+    dragging.prepareDrop(ids);
+    if (item.kind === "albums") {
+      setAssignments((prev) => { const next = new Map(prev); for (const id of ids) next.set(id, target); return next; });
+    } else setGroupOrder(order);
     setBusy(true);
     try {
       if (item.kind === "albums") {
-        await requestJson("albums/group", { albums: item.ids, groupId: target || null }, "PATCH");
-        setCollapsed((prev) => { const next = new Set(prev); next.delete(target); return next; });
+        await requestJson("albums/group", { albums: ids, groupId: target || null }, "PATCH");
         setSelected(new Set());
         setSelecting(false);
         onNotify("相片集已移动");
       } else {
-        const order = groups.map((group) => group.id).filter((id) => id !== item.id);
-        const index = order.indexOf(target);
-        if (index < 0) return;
-        order.splice(index + (after ? 1 : 0), 0, item.id);
         await requestJson("album-groups/order", { groups: order }, "PATCH");
         onNotify("分组顺序已更新");
       }
       await onUpdated();
     } catch (err) {
+      dragging.prepareDrop(ids);
+      setAssignments(previousAssignments);
+      setGroupOrder(previousOrder);
       onNotify(err instanceof Error ? err.message : String(err), true);
+      await onUpdated();
     } finally {
       setBusy(false);
     }
@@ -320,13 +396,13 @@ export function AlbumsCollectionGrid({
     name: string;
     group?: AlbumGroup;
     albums: AlbumItem[];
-  }[] = groups.map((group) => ({
+  }[] = shownGroups.map((group) => ({
     id: group.id,
     name: group.name,
     group,
-    albums: albums.filter((album) => album.groupId === group.id),
+    albums: shownAlbums.filter((album) => album.groupId === group.id),
   }));
-  const ungrouped = albums.filter((album) => !groups.some((group) => group.id === album.groupId));
+  const ungrouped = shownAlbums.filter((album) => !groups.some((group) => group.id === album.groupId));
   if (ungrouped.length || dragging.drag?.item.kind === "albums") sections.push({ id: "", name: "未分组", albums: ungrouped });
 
   function selectAlbum(album: AlbumItem) {
@@ -343,12 +419,8 @@ export function AlbumsCollectionGrid({
   }
 
   return (
-    <div className={`album-collections ${busy ? "is-busy" : ""}`} {...dragging.events} aria-busy={busy}>
-      {dragging.drag && (
-        <div className="album-drag-preview" ref={dragging.preview} aria-hidden="true">
-          <FolderInput size={15} />{dragging.drag.item.name}
-        </div>
-      )}
+    <div ref={dragging.root} className={`album-collections ${busy ? "is-busy" : ""}`} {...dragging.events}
+      data-organizing={!!dragging.drag || undefined} aria-busy={busy}>
       {albums.length > 0 && (
         <div className="album-organize-toolbar">
           {selecting ? (
@@ -367,13 +439,14 @@ export function AlbumsCollectionGrid({
       )}
       {sections.map((section) => (
         <section key={section.id} className="album-group-section" data-album-group-id={section.id}
-          data-album-drop={dragging.drag?.item.kind === "albums" && dragging.drag.target === section.id || undefined}
+          data-album-drop={isAlbumDropTarget(section.id) || undefined}
+          data-group-dragging={dragging.drag?.item.kind === "group" && dragging.drag.item.id === section.id || undefined}
           data-sort-edge={dragging.drag?.item.kind === "group" && dragging.drag.target === section.id ? dragging.drag.after ? "after" : "before" : undefined}>
           <header className="album-group-header">
             {section.group && (
               <button type="button" className="icon-btn group-drag-handle" title="拖动调整分组顺序"
                 aria-label={`拖动“${section.name}”调整分组顺序`} disabled={busy}
-                onPointerDown={(e) => dragging.start(e, { kind: "group", id: section.id, name: section.name })}>
+                onPointerDown={(e) => dragging.start(e, { kind: "group", id: section.id })}>
                 <GripVertical size={17} />
               </button>
             )}
@@ -404,17 +477,21 @@ export function AlbumsCollectionGrid({
                 )}
               </div>
             )}
+            {isAlbumDropTarget(section.id) && (
+              <span className="album-group-drop-hint"><FolderInput size={14} />松开以移入此分组</span>
+            )}
           </header>
           <CollapsibleRegion open={!collapsed.has(section.id)} id={`album-group-${section.id || "unfiled"}`}>
             {section.albums.length ? (
               <div className="album-grid">
                 {section.albums.map((album) => (
                   <AlbumGridCard key={album.id} album={album} onSelect={selectAlbum}
+                    dragging={draggedIds.has(album.id)}
                     onMove={(album) => onAction({ kind: "move", albums: [album] })}
                     onDrag={(e) => {
                       if (busy) return;
                       const ids = selecting && selected.has(album.id) ? [...selected] : [album.id];
-                      dragging.start(e, { kind: "albums", ids, name: ids.length === 1 ? album.name : `${ids.length} 个相片集` });
+                      dragging.start(e, { kind: "albums", ids });
                     }}
                     selecting={selecting} selected={selected.has(album.id)} />
                 ))}

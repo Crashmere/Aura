@@ -391,61 +391,122 @@
 
 .album-collections.is-busy {
   pointer-events: none;
-  opacity: 0.75;
 }
 
-.album-drag-handle,
 .group-drag-handle {
   cursor: grab;
   touch-action: none;
   user-select: none;
 }
 
-.album-drag-handle {
-  position: absolute;
-  left: 10px;
-  top: 10px;
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid var(--border-hairline);
-}
-
-.album-drag-handle:active,
 .group-drag-handle:active {
   cursor: grabbing;
 }
 
-.album-drag-preview {
+.album-drag-image {
   position: fixed;
   z-index: 250;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 14px;
-  max-width: 260px;
-  border-radius: var(--radius-sm);
-  background: var(--text-primary);
-  color: #fff;
-  box-shadow: var(--shadow-md);
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   pointer-events: none;
+  transform: rotate(-1.2deg) scale(1.035);
+}
+
+.album-drag-image .album-card,
+.album-drag-image .album-group-header {
+  border: 1px solid var(--accent);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08);
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+
+.album-drag-image .album-group-header {
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.album-drag-image .album-group-actions,
+.album-drag-image .group-drag-handle,
+.album-drag-image .album-group-drop-hint {
+  display: none;
+}
+
+.album-drag-count {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+}
+
+.album-card-wrapper[data-album-dragging] .album-card {
+  opacity: 0.28;
+  transform: scale(0.97);
+  box-shadow: none;
+}
+
+.album-collections[data-organizing] .album-card {
+  cursor: grabbing;
+}
+
+.album-collections[data-album-drop-motion] .album-card {
+  transition: none;
+}
+
+.album-collections[data-album-drop-motion] .motion-collapse.is-open > .motion-collapse-inner {
+  overflow: visible;
 }
 
 .album-group-section {
   position: relative;
+  isolation: isolate;
+  transition: opacity 150ms;
 }
 
-.album-group-section[data-album-drop="true"] {
+.album-group-section::before {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  z-index: -1;
+  border: 1px solid var(--accent);
   border-radius: var(--radius-md);
   background: var(--accent-soft);
-  box-shadow: 0 0 0 2px var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+  opacity: 0;
+  transform: scale(0.985);
+  transition: opacity 140ms ease-out, transform 160ms ease-out;
+  pointer-events: none;
+}
+
+.album-group-section[data-album-drop="true"]::before {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.album-group-section[data-album-drop="true"] .album-group-toggle {
+  color: var(--accent);
+}
+
+.album-group-section[data-group-dragging] {
+  opacity: 0.4;
+}
+
+.album-group-drop-hint {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+  animation: album-drop-hint-in 140ms ease-out;
+}
+
+@keyframes album-drop-hint-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
 }
 
 .album-group-section[data-sort-edge]::after {
@@ -456,6 +517,8 @@
   height: 3px;
   background: var(--accent);
   border-radius: 3px;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  pointer-events: none;
 }
 
 .album-group-section[data-sort-edge="before"]::after {
@@ -554,7 +617,6 @@
 
 .album-card-wrapper {
   position: relative;
-  animation: aura-view-enter 0.26s var(--ease-out);
 }
 
 .album-card {
@@ -566,7 +628,10 @@
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
   overflow: hidden;
+  user-select: none;
+  -webkit-touch-callout: none;
   transition:
+    opacity 160ms,
     transform 0.22s var(--ease-spring),
     border-color 0.2s var(--ease-out),
     box-shadow 0.22s var(--ease-out);
@@ -684,6 +749,23 @@
 
   .album-group-toggle h2 {
     max-width: calc(100vw - 210px);
+  }
+
+  .album-group-drop-hint {
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .album-drag-image,
+  .album-card-wrapper[data-album-dragging] .album-card,
+  .album-group-section::before {
+    transform: none;
+  }
+
+  .album-group-drop-hint {
+    animation: none;
   }
 }
 
