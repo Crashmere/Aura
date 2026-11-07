@@ -349,7 +349,8 @@ export function LightboxStudio({
 
   const trackpadActive = usePhotoViewGestures({
     stageRef, scale: zoomScale, pan: panOffset,
-    enabled: isPresent && !covered && !isVideoStage,
+    enabled: isPresent && !covered && !coverPickerOpen,
+    navigationOnly: isVideoStage,
     onChange: view => { setZoomScale(view.scale); setPanOffset(view.pan); },
     onNavigate: direction => { if (!isLocked) navigateBy(direction); },
   });
