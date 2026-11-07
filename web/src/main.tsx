@@ -91,6 +91,7 @@ import { MergePhotosModal } from "./components/MergePhotosModal";
 import { SimilarPhotosModal } from "./components/SimilarPhotosModal";
 import {
   type DayAssetGroup,
+  type TimelineJump,
   GridDensityControls,
   useGridDisplayPreferences,
   VirtualizedTimelineCanvas,
@@ -496,6 +497,9 @@ function AuraApplication() {
   // Fetch gallery page
   const pageReqIdRef = useRef(0);
   const galleryScopeRef = useRef("");
+  const preparedGalleryRouteRef = useRef<WorkspaceRouteState | null>(null);
+  const timelineNavigationRef = useRef<number | null>(null);
+  const [galleryJump, setGalleryJump] = useState<TimelineJump | null>(null);
   const fetchGalleryPage = useCallback(
     async (cursor = "", append = false) => {
       if (!isGalleryView) return;
@@ -529,6 +533,8 @@ function AuraApplication() {
 
   // Bounded refresh of loaded gallery items without resetting scroll
   const refreshBoundedCatalog = useCallback(async () => {
+    if (timelineNavigationRef.current !== null) return;
+    const galleryRequestId = pageReqIdRef.current;
     const similarRequestId = similarRequestIdRef.current;
     const similarWasLoading = !!similarRequestRef.current;
     await Promise.all([fetchOverview(), fetchTimelineMonths()]);
@@ -544,7 +550,7 @@ function AuraApplication() {
       );
       return;
     }
-    if (!isGalleryView) return;
+    if (!isGalleryView || galleryRequestId !== pageReqIdRef.current) return;
 
     try {
       const firstPageQuery = buildCatalogQuery(true, "");
@@ -552,6 +558,7 @@ function AuraApplication() {
         items: CatalogAsset[];
         next: string;
       }>(`assets?${firstPageQuery.toString()}`);
+      if (galleryRequestId !== pageReqIdRef.current) return;
       setAssets((prev) => {
         if (prev.length <= firstPage.items.length) {
           setNextCursor(firstPage.next);
@@ -576,7 +583,9 @@ function AuraApplication() {
           const refreshed = await requestJson<{ items: CatalogAsset[] }>(
             `assets?${idQuery.toString()}`,
           );
+          if (galleryRequestId !== pageReqIdRef.current) return;
           const refreshedMap = new Map(refreshed.items.map((x) => [x.id, x]));
+          const requestedIds = new Set(boundedIds);
           const firstIds = new Set(firstPage.items.map((x) => x.id));
 
           setAssets((prev) => {
@@ -585,13 +594,14 @@ function AuraApplication() {
               if (firstIds.has(old.id)) continue;
               const updated = refreshedMap.get(old.id);
               if (updated) mergedTop.push(updated);
+              else if (!requestedIds.has(old.id)) mergedTop.push(old);
             }
             return mergedTop;
           });
         }
       }
     } catch {
-      void fetchGalleryPage("", false);
+      if (galleryRequestId === pageReqIdRef.current) void fetchGalleryPage("", false);
     }
   }, [
     fetchOverview,
@@ -616,17 +626,21 @@ function AuraApplication() {
   });
 
   useEffect(() => {
+    const prepared = preparedGalleryRouteRef.current === route;
+    preparedGalleryRouteRef.current = null;
     void fetchOverview();
     void fetchTimelineMonths();
     setSelectedIds(new Set());
     setSelecting(false);
-    if (isGalleryView) {
+    if (!prepared) setGalleryJump(null);
+    if (isGalleryView && !prepared) {
       const scope = `${route.view}:${route.album}`;
       if (galleryScopeRef.current !== scope) setAssets([]);
       galleryScopeRef.current = scope;
       setNextCursor("");
       void fetchGalleryPage("", false);
     }
+    return () => { pageReqIdRef.current++; };
   }, [filterKey]);
 
   // Listen to global library change events (e.g. upload finished)
@@ -900,6 +914,64 @@ function AuraApplication() {
       }),
       "push",
     );
+  };
+
+  const navigateTimeline = async (
+    asset: CatalogAsset,
+    view: "all" | "albums",
+    album: string,
+    viewportTop: number,
+  ) => {
+    const requestId = ++pageReqIdRef.current;
+    timelineNavigationRef.current = requestId;
+    setLoadingPage(true);
+    setLoadError("");
+    try {
+      const params = new URLSearchParams({ limit: "240" });
+      if (view === "albums") {
+        params.set("view", view);
+        params.set("album", album);
+      }
+      const columns = window.innerWidth <= 720 ? gridPrefs.mobileColumns : gridPrefs.columns;
+      const width = contentRef.current?.querySelector(".virtual-gallery")?.getBoundingClientRect().width || 960;
+      const followingItems = (Math.ceil(window.innerHeight / Math.max(1, width / columns - 3)) + 2) * columns;
+      const items: CatalogAsset[] = [];
+      let cursor = "";
+      let targetIndex = -1;
+      do {
+        if (cursor) params.set("cursor", cursor);
+        const page = await requestJson<{ items: CatalogAsset[]; next: string }>(`assets?${params}`);
+        if (requestId !== pageReqIdRef.current) return;
+        items.push(...page.items);
+        cursor = page.next;
+        if (targetIndex < 0) targetIndex = items.findIndex((item) => item.id === asset.id);
+      } while (cursor && (targetIndex < 0 || items.length - targetIndex - 1 < followingItems));
+      if (targetIndex < 0) throw new Error("目标照片已不在此处，请刷新后重试");
+
+      const nextRoute: WorkspaceRouteState = {
+        view, album, query: "", from: "", to: "", asset: "", filters: createEmptyFilters(),
+      };
+      // Publish the destination and its loaded prefix together, without a first-page flash.
+      preparedGalleryRouteRef.current = nextRoute;
+      galleryScopeRef.current = `${view}:${album}`;
+      setAssets(items);
+      setNextCursor(cursor);
+      setSearchDraft("");
+      setMobileNavOpen(false);
+      setGalleryJump({
+        id: requestId, assetId: asset.id,
+        date: (items[targetIndex].capturedAt || "").slice(0, 10) || "未知日期",
+        viewportTop, highlight: view === "albums",
+      });
+      updateRoute(() => nextRoute, "push");
+    } catch (err) {
+      if (requestId === pageReqIdRef.current) {
+        showToast(err instanceof Error ? err.message : String(err), true);
+      }
+    } finally {
+      if (timelineNavigationRef.current === requestId) timelineNavigationRef.current = null;
+      if (requestId === pageReqIdRef.current) setLoadingPage(false);
+    }
   };
 
   // Locate a specific asset from ImportHub or PipelineCenter
@@ -1435,6 +1507,14 @@ function AuraApplication() {
                     onToggleGroup={toggleSelectDayGroup}
                     onToggleAsset={toggleSelectAsset}
                     onOpenSimilar={(asset, source) => setSimilarPhoto({ asset, source })}
+                    onLocateDate={route.view === "albums" && route.album
+                      ? (asset, top) => void navigateTimeline(asset, "all", "", top)
+                      : undefined}
+                    onOpenAlbum={route.view === "all"
+                      ? (asset, albumId, top) => void navigateTimeline(asset, "albums", albumId, top)
+                      : undefined}
+                    jump={galleryJump}
+                    onJumpComplete={(id) => setGalleryJump((current) => current?.id === id ? null : current)}
                     onOpenAsset={(item) =>
                       updateRoute((prev) => ({ ...prev, asset: item.id }), "push")
                     }

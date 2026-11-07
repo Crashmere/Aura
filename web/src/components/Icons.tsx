@@ -1,5 +1,15 @@
 import React from "react";
 
+export function TimelineCrosshairIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 32 32" fill="none" stroke="currentColor"
+      strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="M12.5 3.5a13 13 0 0 0-9 9m0 7a13 13 0 0 0 9 9m7 0a13 13 0 0 0 9-9m0-7a13 13 0 0 0-9-9" />
+      <path d="M16 3v7m0 12v7M3 16h7m12 0h7" />
+    </svg>
+  );
+}
+
 export function LiveRingsIcon({ size = 18 }: { size?: number }) {
   return (
     <svg

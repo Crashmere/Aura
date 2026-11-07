@@ -30,7 +30,7 @@ import {
   abortSpeculativePreloads,
   schedulePreviewWarmup,
 } from "../core/workspace";
-import { AspectRatioGlyph, LiveRingsIcon } from "./Icons";
+import { AspectRatioGlyph, LiveRingsIcon, TimelineCrosshairIcon } from "./Icons";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
 
 // ============================================================================
@@ -423,6 +423,8 @@ export function PhotoTile({
   selecting = false,
   onToggleSelect,
   onOpenSimilar,
+  onOpenAlbum,
+  highlighted = false,
   disabled = false,
   originalAspect = false,
 }: {
@@ -432,6 +434,8 @@ export function PhotoTile({
   selecting?: boolean;
   onToggleSelect?: (e: MouseEvent<HTMLButtonElement>) => void;
   onOpenSimilar?: (source: "dhash" | "dino") => void;
+  onOpenAlbum?: (albumId: string) => void;
+  highlighted?: boolean;
   disabled?: boolean;
   originalAspect?: boolean;
 }) {
@@ -491,6 +495,7 @@ export function PhotoTile({
       style={customVars}
       className={`photo ${originalAspect ? "original-aspect" : ""} ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}
     >
+      {highlighted && <span className="photo-jump-highlight" aria-hidden="true" />}
       <button
         type="button"
         className="photo-open"
@@ -609,7 +614,7 @@ export function PhotoTile({
 
       <div className="photo-bottom-badges">
         <div className="photo-albums">
-          <AssetAlbumBadges asset={asset} />
+          <AssetAlbumBadges asset={asset} onOpenAlbum={onOpenAlbum} disabled={disabled} />
         </div>
         {asset.kind === "video" && !!asset.duration && (
           <span className="photo-duration">{formatDurationClock(asset.duration)}</span>
@@ -663,6 +668,14 @@ export interface DayAssetGroup {
   items: CatalogAsset[];
 }
 
+export interface TimelineJump {
+  id: number;
+  assetId: string;
+  date: string;
+  viewportTop: number;
+  highlight: boolean;
+}
+
 interface VirtualRowSlice {
   group: DayAssetGroup;
   assets?: CatalogAsset[];
@@ -681,6 +694,10 @@ export function VirtualizedTimelineCanvas({
   onToggleAsset,
   onOpenAsset,
   onOpenSimilar,
+  onLocateDate,
+  onOpenAlbum,
+  jump,
+  onJumpComplete,
 }: {
   groups: DayAssetGroup[];
   columns: number;
@@ -692,6 +709,10 @@ export function VirtualizedTimelineCanvas({
   onToggleAsset: (id: string, shiftRange: boolean) => void;
   onOpenAsset: (asset: CatalogAsset) => void;
   onOpenSimilar: (asset: CatalogAsset, source: "dhash" | "dino") => void;
+  onLocateDate?: (asset: CatalogAsset, viewportTop: number) => void;
+  onOpenAlbum?: (asset: CatalogAsset, albumId: string, viewportTop: number) => void;
+  jump?: TimelineJump | null;
+  onJumpComplete: (id: number) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
@@ -705,6 +726,8 @@ export function VirtualizedTimelineCanvas({
   });
   const scrollAnchor = useRef<{ id: string; offsetTop: number } | undefined>(undefined);
   const layoutSignature = useRef("");
+  const completedJump = useRef<number | undefined>(undefined);
+  const [highlight, setHighlight] = useState<{ assetId: string; jumpId: number } | null>(null);
 
   const activeCols = viewport.mobile ? mobileColumns : columns;
   const gridGap = viewport.mobile ? 2 : 3;
@@ -810,6 +833,34 @@ export function VirtualizedTimelineCanvas({
   }, [totalHeight]);
 
   useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!jump || completedJump.current === jump.id || !viewport.measured || !el) return;
+    if (Math.abs(viewport.width - el.getBoundingClientRect().width) >= 0.5) return;
+    const heading = rows.find((row) => !row.assets && row.group.date === jump.date);
+    if (!heading) return;
+
+    // Use virtual row geometry even when the date heading is outside the mounted window.
+    window.scrollTo({
+      top: window.scrollY + el.getBoundingClientRect().top + heading.top - jump.viewportTop,
+      behavior: "instant",
+    });
+    const top = el.getBoundingClientRect().top;
+    setVisibleWindow({
+      top: Math.max(0, -top - 700),
+      bottom: Math.max(0, window.innerHeight - top + 700),
+    });
+    completedJump.current = jump.id;
+    setHighlight(jump.highlight ? { assetId: jump.assetId, jumpId: jump.id } : null);
+    onJumpComplete(jump.id);
+  }, [jump, viewport.measured, viewport.width, rows, onJumpComplete]);
+
+  useEffect(() => {
+    if (!highlight) return;
+    const timer = setTimeout(() => setHighlight(null), 1400);
+    return () => clearTimeout(timer);
+  }, [highlight]);
+
+  useLayoutEffect(() => {
     const onScrollToAsset = (e: Event) => {
       const targetId = (e as CustomEvent<string>).detail;
       const row = rows.find((r) => r.assets?.some((a) => a.id === targetId));
@@ -844,17 +895,30 @@ export function VirtualizedTimelineCanvas({
   const startIdx = findRowIndex(visibleWindow.top);
   const endIdx = Math.min(rows.length, findRowIndex(visibleWindow.bottom) + 1);
 
+  const dateViewportTop = (date: string): number =>
+    (rootRef.current?.getBoundingClientRect().top || 0) +
+    (rows.find((row) => !row.assets && row.group.date === date)?.top || 0);
+
   const renderGroupHeader = (group: DayAssetGroup): ReactNode => {
     const selectableItems = group.items.filter((a) => !a.deletionPending);
     const allGroupSelected =
       selectableItems.length > 0 && selectableItems.every((a) => selectedIds.has(a.id));
 
     return (
-      <div className="day-heading">
-        <h2>
-          {formatHumanDate(`${group.date}T12:00:00`)}
-          <span>{group.date.slice(0, 4)}</span>
-        </h2>
+      <div className="day-heading" data-date={group.date}>
+        <div className="day-title">
+          {onLocateDate && (
+            <button type="button" className="day-locate" disabled={busy}
+              aria-label="在照片库中定位这一天" title="在照片库中定位这一天"
+              onClick={() => onLocateDate(group.items[0], dateViewportTop(group.date))}>
+              <TimelineCrosshairIcon />
+            </button>
+          )}
+          <h2>
+            {formatHumanDate(`${group.date}T12:00:00`)}
+            <span>{group.date.slice(0, 4)}</span>
+          </h2>
+        </div>
         <button
           type="button"
           className="day-select"
@@ -907,6 +971,10 @@ export function VirtualizedTimelineCanvas({
                   disabled={busy}
                   onToggleSelect={(e) => onToggleAsset(asset.id, e.shiftKey)}
                   onOpenSimilar={(source) => onOpenSimilar(asset, source)}
+                  onOpenAlbum={onOpenAlbum
+                    ? (albumId) => onOpenAlbum(asset, albumId, dateViewportTop(row.group.date))
+                    : undefined}
+                  highlighted={highlight?.assetId === asset.id}
                   onClick={(e) => {
                     if (selecting || e.shiftKey || e.ctrlKey || e.metaKey) {
                       e.preventDefault();

@@ -65,6 +65,26 @@
   color: var(--text-muted);
 }
 
+.day-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.day-locate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: #000;
+  border-radius: 5px;
+}
+
+.day-locate:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
 .day-select {
   display: inline-flex;
   align-items: center;
@@ -92,6 +112,21 @@
 .photo-grid {
   display: grid;
   width: 100%;
+}
+
+.photo-jump-highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  border-radius: inherit;
+  pointer-events: none;
+  animation: photo-jump-flash 1.4s ease-out both;
+}
+
+@keyframes photo-jump-flash {
+  0% { box-shadow: inset 0 0 0 3px rgba(255, 207, 90, 0); }
+  12%, 36% { box-shadow: inset 0 0 0 3px #ffcf5a, inset 0 0 0 5px rgba(0, 0, 0, 0.2); }
+  100% { box-shadow: inset 0 0 0 3px rgba(255, 207, 90, 0); }
 }
 
 /* Photo Tile & Aspect Ratio Morphing Animation */
@@ -241,6 +276,10 @@
 
 .asset-album-badge svg {
   flex-shrink: 0;
+}
+
+.asset-album-link:hover:not(:disabled) {
+  background: rgba(18, 18, 16, 0.9);
 }
 
 .photo-bottom-badges {
