@@ -776,7 +776,7 @@ export function SimilarWorkspaceView({
             aria-pressed={source === "dhash"}
             onClick={() => onSelectSource("dhash")}
           >
-            <span>{video ? "近似版本" : "算法判定"}</span>
+            <span>算法判定</span>
             {counts && (
               <small className="similar-count" title="候选总数">
                 {counts.dhash.toLocaleString("zh-CN")}
@@ -789,7 +789,7 @@ export function SimilarWorkspaceView({
             aria-pressed={source === "dino"}
             onClick={() => onSelectSource("dino")}
           >
-            <span>{video ? "内容相似" : "智能推荐"}</span>
+            <span>智能推荐</span>
             {counts && (
               <small className="similar-count" title="候选总数">
                 {counts.dino.toLocaleString("zh-CN")}

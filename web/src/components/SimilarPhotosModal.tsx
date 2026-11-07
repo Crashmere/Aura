@@ -206,7 +206,7 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
             aria-selected={source === item} className={source === item ? "active" : ""}
             onClick={() => setSource(item)}>
             {item === "dhash" ? <Copy size={16} /> : <Sparkles size={16} />}
-            {item === "dhash" ? (video ? "近似版本" : "算法判定") : (video ? "内容相似" : "智能推荐")}
+            {item === "dhash" ? "算法判定" : "智能推荐"}
           </button>)}
         </div>
         <div className="modal-body asset-similar-results">
