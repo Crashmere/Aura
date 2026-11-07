@@ -229,6 +229,7 @@ function AuraApplication() {
   const [loadingPage, setLoadingPage] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [openAssetObj, setOpenAssetObj] = useState<CatalogAsset | null>(null);
+  const [viewerGroup, setViewerGroup] = useState<CatalogAsset[] | null>(null);
 
   // Selection state
   const [selecting, setSelecting] = useState(false);
@@ -693,6 +694,7 @@ function AuraApplication() {
   useEffect(() => {
     if (!route.asset) {
       setOpenAssetObj(null);
+      setViewerGroup(null);
       return;
     }
     const inLoaded = assets.find((a) => a.id === route.asset);
@@ -716,17 +718,20 @@ function AuraApplication() {
     };
   }, [route.asset, assets, updateRoute]);
 
-  // Auto-load next page when viewer approaches end of loaded list
+  const viewerAssets = viewerGroup?.some(item => item.id === route.asset)
+    ? viewerGroup : isGalleryView ? assets : [];
   const openAssetIndex = useMemo(
-    () => (openAssetObj ? assets.findIndex((a) => a.id === openAssetObj.id) : -1),
-    [openAssetObj, assets],
+    () => (openAssetObj ? viewerAssets.findIndex((a) => a.id === openAssetObj.id) : -1),
+    [openAssetObj, viewerAssets],
   );
 
+  // Only library browsing can extend the gallery's pagination.
   useEffect(() => {
+    if (!isGalleryView || viewerGroup) return;
     if (openAssetIndex >= 0 && assets.length - openAssetIndex <= 5 && nextCursor && !loadingPage) {
       void fetchGalleryPage(nextCursor, true);
     }
-  }, [openAssetIndex, assets.length, nextCursor, loadingPage, fetchGalleryPage]);
+  }, [isGalleryView, viewerGroup, openAssetIndex, assets.length, nextCursor, loadingPage, fetchGalleryPage]);
 
   // Similar Candidates Fetcher
   async function fetchSimilarCandidates(src: "dhash" | "dino", cursor = "", append = false, pageIndex = 0,
@@ -1440,7 +1445,11 @@ function AuraApplication() {
               }}
               onAppendDhash={() => void fetchSimilarCandidates("dhash", similarNext, true)}
               onOpenHistory={() => setHistoryKind("similar")}
-              onOpenAsset={(asset) => updateRoute((prev) => ({ ...prev, asset: asset.id }), "push")}
+              onOpenAsset={(asset) => {
+                setViewerGroup(null);
+                setOpenAssetObj(asset);
+                updateRoute((prev) => ({ ...prev, asset: asset.id }), "push");
+              }}
               onComparePair={(left, right, evidence) => setComparePair({ left, right, evidence })}
               onMergePair={(left, right) => setMergePair({ left, right })}
               onIgnorePair={async (pair) => {
@@ -1740,8 +1749,9 @@ function AuraApplication() {
         {similarPhoto && <SimilarPhotosModal asset={similarPhoto.asset} initialSource={similarPhoto.source}
           currentAlbumId={route.view === "albums" ? route.album : undefined}
           onClose={() => setSimilarPhoto(null)}
-          onOpenAsset={(target) => {
+          onOpenAsset={(target, group) => {
             setSimilarPhoto(null);
+            setViewerGroup(group);
             setOpenAssetObj(target);
             updateRoute((prev) => ({ ...prev, asset: target.id }), "push");
           }}
@@ -1757,10 +1767,10 @@ function AuraApplication() {
           <LightboxStudio
             asset={openAssetObj}
             currentAlbumId={route.view === "albums" ? route.album : undefined}
-            neighbors={assets}
+            neighbors={viewerAssets}
             positionIndex={openAssetIndex}
-            totalLoaded={assets.length}
-            hasMorePages={!!nextCursor}
+            totalLoaded={viewerAssets.length}
+            hasMorePages={isGalleryView && !viewerGroup && !!nextCursor}
             onClose={() => {
               if (window.history.state?.auraViewer) {
                 window.history.back();
@@ -1768,7 +1778,8 @@ function AuraApplication() {
                 updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
               }
             }}
-            onSelectAsset={(target) => {
+            onSelectAsset={(target, group) => {
+              if (group) setViewerGroup(group);
               setOpenAssetObj(target);
               updateRoute((prev) => ({ ...prev, asset: target.id }), "replace");
             }}
@@ -1783,6 +1794,7 @@ function AuraApplication() {
                 updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
               } else {
                 setOpenAssetObj(updated);
+                setViewerGroup(previous => previous?.map(item => item.id === updated.id ? updated : item) || null);
               }
               await refreshBoundedCatalog();
             }}

@@ -18,7 +18,7 @@ function SimilarPhotoSection({
   album: string;
   outsideAlbums: boolean;
   refreshSeq: number;
-  onOpenAsset: (target: CatalogAsset) => void;
+  onOpenAsset: (target: CatalogAsset, group: CatalogAsset[]) => void;
   onCompare: (target: CatalogAsset, evidence?: CandidatePair) => void;
 }) {
   const isPresent = useIsPresent();
@@ -82,6 +82,10 @@ function SimilarPhotoSection({
     dinoState === "disabled" ? "智能推荐已暂停" :
     dinoState === "unavailable" ? "智能推荐暂不可用" :
     dinoState && dinoState !== "idle" ? "智能推荐索引更新中，可刷新查看新结果" : "";
+  const similarGroup = page?.items.flatMap(pair => {
+    const target = page.assets[pair.left === asset.id ? pair.right : pair.left];
+    return target ? [target] : [];
+  }) || [];
 
   return (
     <section className="asset-similar-section" role="tabpanel" id={`asset-similar-panel-${source}`}
@@ -105,7 +109,7 @@ function SimilarPhotoSection({
           if (!target) return null;
           return <article className="asset-similar-card" key={target.id}>
             <PhotoTile asset={target} originalAspect disabled={stale || !isPresent}
-              onClick={() => onOpenAsset(target)} />
+              onClick={() => onOpenAsset(target, similarGroup)} />
             <div className="asset-similar-card-actions">
               <span>{video ? `抽样帧匹配率 ${((pair.coverage || 0) * 100).toFixed(0)}%` :
                 source === "dhash" ? `指纹距离 ${pair.distance}` : `特征相似度 ${(100 * Math.min(1, pair.score || 0)).toFixed(1)}%`}</span>
@@ -132,7 +136,7 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
   currentAlbumId?: string;
   initialSource?: "dhash" | "dino";
   onClose: () => void;
-  onOpenAsset: (target: CatalogAsset) => void;
+  onOpenAsset: (target: CatalogAsset, group: CatalogAsset[]) => void;
   onCompare: (target: CatalogAsset, evidence?: CandidatePair) => void;
 }) {
   const isPresent = useIsPresent();

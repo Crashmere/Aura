@@ -125,7 +125,7 @@ export function LightboxStudio({
   totalLoaded: number;
   hasMorePages: boolean;
   onClose: () => void;
-  onSelectAsset: (target: CatalogAsset) => void;
+  onSelectAsset: (target: CatalogAsset, group?: CatalogAsset[]) => void;
   onUpdateAsset: (patch: Record<string, unknown>) => Promise<void>;
   onRemoveFromAlbum?: () => Promise<void>;
   onOpenAlbumAdd: () => void;
@@ -1486,7 +1486,7 @@ export function LightboxStudio({
             </div>
           )}
 
-          {neighbors.length > 1 && (
+          {positionIndex >= 0 && neighbors.length > 1 && (
             <div className="filmstrip-rail" role="navigation" aria-label="相邻照片快速跳转">
               {neighbors
                 .slice(
@@ -1528,9 +1528,9 @@ export function LightboxStudio({
       <MotionPresence present={similarOpen} variant="panel">
         {similarOpen && <SimilarPhotosModal asset={asset} currentAlbumId={currentAlbumId}
           onClose={() => setSimilarOpen(false)}
-          onOpenAsset={target => {
+          onOpenAsset={(target, group) => {
             setSimilarOpen(false);
-            onSelectAsset(target);
+            onSelectAsset(target, group);
           }}
           onCompare={target => {
             setSimilarOpen(false);
