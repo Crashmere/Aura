@@ -1129,14 +1129,6 @@ function AuraApplication() {
               {route.view === "albums" && route.album && activeAlbumDetail && (
                 <div className="album-header-actions">
                   <ActionButton
-                    className="album-group-badge"
-                    title="移动到分组"
-                    onClick={() => setAlbumModal({ kind: "move", albums: [activeAlbumDetail] })}
-                  >
-                    <FolderOpen size={15} />
-                    <span>{albumGroups.find((group) => group.id === activeAlbumDetail.groupId)?.name || "未分组"}</span>
-                  </ActionButton>
-                  <ActionButton
                     variant="primary"
                     onClick={() => setAlbumModal({ kind: "pick", album: activeAlbumDetail })}
                   >
