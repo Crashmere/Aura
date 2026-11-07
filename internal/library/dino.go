@@ -253,7 +253,7 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 			retry := ""
 			if valid {
 				if at, e := time.Parse(time.RFC3339Nano, record.CreatedAt); e == nil {
-					retry = at.Add(5 * time.Minute).Format(time.RFC3339Nano)
+					retry = at.UTC().Add(5 * time.Minute).Format(time.RFC3339Nano)
 				}
 			}
 			if _, err := l.DB.ExecContext(ctx, `INSERT INTO dino_tasks VALUES(?,?,?,?) ON CONFLICT(hash) DO UPDATE SET thumbnail=excluded.thumbnail,retry_at=excluded.retry_at`, item.Hash, item.Thumbnail, now(), retry); err != nil {
@@ -301,7 +301,7 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 		}
 	}
 
-	rows, err := l.DB.QueryContext(ctx, "SELECT hash,thumbnail FROM dino_tasks WHERE retry_at<=? ORDER BY queued_at,hash LIMIT 16", now())
+	rows, err := l.DB.QueryContext(ctx, "SELECT hash,thumbnail FROM dino_tasks WHERE retry_at='' OR julianday(retry_at)<=julianday(?) ORDER BY queued_at,hash LIMIT 16", now())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -446,7 +446,7 @@ func (l *Library) persistDINO(ctx context.Context, item dinoItem, output dinoOut
 		if record.Error == "" {
 			_, err = l.DB.ExecContext(ctx, "DELETE FROM dino_tasks WHERE hash=?", item.Hash)
 		} else {
-			_, err = l.DB.ExecContext(ctx, "UPDATE dino_tasks SET retry_at=? WHERE hash=?", time.Now().Add(5*time.Minute).Format(time.RFC3339Nano), item.Hash)
+			_, err = l.DB.ExecContext(ctx, "UPDATE dino_tasks SET retry_at=? WHERE hash=?", time.Now().UTC().Add(5*time.Minute).Format(time.RFC3339Nano), item.Hash)
 		}
 		_, _ = l.DB.ExecContext(ctx, "UPDATE catalog_versions SET value=value+1 WHERE name='review'")
 	}

@@ -222,8 +222,8 @@ func videoPerceptual(path string) string {
 	return fmt.Sprintf("%016x", hash)
 }
 
-// A single decoder samples the complete timeline; showinfo retains actual frame
-// timestamps, rather than the rounded timestamps of an fps conversion.
+// Short videos share one decoder; long videos seek to samples instead of decoding
+// the entire recording. showinfo retains actual frame timestamps in both cases.
 func (l *Library) extractVideoFrames(ctx context.Context, hash, work string) (videoFeatureRecord, []string, error) {
 	record := videoFeatureRecord{Recipe: videoFeatureRecipe, Hash: hash, Matches: []videoFeatureMatch{}}
 	spec, err := l.probePlayback(ctx, hash, hash)
@@ -242,6 +242,13 @@ func (l *Library) extractVideoFrames(ctx context.Context, hash, work string) (vi
 	}
 	count := videoSampleCount(spec.duration)
 	step := spec.duration / float64(count)
+	seeks := []float64{0}
+	if spec.duration > 600 {
+		seeks = make([]float64, count)
+		for i := range seeks {
+			seeks[i] = math.Floor(float64(i)*step*1e6) / 1e6
+		}
+	}
 	selectFrames := fmt.Sprintf("setpts=PTS-STARTPTS,select='isnan(prev_selected_t)+gte(t-prev_selected_t,%.9f)'", step)
 	scale := "scale=w='min(384,iw)':h='min(384,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"
 	modes := []string{"CPU"}
@@ -252,43 +259,75 @@ func (l *Library) extractVideoFrames(ctx context.Context, hash, work string) (vi
 		}
 	}
 	var output string
+	var times []float64
 	for _, mode := range modes {
-		args := []string{"-nostdin", "-v", "info", "-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-filter_complex_threads", "1"}
-		gpu := mode != "CPU"
-		if gpu {
-			args = append(args, "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu")
-		}
-		if mode == "NVIDIA GPU · CUDA 解码" {
-			args = append(args, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
-		}
-		args = append(args, "-i", spec.path, "-map", "0:v:0", "-an")
-		filter := selectFrames + "," + scale
-		if len(hdr) > 0 {
-			filter = selectFrames + "," + strings.Join(hdr, ",")
-		} else if gpu {
-			filter = selectFrames + ","
-			if mode != "NVIDIA GPU · CUDA 解码" {
-				filter += "format=nv12,hwupload,"
+		times = nil
+		for index, seek := range seeks {
+			args := []string{"-nostdin", "-v", "info", "-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-filter_complex_threads", "1"}
+			gpu := mode != "CPU"
+			if gpu {
+				args = append(args, "-init_hw_device", "cuda=gpu:0", "-filter_hw_device", "gpu")
 			}
-			filter += strings.Replace(scale, "scale=", "scale_cuda=", 1) + ":format=yuv420p,hwdownload,format=yuv420p"
+			if mode == "NVIDIA GPU · CUDA 解码" {
+				args = append(args, "-hwaccel", "cuda", "-hwaccel_output_format", "cuda")
+			}
+			if seek > 0 {
+				args = append(args, "-ss", strconv.FormatFloat(seek, 'f', 6, 64))
+			}
+			args = append(args, "-i", spec.path, "-map", "0:v:0", "-an")
+			filter := scale
+			if len(hdr) > 0 {
+				filter = strings.Join(hdr, ",")
+			} else if gpu {
+				filter = ""
+				if mode != "NVIDIA GPU · CUDA 解码" {
+					filter += "format=nv12,hwupload,"
+				}
+				filter += strings.Replace(scale, "scale=", "scale_cuda=", 1) + ":format=yuv420p,hwdownload,format=yuv420p"
+			}
+			frames, outputPath := count, filepath.Join(work, "frame-%03d.jpg")
+			if len(seeks) == 1 {
+				filter = selectFrames + "," + filter
+			} else {
+				frames, outputPath = 1, filepath.Join(work, fmt.Sprintf("frame-%03d.jpg", index+1))
+			}
+			args = append(args, "-vf", filter+",showinfo", "-fps_mode", "vfr", "-frames:v", strconv.Itoa(frames),
+				"-map_metadata", "-1", "-q:v", "3", "-threads", "2", "-y", outputPath)
+			var release func()
+			if gpu {
+				release, err = l.acquireGPU(ctx)
+			} else {
+				release, err = l.acquireCPU(ctx)
+			}
+			if err != nil {
+				return record, nil, err
+			}
+			logs := &limitedBuffer{max: 256 << 10}
+			cmd := mediaCommand(ctx, "ffmpeg", args...)
+			cmd.Stderr = logs
+			err = cmd.Run()
+			release()
+			output = logs.String()
+			if err != nil {
+				break
+			}
+			stamps := videoSampleTime.FindAllStringSubmatch(output, -1)
+			if len(stamps) == 0 {
+				err = fmt.Errorf("video sample at %.6f produced no frame", seek)
+				break
+			}
+			for _, stamp := range stamps[:min(frames, len(stamps))] {
+				value, e := strconv.ParseFloat(stamp[1], 64)
+				if e != nil || math.IsNaN(value) || math.IsInf(value, 0) || value+seek < 0 {
+					err = fmt.Errorf("invalid video sample timestamp: %s", stamp[1])
+					break
+				}
+				times = append(times, value+seek)
+			}
+			if err != nil {
+				break
+			}
 		}
-		args = append(args, "-vf", filter+",showinfo", "-fps_mode", "vfr", "-frames:v", strconv.Itoa(count),
-			"-map_metadata", "-1", "-q:v", "3", "-threads", "2", "-y", filepath.Join(work, "frame-%03d.jpg"))
-		var release func()
-		if gpu {
-			release, err = l.acquireGPU(ctx)
-		} else {
-			release, err = l.acquireCPU(ctx)
-		}
-		if err != nil {
-			return record, nil, err
-		}
-		logs := &limitedBuffer{max: 256 << 10}
-		cmd := mediaCommand(ctx, "ffmpeg", args...)
-		cmd.Stderr = logs
-		err = cmd.Run()
-		release()
-		output = logs.String()
 		if err == nil {
 			record.Engine = mode
 			break
@@ -301,15 +340,13 @@ func (l *Library) extractVideoFrames(ctx context.Context, hash, work string) (vi
 	if err != nil {
 		return record, nil, fmt.Errorf("video frame sampling: %w: %s", err, output[max(0, len(output)-2000):])
 	}
-	times := videoSampleTime.FindAllStringSubmatch(output, -1)
 	paths := []string{}
-	for index := 0; index < min(count, len(times)); index++ {
+	for index, stamp := range times {
 		path := filepath.Join(work, fmt.Sprintf("frame-%03d.jpg", index+1))
 		value := videoPerceptual(path)
 		if value == "" {
 			continue
 		}
-		stamp, _ := strconv.ParseFloat(times[index][1], 64)
 		dhash, _ := strconv.ParseUint(value, 16, 64)
 		record.Frames = append(record.Frames, videoFeatureFrame{Time: stamp, DHash: dhash})
 		paths = append(paths, path)
@@ -383,10 +420,19 @@ func (l *Library) inferVideoBatch(ctx context.Context, worker **dinoProcess, rec
 		return ctx.Err()
 	case <-active.done:
 		return fmt.Errorf("video feature worker stopped: %v", active.err)
-	case response = <-active.response:
+	case result, ok := <-active.response:
+		if !ok {
+			<-active.done
+			*worker = nil
+			return fmt.Errorf("video feature worker stopped: %v", active.err)
+		}
+		response = result
 	}
-	if response.Error != "" || len(response.Items) != len(items) {
+	if response.Error != "" {
 		return fmt.Errorf("video feature batch: %s", response.Error)
+	}
+	if len(response.Items) != len(items) {
+		return fmt.Errorf("video feature batch returned %d of %d frames", len(response.Items), len(items))
 	}
 	seen := map[int]bool{}
 	for _, item := range response.Items {
@@ -644,7 +690,7 @@ func (l *Library) persistVideoRecord(ctx context.Context, record videoFeatureRec
 	if record.Error == "" {
 		_, err = l.DB.ExecContext(ctx, "DELETE FROM video_tasks WHERE hash=?", record.Hash)
 	} else {
-		_, err = l.DB.ExecContext(ctx, "UPDATE video_tasks SET retry_at=? WHERE hash=?", time.Now().Add(5*time.Minute).Format(time.RFC3339Nano), record.Hash)
+		_, err = l.DB.ExecContext(ctx, "UPDATE video_tasks SET retry_at=? WHERE hash=?", time.Now().UTC().Add(5*time.Minute).Format(time.RFC3339Nano), record.Hash)
 	}
 	if err == nil {
 		_, err = l.DB.ExecContext(ctx, "UPDATE catalog_versions SET value=value+1 WHERE name='review'")
@@ -708,13 +754,13 @@ func (l *Library) videoSimilarityLoop(ctx context.Context) {
 		}
 		var hash string
 		if err == nil {
-			err = l.DB.QueryRowContext(ctx, "SELECT hash FROM video_tasks WHERE retry_at<=? ORDER BY queued_at,hash LIMIT 1", now()).Scan(&hash)
+			err = l.DB.QueryRowContext(ctx, "SELECT hash FROM video_tasks WHERE retry_at='' OR julianday(retry_at)<=julianday(?) ORDER BY queued_at,hash LIMIT 1", now()).Scan(&hash)
 		}
 		if hash != "" && err == nil {
 			err = l.analyzeVideo(ctx, hash, &worker)
 			if err != nil && ctx.Err() == nil {
 				slog.Warn("video similarity analysis", "hash", hash, "error", err)
-				_, _ = l.DB.ExecContext(ctx, "UPDATE video_tasks SET retry_at=? WHERE hash=?", time.Now().Add(time.Minute).Format(time.RFC3339Nano), hash)
+				_, _ = l.DB.ExecContext(ctx, "UPDATE video_tasks SET retry_at=? WHERE hash=?", time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano), hash)
 			}
 			revision = -1
 			continue
