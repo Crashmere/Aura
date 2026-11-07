@@ -87,6 +87,7 @@ let workerLoopActive = false;
 let watchedDirHandle: WatchableDirectoryHandle | undefined;
 let watchIntervalId: number | undefined;
 let throttledTimer: ReturnType<typeof setTimeout> | undefined;
+let libraryChangeTimer: ReturnType<typeof setTimeout> | undefined;
 
 const broadcastState = () => {
   clearTimeout(throttledTimer);
@@ -98,6 +99,16 @@ const broadcastState = () => {
 const broadcastThrottled = () => {
   if (!throttledTimer) {
     throttledTimer = setTimeout(broadcastState, 120);
+  }
+};
+
+const notifyLibraryChanged = () => {
+  // Coalesce near-simultaneous completions without waiting for the upload batch.
+  if (!libraryChangeTimer) {
+    libraryChangeTimer = setTimeout(() => {
+      libraryChangeTimer = undefined;
+      window.dispatchEvent(new Event("aura-library-changed"));
+    }, 120);
   }
 };
 
@@ -352,7 +363,7 @@ async function finishUploadEntry(
   entry.state = result.filtered ? "skipped" : result.trashed || entry.trashedAt ? "trashed" : state;
   broadcastState();
   if (state === "done" || (entry.albumId && !unavailable)) {
-    window.dispatchEvent(new Event("aura-library-changed"));
+    notifyLibraryChanged();
   }
 }
 
@@ -474,6 +485,26 @@ function failUploadEntry(entry: UploadQueueEntry, err: unknown): void {
   broadcastState();
 }
 
+async function resolvePendingAlbumAdditions(): Promise<void> {
+  while (!engineState.paused) {
+    const pending = engineState.items.filter((x) => x.state === "adding");
+    if (!pending.length) return;
+    for (const entry of pending) {
+      if (engineState.paused) return;
+      try {
+        const status = await requestJson<ServerUploadSession>(`uploads/${entry.hash}`);
+        if (!status.complete) throw new Error("原件未完成保存，请重试上传");
+        await finishUploadEntry(entry, status, entry.completionState || "done");
+      } catch (err) {
+        failUploadEntry(entry, err);
+      }
+    }
+    if (engineState.items.some((x) => x.state === "adding")) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
 async function driveUploadLoop(): Promise<void> {
   if (workerLoopActive || engineState.paused) return;
   workerLoopActive = true;
@@ -494,29 +525,24 @@ async function driveUploadLoop(): Promise<void> {
     prefetchedMap.set(entry.id, task);
     return task;
   };
+  let albumAdditions: Promise<void> | undefined;
+  const startAlbumAdditions = () => {
+    if (albumAdditions || !engineState.items.some((x) => x.state === "adding")) return;
+    // Resolve published items while subsequent originals are still transferring.
+    albumAdditions = resolvePendingAlbumAdditions().finally(() => {
+      albumAdditions = undefined;
+    });
+  };
 
   try {
     while (!engineState.paused) {
+      startAlbumAdditions();
       const current = engineState.items.find(
         (x) => x.state === "waiting" || prefetchedMap.has(x.id),
       );
       if (!current) {
-        const pending = engineState.items.filter((x) => x.state === "adding");
-        if (!pending.length) break;
-        // Publication is asynchronous. Drain transfers before polling album additions.
-        for (const entry of pending) {
-          if (engineState.paused) break;
-          try {
-            const status = await requestJson<ServerUploadSession>(`uploads/${entry.hash}`);
-            if (!status.complete) throw new Error("原件未完成保存，请重试上传");
-            await finishUploadEntry(entry, status, entry.completionState || "done");
-          } catch (err) {
-            failUploadEntry(entry, err);
-          }
-        }
-        if (engineState.items.some((x) => x.state === "adding")) {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        }
+        if (!albumAdditions) break;
+        await albumAdditions;
         continue;
       }
       try {
@@ -536,6 +562,7 @@ async function driveUploadLoop(): Promise<void> {
       }
     }
   } finally {
+    await albumAdditions;
     await Promise.allSettled(prefetchedMap.values());
     for (const id of prefetchedMap.keys()) {
       const item = engineState.items.find((x) => x.id === id);
