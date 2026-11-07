@@ -10,6 +10,7 @@ import (
 
 type dhashIndex struct {
 	items  []similarItem
+	byID   map[string]int
 	blocks [5]map[uint64][]int
 }
 
@@ -26,7 +27,7 @@ func (l *Library) buildDHashIndex(ctx context.Context) (*dhashIndex, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	index := &dhashIndex{}
+	index := &dhashIndex{byID: map[string]int{}}
 	for i := range index.blocks {
 		index.blocks[i] = map[uint64][]int{}
 	}
@@ -47,6 +48,7 @@ func (l *Library) buildDHashIndex(ctx context.Context) (*dhashIndex, error) {
 		item.Ratio = float64(width) / float64(height)
 		i := len(index.items)
 		index.items = append(index.items, item)
+		index.byID[item.ID] = i
 		for b := range index.blocks {
 			key := hashBlock(item.Value, b)
 			index.blocks[b][key] = append(index.blocks[b][key], i)
@@ -56,16 +58,20 @@ func (l *Library) buildDHashIndex(ctx context.Context) (*dhashIndex, error) {
 }
 
 func (index *dhashIndex) matches(i int) []similarMatch {
+	return index.findMatches(i, true)
+}
+
+func (index *dhashIndex) findMatches(i int, precedingOnly bool) []similarMatch {
 	item := index.items[i]
 	seen := map[int]bool{}
 	out := []similarMatch{}
 	// At distance <=4, one of five disjoint bit blocks must be identical.
 	for b := range index.blocks {
 		for _, j := range index.blocks[b][hashBlock(item.Value, b)] {
-			if j >= i {
+			if precedingOnly && j >= i {
 				break
 			}
-			if seen[j] {
+			if j == i || seen[j] {
 				continue
 			}
 			seen[j] = true

@@ -82,6 +82,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Post("/api/albums/{id}/assets", l.changeAlbumAssets)
 	r.Delete("/api/albums/{id}/assets", l.changeAlbumAssets)
 	r.Get("/api/assets/{id}", l.detail)
+	r.Get("/api/assets/{id}/similar", l.assetSimilar)
 	r.Patch("/api/assets/{id}", l.updateAsset)
 	r.Patch("/api/assets/{id}/rotation", l.rotate)
 	r.Patch("/api/assets/{id}/cover", l.saveCover)

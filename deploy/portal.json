@@ -222,6 +222,11 @@
       "description": "照片详情、所属相片集、全部原件与合并元数据"
     },
     {
+      "method": "GET",
+      "path": "/api/assets/{id}/similar",
+      "description": "分页查看当前照片的 dHash 与 DINO 相似候选，可排除所在相片集；不改动照片或关联"
+    },
+    {
       "method": "PATCH",
       "path": "/api/assets/{id}",
       "description": "收藏、最近删除、恢复与持久主版本选择"

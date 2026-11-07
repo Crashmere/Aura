@@ -1587,6 +1587,7 @@ function AuraApplication() {
         {openAssetObj && (
           <LightboxStudio
             asset={openAssetObj}
+            currentAlbumId={route.view === "albums" ? route.album : undefined}
             neighbors={assets}
             positionIndex={openAssetIndex}
             totalLoaded={assets.length}

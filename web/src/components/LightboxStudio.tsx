@@ -57,6 +57,7 @@ import type {
   StoredFile,
 } from "../core/types";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
+import { SimilarPhotosModal } from "./SimilarPhotosModal";
 import {
   type NetworkMediaMode,
   schedulePreviewWarmup,
@@ -101,6 +102,7 @@ function describeEditorSource(editor?: string): string {
 
 export function LightboxStudio({
   asset,
+  currentAlbumId,
   neighbors,
   positionIndex,
   totalLoaded,
@@ -117,6 +119,7 @@ export function LightboxStudio({
   onNotify,
 }: {
   asset: CatalogAsset;
+  currentAlbumId?: string;
   neighbors: CatalogAsset[];
   positionIndex: number;
   totalLoaded: number;
@@ -148,6 +151,7 @@ export function LightboxStudio({
   const inspectorTabs = useSlidingIndicator(`${infoOpen}:${infoTab}`, '[aria-selected="true"]');
   const [metaFilter, setMetaFilter] = useState("");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [similarOpen, setSimilarOpen] = useState(false);
   const [chromeHidden, setChromeHidden] = useState(false);
 
   const [rotationDeltaState, setRotationDelta] = useState(0);
@@ -210,6 +214,7 @@ export function LightboxStudio({
     setRotationDelta(0);
     setCoverPickerOpen(false);
     setMoreMenuOpen(false);
+    setSimilarOpen(false);
     setZoomScale(1);
     setPanOffset({ x: 0, y: 0 });
     setIsDragging(false);
@@ -454,7 +459,7 @@ export function LightboxStudio({
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!isPresent || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if (!isPresent || similarOpen || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       const target = e.target instanceof HTMLElement ? e.target : null;
@@ -779,6 +784,13 @@ export function LightboxStudio({
             </RoundIconButton>
           )}
 
+          {!asset.trashedAt && (
+            <RoundIconButton title="查看相似照片" disabled={isLocked}
+              onClick={() => setSimilarOpen(true)}>
+              <Sparkles size={18} />
+            </RoundIconButton>
+          )}
+
           <a
             className="icon-btn"
             href={
@@ -833,6 +845,15 @@ export function LightboxStudio({
             <MotionPresence present={moreMenuOpen} variant="menu">
               {moreMenuOpen && (
                 <div className="lightbox-dropdown" role="menu">
+                  {!asset.trashedAt && (
+                    <button type="button" role="menuitem" disabled={isLocked} onClick={() => {
+                      setMoreMenuOpen(false);
+                      setSimilarOpen(true);
+                    }}>
+                      <Sparkles size={14} />
+                      <span>查看相似照片</span>
+                    </button>
+                  )}
                   <div className="dropdown-group-label">清晰图加载策略</div>
                   {(
                     [
@@ -1506,6 +1527,18 @@ export function LightboxStudio({
           )}
         </footer>
       </CollapsibleRegion>
+      <MotionPresence present={similarOpen} variant="panel">
+        {similarOpen && <SimilarPhotosModal asset={asset} currentAlbumId={currentAlbumId}
+          onClose={() => setSimilarOpen(false)}
+          onOpenAsset={target => {
+            setSimilarOpen(false);
+            onSelectAsset(target);
+          }}
+          onCompare={target => {
+            setSimilarOpen(false);
+            onOpenCompare(asset, target);
+          }} />}
+      </MotionPresence>
     </div>
   );
 }

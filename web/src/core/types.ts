@@ -220,10 +220,13 @@ export interface CandidatePair {
   score?: number;
 }
 
-export interface SimilarCandidatesPage extends CursorPage<CandidatePair> {
+export interface AssetSimilarPage extends CursorPage<CandidatePair> {
   index?: DinoIndexStatus;
   assets: Record<string, CatalogAsset>;
   total: number;
+}
+
+export interface SimilarCandidatesPage extends AssetSimilarPage {
   counts: Record<"dhash" | "dino", number>;
 }
 
