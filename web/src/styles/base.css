@@ -748,5 +748,6 @@ a {
 .aura-content {
   flex: 1;
   padding: 20px 24px 88px;
-  animation: aura-view-enter 0.24s var(--ease-out);
+  /* Moving the document content offsets the browser's reload scroll anchor. */
+  animation: aura-scrim-fade 0.24s var(--ease-out);
 }

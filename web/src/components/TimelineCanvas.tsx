@@ -693,6 +693,7 @@ export function VirtualizedTimelineCanvas({
   const [viewport, setViewport] = useState({
     width: 960,
     mobile: window.innerWidth <= 720,
+    measured: false,
   });
   const [visibleWindow, setVisibleWindow] = useState({
     top: 0,
@@ -728,10 +729,13 @@ export function VirtualizedTimelineCanvas({
   }, [groups, activeCols, gridGap, viewport.width]);
 
   useLayoutEffect(() => {
+    // The estimated initial width is not a user layout change.
+    if (!viewport.measured) return;
     const sig = `${activeCols}:${viewport.width}`;
     if (
       layoutSignature.current &&
       layoutSignature.current !== sig &&
+      window.scrollY > 0 &&
       scrollAnchor.current &&
       rootRef.current
     ) {
@@ -748,7 +752,7 @@ export function VirtualizedTimelineCanvas({
       }
     }
     layoutSignature.current = sig;
-  }, [activeCols, viewport.width, rows]);
+  }, [activeCols, viewport.width, viewport.measured, rows]);
 
   useLayoutEffect(() => {
     const el = rootRef.current;
@@ -760,9 +764,9 @@ export function VirtualizedTimelineCanvas({
       const rect = el.getBoundingClientRect();
       const isMobile = window.innerWidth <= 720;
       setViewport((prev) =>
-        prev.width === rect.width && prev.mobile === isMobile
+        prev.measured && prev.width === rect.width && prev.mobile === isMobile
           ? prev
-          : { width: rect.width, mobile: isMobile },
+          : { width: rect.width, mobile: isMobile, measured: true },
       );
       const topBound = Math.max(0, -rect.top - 700);
       const bottomBound = Math.max(0, window.innerHeight - rect.top + 700);
