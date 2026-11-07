@@ -287,9 +287,9 @@ function AuraApplication() {
   });
   const [ignoringKey, setIgnoringKey] = useState("");
   const [lastIgnoredPair, setLastIgnoredPair] = useState<CandidatePair | null>(null);
-  const [similarAsset, setSimilarAsset] = useState<CatalogAsset | null>(null);
+  const [similarPhoto, setSimilarPhoto] = useState<{ asset: CatalogAsset; source: "dhash" | "dino" } | null>(null);
 
-  useEffect(() => setSimilarAsset(null), [route.view, route.album]);
+  useEffect(() => setSimilarPhoto(null), [route.view, route.album]);
 
   const gridPrefs = useGridDisplayPreferences();
   const uploadActivity = useSyncExternalStore(subscribeUploadEngine, getUploadActivitySummary);
@@ -1385,7 +1385,7 @@ function AuraApplication() {
                     busy={batchBusy}
                     onToggleGroup={toggleSelectDayGroup}
                     onToggleAsset={toggleSelectAsset}
-                    onOpenSimilar={setSimilarAsset}
+                    onOpenSimilar={(asset, source) => setSimilarPhoto({ asset, source })}
                     onOpenAsset={(item) =>
                       updateRoute((prev) => ({ ...prev, asset: item.id }), "push")
                     }
@@ -1584,18 +1584,18 @@ function AuraApplication() {
         )}
       </MotionPresence>
 
-      <MotionPresence present={!!similarAsset} variant="panel">
-        {similarAsset && <SimilarPhotosModal asset={similarAsset}
+      <MotionPresence present={!!similarPhoto} variant="panel">
+        {similarPhoto && <SimilarPhotosModal asset={similarPhoto.asset} initialSource={similarPhoto.source}
           currentAlbumId={route.view === "albums" ? route.album : undefined}
-          onClose={() => setSimilarAsset(null)}
+          onClose={() => setSimilarPhoto(null)}
           onOpenAsset={(target) => {
-            setSimilarAsset(null);
+            setSimilarPhoto(null);
             setOpenAssetObj(target);
             updateRoute((prev) => ({ ...prev, asset: target.id }), "push");
           }}
           onCompare={(target) => {
-            setSimilarAsset(null);
-            setComparePair({ left: similarAsset, right: target });
+            setSimilarPhoto(null);
+            setComparePair({ left: similarPhoto.asset, right: target });
           }} />}
       </MotionPresence>
 

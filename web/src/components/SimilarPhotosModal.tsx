@@ -2,17 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Columns2, Copy, LoaderCircle, RefreshCw, Sparkles, X } from "lucide-react";
 import { buildMediaUrl, requestJson } from "../core/client";
-import { useIsPresent } from "../core/motion";
+import { useIsPresent, useSlidingIndicator } from "../core/motion";
 import { usePageScrollLock } from "../core/photo-view";
 import type { AssetSimilarPage, CatalogAsset, SimilarityScoreRange } from "../core/types";
 import { PhotoTile } from "./TimelineCanvas";
 import { SimilarityScoreFilter } from "./SimilarityScoreFilter";
 
 function SimilarPhotoSection({
-  asset, source, album, outsideAlbums, refreshSeq, onOpenAsset, onCompare,
+  asset, source, active, album, outsideAlbums, refreshSeq, onOpenAsset, onCompare,
 }: {
   asset: CatalogAsset;
   source: "dhash" | "dino";
+  active: boolean;
   album: string;
   outsideAlbums: boolean;
   refreshSeq: number;
@@ -65,9 +66,13 @@ function SimilarPhotoSection({
   }
 
   useEffect(() => {
-    void fetchPage();
+    if (!active) {
+      setLoading(false);
+      return;
+    }
+    if (page?.scope !== scope) void fetchPage();
     return () => requestRef.current?.abort();
-  }, [asset.id, source, album, outsideAlbums, refreshSeq, scoreRange]);
+  }, [active, asset.id, source, album, outsideAlbums, refreshSeq, scoreRange]);
 
   const dinoState = page?.index?.state;
   const indexNote = source !== "dino" ? "" :
@@ -76,14 +81,12 @@ function SimilarPhotoSection({
     dinoState && dinoState !== "idle" ? "智能推荐索引更新中，可刷新查看新结果" : "";
 
   return (
-    <section className="asset-similar-section" aria-busy={loading}>
+    <section className="asset-similar-section" role="tabpanel" id={`asset-similar-panel-${source}`}
+      aria-labelledby={`asset-similar-tab-${source}`} hidden={!active} aria-busy={loading}>
       <header>
-        <h3>{source === "dhash" ? <Copy size={17} /> : <Sparkles size={17} />}
-          {source === "dhash" ? "算法判定" : "智能推荐"}
-        </h3>
+        <p className="asset-similar-method">{source === "dhash" ? "dHash · 图像指纹" : "DINO · 视觉特征"}</p>
         {!stale && <span className="asset-similar-count">{page.total} 张</span>}
       </header>
-      <p className="asset-similar-method">{source === "dhash" ? "dHash · 图像指纹" : "DINO · 视觉特征"}</p>
       {source === "dino" && <SimilarityScoreFilter range={scoreRange} disabled={!isPresent}
         onChange={setScoreRange} />}
       {indexNote && !stale && <p className="asset-similar-status">{indexNote}</p>}
@@ -120,15 +123,18 @@ function SimilarPhotoSection({
   );
 }
 
-export function SimilarPhotosModal({ asset, currentAlbumId, onClose, onOpenAsset, onCompare }: {
+export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dhash", onClose, onOpenAsset, onCompare }: {
   asset: CatalogAsset;
   currentAlbumId?: string;
+  initialSource?: "dhash" | "dino";
   onClose: () => void;
   onOpenAsset: (target: CatalogAsset) => void;
   onCompare: (target: CatalogAsset) => void;
 }) {
   const isPresent = useIsPresent();
   const rootRef = useRef<HTMLElement>(null);
+  const [source, setSource] = useState(initialSource);
+  const tabsIndicator = useSlidingIndicator(source, '[aria-selected="true"]');
   const [outsideAlbums, setOutsideAlbums] = useState(false);
   const [refreshSeq, setRefreshSeq] = useState(0);
   const currentAlbum = asset.albums?.find(item => item.id === currentAlbumId);
@@ -178,16 +184,26 @@ export function SimilarPhotosModal({ asset, currentAlbumId, onClose, onOpenAsset
           <div><strong>{asset.name}</strong><span title={filterAlbums.map(item => item.name).join("、")}>
             {filterAlbums.length ? filterAlbums.map(item => item.name).join("、") : "不属于任何相片集"}
           </span></div>
+          <label className="asset-similar-filter">
+            <span>排除所在相片集照片</span>
+            <input type="checkbox" role="switch" checked={outsideAlbums} disabled={!filterAlbums.length}
+              onChange={event => setOutsideAlbums(event.target.checked)} />
+            <span className="asset-similar-switch" aria-hidden="true" />
+          </label>
         </div>
-        <label className="asset-similar-filter">
-          <span>仅显示所在相片集之外的相似照片</span>
-          <input type="checkbox" role="switch" checked={outsideAlbums} disabled={!filterAlbums.length}
-            onChange={event => setOutsideAlbums(event.target.checked)} />
-          <span className="asset-similar-switch" aria-hidden="true" />
-        </label>
+        <div className="similar-tabs asset-similar-tabs motion-tabs" role="tablist" aria-label="相似类型"
+          ref={tabsIndicator.ref} style={tabsIndicator.style}>
+          {(["dhash", "dino"] as const).map(item => <button key={item} type="button" role="tab"
+            id={`asset-similar-tab-${item}`} aria-controls={`asset-similar-panel-${item}`}
+            aria-selected={source === item} className={source === item ? "active" : ""}
+            onClick={() => setSource(item)}>
+            {item === "dhash" ? <Copy size={16} /> : <Sparkles size={16} />}
+            {item === "dhash" ? "算法判定" : "智能推荐"}
+          </button>)}
+        </div>
         <div className="modal-body asset-similar-results">
-          {(["dhash", "dino"] as const).map(source => <SimilarPhotoSection key={source}
-            asset={asset} source={source} album={currentAlbum?.id || ""} outsideAlbums={outsideAlbums}
+          {(["dhash", "dino"] as const).map(item => <SimilarPhotoSection key={item}
+            asset={asset} source={item} active={source === item} album={currentAlbum?.id || ""} outsideAlbums={outsideAlbums}
             refreshSeq={refreshSeq} onOpenAsset={onOpenAsset} onCompare={onCompare} />)}
         </div>
       </section>

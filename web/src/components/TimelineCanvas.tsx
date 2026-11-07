@@ -431,7 +431,7 @@ export function PhotoTile({
   selected?: boolean;
   selecting?: boolean;
   onToggleSelect?: (e: MouseEvent<HTMLButtonElement>) => void;
-  onOpenSimilar?: () => void;
+  onOpenSimilar?: (source: "dhash" | "dino") => void;
   disabled?: boolean;
   originalAspect?: boolean;
 }) {
@@ -593,7 +593,8 @@ export function PhotoTile({
             onClick={(event) => {
               event.stopPropagation();
               abortSpeculativePreloads();
-              onOpenSimilar?.();
+              const bounds = event.currentTarget.getBoundingClientRect();
+              onOpenSimilar?.(event.detail === 0 || event.clientX < bounds.left + bounds.width / 2 ? "dhash" : "dino");
             }}>
             {dhashCount > 0 && <span className="photo-similar-dhash">{dhashCount}</span>}
             <Sparkles size={13} aria-hidden="true" />
@@ -686,7 +687,7 @@ export function VirtualizedTimelineCanvas({
   onToggleGroup: (items: CatalogAsset[]) => void;
   onToggleAsset: (id: string, shiftRange: boolean) => void;
   onOpenAsset: (asset: CatalogAsset) => void;
-  onOpenSimilar: (asset: CatalogAsset) => void;
+  onOpenSimilar: (asset: CatalogAsset, source: "dhash" | "dino") => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
@@ -897,7 +898,7 @@ export function VirtualizedTimelineCanvas({
                   selecting={selecting}
                   disabled={busy}
                   onToggleSelect={(e) => onToggleAsset(asset.id, e.shiftKey)}
-                  onOpenSimilar={() => onOpenSimilar(asset)}
+                  onOpenSimilar={(source) => onOpenSimilar(asset, source)}
                   onClick={(e) => {
                     if (selecting || e.shiftKey || e.ctrlKey || e.metaKey) {
                       e.preventDefault();
