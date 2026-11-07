@@ -163,7 +163,8 @@ Split history returns decisions without a `split-restore` record. New split deci
 | Method and path | Behavior |
 | --- | --- |
 | `GET /api/albums` | Array of albums ordered by creation time and ID descending |
-| `POST /api/albums` | `{name,assets?:[assetId]}`; create and optionally add items atomically; returns 201 |
+| `POST /api/albums` | `{name,assets?:[assetId],groupId?:groupId}`; create, optionally assign a group and add items atomically; returns 201 |
+| `PATCH /api/albums/group` | `{albums:[albumId],groupId:groupId|null}`; atomically move 1–1000 albums to a group, or to ungrouped with explicit null |
 | `POST /api/albums/import` | `{sourceKey,name,assets:[assetId]}`; idempotent native source mapping and additive membership import |
 | `GET /api/albums/{id}` | Album name, visible item count, cover asset, and timestamps |
 | `PATCH /api/albums/{id}` | `{name}`; rename |
@@ -172,7 +173,18 @@ Split history returns decisions without a `split-restore` record. New split deci
 | `POST /api/albums/{id}/assets` | `{assets:[assetId]}`; idempotent, atomic addition |
 | `DELETE /api/albums/{id}/assets` | `{assets:[assetId]}`; idempotent removal of memberships only |
 
-Album responses contain `id`, `name`, `count`, `createdAt`, `updatedAt`, and optional `cover` using the asset response shape. Counts and covers exclude recently deleted items. The selected member supplies the cover while it remains visible in the album; otherwise the newest visible member supplies the automatic fallback. Selection follows the chosen original hash through merge/split, and uses the current item's thumbnail, rotation and video-cover/key-photo revision. Cover writes require `assetId` as an ID or explicit null; a missing field, invalid ID, non-member or recently deleted item returns 400, and pending permanent deletion returns 409. Selecting or resetting a cover changes neither membership nor originals. Names contain 1–100 Unicode characters after trimming. Membership changes accept 1–1000 IDs; creation permits an empty list. Missing or recently deleted assets reject the entire addition with 400. Missing albums return 404. Removal does not require the item to remain visible. Merge transfers memberships to the retained item; split copies memberships to the new item.
+Album responses contain `id`, `name`, `groupId` (empty for ungrouped), `count`, `createdAt`, `updatedAt`, and optional `cover` using the asset response shape. Counts and covers exclude recently deleted items. The selected member supplies the cover while it remains visible in the album; otherwise the newest visible member supplies the automatic fallback. Selection follows the chosen original hash through merge/split, and uses the current item's thumbnail, rotation and video-cover/key-photo revision. Cover writes require `assetId` as an ID or explicit null; a missing field, invalid ID, non-member or recently deleted item returns 400, and pending permanent deletion returns 409. Selecting or resetting a cover changes neither membership nor originals. Names contain 1–100 Unicode characters after trimming. Membership changes accept 1–1000 IDs; creation permits an empty list. Missing or recently deleted assets reject the entire addition with 400. Missing albums return 404. Removal does not require the item to remain visible. Merge transfers memberships to the retained item; split copies memberships to the new item.
+
+### Album groups
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /api/album-groups` | Array of single-level groups ordered by creation time and ID descending |
+| `POST /api/album-groups` | `{name,albums?:[albumId]}`; create and optionally move up to 1000 albums atomically; returns 201 |
+| `PATCH /api/album-groups/{id}` | `{name}`; rename; returns the updated group |
+| `DELETE /api/album-groups/{id}` | Delete the group; its albums become ungrouped; returns `{deleted:true}` |
+
+Group responses contain `id`, `name`, `createdAt`, and `updatedAt`. Names follow the album name limits. Each album belongs to at most one group. Missing albums or missing/deleted destination groups return 404 without partial changes. Moving requires an explicit valid group ID or null; missing/malformed destinations and invalid batch sizes return 400. Moving or deleting a group preserves albums, photo memberships, covers and original bytes. Native import preserves the Aura-side group assignment and creates new albums ungrouped.
 
 Native import source keys use `photokit-album:<client-library-id>:<collection-id>`. Source mappings are retained in the existing decision log. The import adds at most 1000 visible items per request, preserves an Aura-side rename, and never propagates removals from Apple Photos. A mapped album deleted in Aura returns 409 with `code: "imported_album_deleted"` instead of being silently recreated. Clients preserve that user decision and surface it separately from network failures. Native clients must require `capabilities.albumImport` before enabling this operation.
 

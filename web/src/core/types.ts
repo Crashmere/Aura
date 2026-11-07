@@ -91,8 +91,16 @@ export interface AssetDetailPayload {
 export interface AlbumItem {
   id: string;
   name: string;
+  groupId: string;
   count: number;
   cover?: CatalogAsset;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AlbumGroup {
+  id: string;
+  name: string;
   createdAt: string;
   updatedAt: string;
 }

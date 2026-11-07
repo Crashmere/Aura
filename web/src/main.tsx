@@ -45,6 +45,7 @@ import {
 import { ConfirmPurgeModal, PurgeStatusBanner, usePurgeTracker } from "./core/purge-tracker";
 import { CollapsibleRegion, MotionPresence, useSlidingIndicator } from "./core/motion";
 import type {
+  AlbumGroup,
   AlbumItem,
   CandidatePair,
   CatalogAsset,
@@ -185,6 +186,7 @@ function AuraApplication() {
   // Telemetry & Catalog
   const [telemetry, setTelemetry] = useState<LibraryTelemetry>();
   const [albums, setAlbums] = useState<AlbumItem[]>([]);
+  const [albumGroups, setAlbumGroups] = useState<AlbumGroup[]>([]);
   const [activeAlbumDetail, setActiveAlbumDetail] = useState<AlbumItem | null>(null);
   const [months, setMonths] = useState<{ month: string; count: number }[]>([]);
 
@@ -393,12 +395,14 @@ function AuraApplication() {
   // Fetch global info & albums list
   const fetchOverview = useCallback(async () => {
     try {
-      const [infoRes, albumsRes] = await Promise.all([
+      const [infoRes, albumsRes, groupsRes] = await Promise.all([
         requestJson<LibraryTelemetry>("info"),
         requestJson<AlbumItem[]>("albums"),
+        requestJson<AlbumGroup[]>("album-groups"),
       ]);
       setTelemetry(infoRes);
       setAlbums(albumsRes);
+      setAlbumGroups(groupsRes);
       if (route.view === "albums" && route.album) {
         const found = albumsRes.find((a) => a.id === route.album);
         if (found) {
@@ -1111,6 +1115,12 @@ function AuraApplication() {
             )}
 
             {isAlbumOverview && (
+              <ActionButton onClick={() => setAlbumModal({ kind: "group-create" })}>
+                <FolderPlus size={16} />
+                <span>新建分组</span>
+              </ActionButton>
+            )}
+            {isAlbumOverview && (
               <ActionButton variant="primary" onClick={() => setAlbumModal({ kind: "create" })}>
                 <Plus size={16} />
                 <span>新建相片集</span>
@@ -1119,6 +1129,14 @@ function AuraApplication() {
 
             {route.view === "albums" && route.album && activeAlbumDetail && (
               <div className="album-header-actions">
+                <ActionButton
+                  className="album-group-badge"
+                  title="移动到分组"
+                  onClick={() => setAlbumModal({ kind: "move", albums: [activeAlbumDetail] })}
+                >
+                  <FolderOpen size={15} />
+                  <span>{albumGroups.find((group) => group.id === activeAlbumDetail.groupId)?.name || "未分组"}</span>
+                </ActionButton>
                 <ActionButton
                   variant="primary"
                   onClick={() => setAlbumModal({ kind: "pick", album: activeAlbumDetail })}
@@ -1333,9 +1351,11 @@ function AuraApplication() {
               }}
             />
           ) : isAlbumOverview ? (
-            albums.length > 0 ? (
+            albums.length > 0 || albumGroups.length > 0 ? (
               <AlbumsCollectionGrid
                 albums={albums}
+                groups={albumGroups}
+                onAction={setAlbumModal}
                 onOpenAlbum={(alb) => {
                   setActiveAlbumDetail(alb);
                   updateRoute((prev) => ({ ...prev, view: "albums", album: alb.id }), "push");
@@ -1663,11 +1683,20 @@ function AuraApplication() {
         {albumModal && (
           <AlbumActionModal
             state={albumModal}
+            groups={albumGroups}
             onClose={() => setAlbumModal(null)}
             onSaved={(savedAlbum) => {
               const kind = albumModal.kind;
               setAlbumModal(null);
-              if (kind === "delete") {
+              if (kind === "group-create") {
+                showToast("分组已创建");
+              } else if (kind === "group-rename") {
+                showToast("分组已重命名");
+              } else if (kind === "group-delete") {
+                showToast("分组已删除，相片集已移至未分组");
+              } else if (kind === "move") {
+                showToast("相片集分组已更新");
+              } else if (kind === "delete") {
                 showToast("相片集已删除");
                 updateRoute((prev) => ({ ...prev, album: "" }), "replace");
               } else if (kind === "create" && savedAlbum) {

@@ -610,9 +610,28 @@ article.task-row:hover {
   font-size: 12px;
 }
 
+#album-name-form {
+  display: grid;
+  gap: 14px;
+}
+
+.album-name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.album-name-field select {
+  width: 100%;
+  min-width: 0;
+}
+
 .filter-field select,
 .filter-range input,
 .album-name-field input,
+.album-name-field select,
 .upload-dates input {
   height: 32px;
   padding: 0 8px;

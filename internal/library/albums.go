@@ -14,6 +14,7 @@ import (
 type Album struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
+	GroupID   string `json:"groupId"`
 	Count     int    `json:"count"`
 	Cover     *Asset `json:"cover,omitempty"`
 	CreatedAt string `json:"createdAt"`
@@ -27,10 +28,14 @@ const albumSelect = `SELECT al.id,al.name,al.created_at,al.updated_at,
  WHERE d.id='album-cover:'||al.id AND d.action='album-cover' AND a.trashed_at=''),
  (SELECT a.id FROM album_assets aa JOIN assets a ON a.id=aa.asset_id
  WHERE aa.album_id=al.id AND a.trashed_at='' ORDER BY a.captured_at DESC,a.id DESC LIMIT 1),'')
- FROM albums al `
+ ,CASE WHEN g.id IS NULL THEN '' ELSE json_extract(ag.detail,'$.groupId') END
+ FROM albums al
+ LEFT JOIN decisions ag ON ag.id='album-grouping:'||al.id AND ag.action='album-grouping'
+ LEFT JOIN decisions g ON g.id='album-group:'||json_extract(ag.detail,'$.groupId')
+ AND g.action='album-group' AND COALESCE(json_extract(g.detail,'$.deleted'),0)=0 `
 
 func scanAlbum(row scanner) (a Album, cover string, err error) {
-	err = row.Scan(&a.ID, &a.Name, &a.CreatedAt, &a.UpdatedAt, &a.Count, &cover)
+	err = row.Scan(&a.ID, &a.Name, &a.CreatedAt, &a.UpdatedAt, &a.Count, &cover, &a.GroupID)
 	return
 }
 
@@ -145,8 +150,9 @@ func albumWriteError(w http.ResponseWriter, err error) {
 
 func (l *Library) createAlbum(w http.ResponseWriter, r *http.Request) {
 	var p struct {
-		Name   string   `json:"name"`
-		Assets []string `json:"assets"`
+		Name    string   `json:"name"`
+		Assets  []string `json:"assets"`
+		GroupID string   `json:"groupId"`
 	}
 	if !decode(w, r, &p) {
 		return
@@ -167,11 +173,14 @@ func (l *Library) createAlbum(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = addAlbumAssets(tx, id, p.Assets)
 	}
+	if err == nil && p.GroupID != "" {
+		err = assignAlbumGroup(tx, []string{id}, p.GroupID, date)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
-		albumWriteError(w, err)
+		albumGroupWriteError(w, err)
 		return
 	}
 	l.writeAlbum(w, id, 201)

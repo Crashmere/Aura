@@ -17,7 +17,7 @@
       "id": "data",
       "name": "业务数据",
       "path": "/opt/aura/data",
-      "purpose": "元数据、相片集及照片关联、分片和处理状态、资源分组与导入来源；保留主版本、旋转方向、视频封面与实况关键照片帧、相似忽略、Apple 相册映射及永久删除意图、清理状态和最小防重导入标记。",
+      "purpose": "元数据、相片集分组及照片关联、分片和处理状态、资源分组与导入来源；保留主版本、旋转方向、视频封面与实况关键照片帧、相似忽略、Apple 相册映射及永久删除意图、清理状态和最小防重导入标记。",
       "kind": "data",
       "browse": true,
       "cleanup": false
@@ -144,17 +144,42 @@
     {
       "method": "GET",
       "path": "/api/albums",
-      "description": "相片集列表、可见项目数与指定或自动封面"
+      "description": "相片集列表、所属分组、可见项目数与指定或自动封面"
     },
     {
       "method": "POST",
       "path": "/api/albums",
-      "description": "新建相片集并原子添加所选照片"
+      "description": "新建相片集并原子分组、添加所选照片"
     },
     {
       "method": "POST",
       "path": "/api/albums/import",
       "description": "Apple 相册来源映射与增量添加；保留 Aura 命名和删除决定"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/albums/group",
+      "description": "原子批量移动相片集到指定分组或未分组；保留照片关联和原件"
+    },
+    {
+      "method": "GET",
+      "path": "/api/album-groups",
+      "description": "相片集单层分组列表"
+    },
+    {
+      "method": "POST",
+      "path": "/api/album-groups",
+      "description": "新建分组并可原子移入所选相片集"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/album-groups/{id}",
+      "description": "重命名相片集分组"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/album-groups/{id}",
+      "description": "删除分组，相片集回到未分组；保留相片集、照片及原件"
     },
     {
       "method": "GET",

@@ -10,7 +10,7 @@ Aura's application target is `nas` at `/aura/`, with loopback listener `127.0.0.
 | `/opt/aura/bin/deploy-{ssh,release}.sh` | Root-maintained restricted release entry points |
 | `/opt/aura/bin/dino/` | Pinned DINO source, weights, dependency manifest and isolated Python environment |
 | `/opt/aura/config/` | systemd units, Nginx location, Portal declaration and source receipt |
-| `/opt/aura/data/aura.sqlite` | Catalog, albums/memberships, uploads, media jobs, saved rotations and cover selections, deletion requests and hash/source guards |
+| `/opt/aura/data/aura.sqlite` | Catalog, albums/memberships and album groups, uploads, media jobs, saved rotations and cover selections, deletion requests and hash/source guards |
 | `/opt/aura/data/assets/` | Immutable SHA-256 originals until confirmed permanent deletion |
 | `/opt/aura/data/derived/` | Rebuildable JPEG previews, selected-frame covers, metadata-only JPEG rotation variants/source markers and versioned DINO vectors/candidates; included in NAS full cold backups |
 | `/run/aura/playback/` | Bounded tmpfs scratch for online HLS segments; no persistent full-video playback files or recovery coverage |
@@ -108,6 +108,8 @@ NAS releases hold shared maintenance and Aura deployment locks and stop Aura aft
 Use `make portal` for declaration-only changes. `make rollback COMMIT=<full-compatible-commit>` reuses a locally retained program through the same guarded flow. The core catalog schema remains version 1. Startup adds `albums` and `album_assets` plus the membership index without rewriting catalog rows or originals. Authorize schema changes separately and rehearse them against the independent candidate copy; `check` remains read-only.
 
 Albums are included in the whole-database snapshot, with no new directory or backup format. Album-unaware programs can open/check and back up this additive schema, but their merge/split paths do not maintain album memberships. Prefer an album-aware rollback build; when reverting to an older program, pause library edits and imports until the album-aware program is restored.
+
+Album groups and assignments use existing decision records without a schema migration or new directory. NAS full packages and native database snapshots retain them, including deleted-group tombstones. A group-unaware album-aware rollback retains these records and displays a flat album list; returning to a group-aware program restores the grouping for surviving albums. Group operations do not change original files or photo memberships.
 
 Deletion requests, cleanup results, and minimal reimport guards use the existing decision log, without schema changes. Before a subsequent release, check `pendingDeletions` and drain or investigate pending cleanup. A confirmed request may remove files or rows during recovery, so the shared strict-preservation upgrade check can reject a release that overlaps unfinished deletion. Keep the retained upgrade protection and inspect the pending request instead of bypassing preservation checks. Rollback must use a deletion-aware program: older programs ignore deletion guards and can accept deliberately removed originals again. Program rollback does not restore removed bytes or undo a confirmed deletion.
 

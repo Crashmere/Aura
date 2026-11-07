@@ -1,24 +1,33 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Check,
+  ChevronDown,
+  FolderInput,
+  FolderOpen,
   Images,
   LoaderCircle,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import { buildMediaUrl, requestJson } from "../core/client";
-import { useIsPresent } from "../core/motion";
-import type { AlbumItem, CatalogAsset } from "../core/types";
+import { CollapsibleRegion, useIsPresent } from "../core/motion";
+import type { AlbumGroup, AlbumItem, CatalogAsset } from "../core/types";
 import { PhotoTile } from "./TimelineCanvas";
 
 export type AlbumModalState =
-  | { kind: "create"; assets?: string[] }
+  | { kind: "create"; assets?: string[]; groupId?: string }
   | { kind: "rename"; album: AlbumItem }
   | { kind: "add"; assets: string[] }
   | { kind: "pick"; album: AlbumItem }
-  | { kind: "delete"; album: AlbumItem };
+  | { kind: "delete"; album: AlbumItem }
+  | { kind: "group-create" }
+  | { kind: "group-rename"; group: AlbumGroup }
+  | { kind: "group-delete"; group: AlbumGroup }
+  | { kind: "move"; albums: AlbumItem[] };
 
 function AlbumCoverThumb({
   album,
@@ -77,16 +86,23 @@ function AlbumCoverThumb({
 function AlbumGridCard({
   album,
   onSelect,
+  onMove,
+  selecting,
+  selected,
 }: {
   album: AlbumItem;
   onSelect: (album: AlbumItem) => void;
+  onMove: (album: AlbumItem) => void;
+  selecting: boolean;
+  selected: boolean;
 }) {
   const [broken, setBroken] = useState(false);
   const [retrySeq, setRetrySeq] = useState(0);
 
   return (
     <div className="album-card-wrapper">
-      <button type="button" className="album-card" onClick={() => onSelect(album)}>
+      <button type="button" className={`album-card ${selected ? "is-selected" : ""}`}
+        aria-pressed={selecting ? selected : undefined} onClick={() => onSelect(album)}>
         <AlbumCoverThumb
           album={album}
           retrySeq={retrySeq}
@@ -97,6 +113,16 @@ function AlbumGridCard({
           <small>{album.count.toLocaleString("zh-CN")} 项</small>
         </div>
       </button>
+      {selecting ? (
+        <span className={`album-selection-mark ${selected ? "is-selected" : ""}`} aria-hidden="true">
+          {selected && <Check size={16} />}
+        </span>
+      ) : (
+        <button type="button" className="album-move-btn" title="移动到分组"
+          aria-label={`将“${album.name}”移动到分组`} onClick={() => onMove(album)}>
+          <FolderInput size={16} />
+        </button>
+      )}
       {broken && (
         <button
           type="button"
@@ -114,46 +140,182 @@ function AlbumGridCard({
 
 export function AlbumsCollectionGrid({
   albums,
+  groups,
   onOpenAlbum,
+  onAction,
 }: {
   albums: AlbumItem[];
+  groups: AlbumGroup[];
   onOpenAlbum: (album: AlbumItem) => void;
+  onAction: (state: AlbumModalState) => void;
 }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setSelected((prev) => new Set([...prev].filter((id) => albums.some((a) => a.id === id))));
+  }, [albums]);
+
+  const sections: {
+    id: string;
+    name: string;
+    group?: AlbumGroup;
+    albums: AlbumItem[];
+  }[] = groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+    group,
+    albums: albums.filter((album) => album.groupId === group.id),
+  }));
+  const ungrouped = albums.filter((album) => !groups.some((group) => group.id === album.groupId));
+  if (ungrouped.length) sections.push({ id: "", name: "未分组", albums: ungrouped });
+
+  function selectAlbum(album: AlbumItem) {
+    if (!selecting) {
+      onOpenAlbum(album);
+      return;
+    }
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(album.id)) next.delete(album.id);
+      else if (next.size < 1000) next.add(album.id);
+      return next;
+    });
+  }
+
   return (
-    <div className="album-grid">
-      {albums.map((album) => (
-        <AlbumGridCard key={album.id} album={album} onSelect={onOpenAlbum} />
+    <div className="album-collections">
+      {albums.length > 0 && (
+        <div className="album-organize-toolbar">
+          {selecting ? (
+            <>
+              <span>已选 {selected.size} 个相片集{selected.size === 1000 ? "，已达单次上限" : ""}</span>
+              <button type="button" className="btn" onClick={() => { setSelecting(false); setSelected(new Set()); }}>取消</button>
+              <button type="button" className="btn btn-primary" disabled={!selected.size}
+                onClick={() => onAction({ kind: "move", albums: albums.filter((a) => selected.has(a.id)) })}>
+                <FolderInput size={15} />移动到分组
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn" onClick={() => setSelecting(true)}>批量分组</button>
+          )}
+        </div>
+      )}
+      {sections.map((section) => (
+        <section key={section.id} className="album-group-section">
+          <header className="album-group-header">
+            <button type="button" className="album-group-toggle" aria-expanded={!collapsed.has(section.id)}
+              aria-controls={`album-group-${section.id || "unfiled"}`}
+              onClick={() => setCollapsed((prev) => {
+                const next = new Set(prev);
+                if (next.has(section.id)) next.delete(section.id); else next.add(section.id);
+                return next;
+              })}>
+              <ChevronDown size={16} className={collapsed.has(section.id) ? "is-collapsed" : ""} />
+              <FolderOpen size={18} />
+              <h2>{section.name}</h2>
+              <small>{section.albums.length} 个相片集</small>
+            </button>
+            {!selecting && (
+              <div className="album-group-actions">
+                <button type="button" className="icon-btn" title="在此分组新建相片集"
+                  aria-label={`在“${section.name}”新建相片集`}
+                  onClick={() => onAction({ kind: "create", groupId: section.id })}><Plus size={16} /></button>
+                {section.group && (
+                  <>
+                    <button type="button" className="icon-btn" title="重命名分组" aria-label={`重命名“${section.name}”分组`}
+                      onClick={() => { if (section.group) onAction({ kind: "group-rename", group: section.group }); }}><Pencil size={15} /></button>
+                    <button type="button" className="icon-btn" title="删除分组" aria-label={`删除“${section.name}”分组`}
+                      onClick={() => { if (section.group) onAction({ kind: "group-delete", group: section.group }); }}><Trash2 size={15} /></button>
+                  </>
+                )}
+              </div>
+            )}
+          </header>
+          <CollapsibleRegion open={!collapsed.has(section.id)} id={`album-group-${section.id || "unfiled"}`}>
+            {section.albums.length ? (
+              <div className="album-grid">
+                {section.albums.map((album) => (
+                  <AlbumGridCard key={album.id} album={album} onSelect={selectAlbum}
+                    onMove={(album) => onAction({ kind: "move", albums: [album] })}
+                    selecting={selecting} selected={selected.has(album.id)} />
+                ))}
+              </div>
+            ) : <p className="album-group-empty">此分组还没有相片集</p>}
+          </CollapsibleRegion>
+        </section>
       ))}
     </div>
   );
 }
 
+function AlbumGroupField({
+  label,
+  groups,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  groups: AlbumGroup[];
+  value: string;
+  disabled: boolean;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <label className="album-name-field">
+      <span>{label}</span>
+      <select aria-label={label} value={value} disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}>
+        <option value="">未分组</option>
+        {groups.map((group) => (
+          <option key={group.id} value={group.id}>{group.name}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function AlbumActionModal({
   state,
+  groups,
   onClose,
   onSaved,
 }: {
   state: AlbumModalState;
+  groups: AlbumGroup[];
   onClose: () => void;
   onSaved: (album?: AlbumItem) => void;
 }) {
   const isPresent = useIsPresent();
   const [nameInput, setNameInput] = useState(
-    state.kind === "rename" ? state.album.name : "",
+    state.kind === "rename" ? state.album.name
+      : state.kind === "group-rename" ? state.group.name : "",
+  );
+  const [groupId, setGroupId] = useState(
+    state.kind === "create" ? state.groupId || ""
+      : state.kind === "move" && state.albums.every((a) => a.groupId === state.albums[0]?.groupId)
+        ? state.albums[0]?.groupId || "" : "",
   );
   const [albumsList, setAlbumsList] = useState<AlbumItem[]>([]);
   const [loadingList, setLoadingList] = useState(state.kind === "add");
   const [isCreatingNew, setIsCreatingNew] = useState(
-    state.kind === "create" || state.kind === "rename",
+    state.kind === "create" || state.kind === "rename" || state.kind === "group-create" || state.kind === "group-rename",
   );
   const [busy, setBusy] = useState(false);
   const [pendingAlbumId, setPendingAlbumId] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const isPhotoPicker = state.kind === "pick";
+  const isGroupName = state.kind === "group-create" || state.kind === "group-rename" || state.kind === "move";
+  const isDeleting = state.kind === "delete" || state.kind === "group-delete";
 
   const modalTitle =
-    state.kind === "pick"
+    state.kind === "group-delete" ? "删除分组"
+    : state.kind === "group-rename" ? "重命名分组"
+    : state.kind === "group-create" || (state.kind === "move" && isCreatingNew) ? "新建分组"
+    : state.kind === "move" ? "移动到分组"
+    : state.kind === "pick"
       ? "添加照片"
       : state.kind === "rename"
         ? "重命名相片集"
@@ -208,7 +370,22 @@ export function AlbumActionModal({
     setBusy(true);
     setErrorMsg("");
     try {
-      if (state.kind === "delete") {
+      if (state.kind === "group-delete") {
+        await requestJson(`album-groups/${state.group.id}`, undefined, "DELETE");
+        onSaved();
+      } else if (state.kind === "group-rename") {
+        await requestJson(`album-groups/${state.group.id}`, { name: nameInput.trim() }, "PATCH");
+        onSaved();
+      } else if (state.kind === "group-create" || state.kind === "move" && isCreatingNew) {
+        await requestJson("album-groups", {
+          name: nameInput.trim(),
+          albums: state.kind === "move" ? state.albums.map((a) => a.id) : [],
+        });
+        onSaved();
+      } else if (state.kind === "move") {
+        await requestJson("albums/group", { albums: state.albums.map((a) => a.id), groupId: groupId || null }, "PATCH");
+        onSaved();
+      } else if (state.kind === "delete") {
         await requestJson(`albums/${state.album.id}`, undefined, "DELETE");
         onSaved();
       } else if (state.kind === "rename") {
@@ -230,6 +407,7 @@ export function AlbumActionModal({
         const created = await requestJson<AlbumItem>("albums", {
           name: nameInput.trim(),
           assets: initialAssets,
+          groupId,
         });
         onSaved(created);
       }
@@ -277,7 +455,9 @@ export function AlbumActionModal({
         ) : (
           <>
             <div className="modal-body" key={isCreatingNew ? "name" : "albums"}>
-              {state.kind === "delete" ? (
+              {state.kind === "group-delete" ? (
+                <p className="album-modal-note">删除“{state.group.name}”分组？相片集会移至“未分组”，相片集和照片均保留。</p>
+              ) : state.kind === "delete" ? (
                 <p className="album-modal-note">
                   删除“{state.album.name}”？照片仍保留在照片库中。
                 </p>
@@ -290,10 +470,10 @@ export function AlbumActionModal({
                   }}
                 >
                   <label className="album-name-field">
-                    <span>相片集名称</span>
+                    <span>{isGroupName ? "分组名称" : "相片集名称"}</span>
                     <input
                       ref={inputRef}
-                      aria-label="相片集名称"
+                      aria-label={isGroupName ? "分组名称" : "相片集名称"}
                       placeholder="输入名称"
                       value={nameInput}
                       maxLength={100}
@@ -301,12 +481,23 @@ export function AlbumActionModal({
                       onChange={(e) => setNameInput(e.target.value)}
                     />
                   </label>
+                  {!isGroupName && state.kind !== "rename" && groups.length > 0 && (
+                    <AlbumGroupField label="所属分组" groups={groups} value={groupId}
+                      disabled={busy} onChange={setGroupId} />
+                  )}
+                  {state.kind === "move" && <p className="album-modal-note">同时移入已选的 {state.albums.length} 个相片集。</p>}
                   {state.kind === "add" && (
                     <p className="album-modal-note">
                       同时添加已选的 {state.assets.length} 项。
                     </p>
                   )}
                 </form>
+              ) : state.kind === "move" ? (
+                <>
+                  <p className="album-modal-note">{state.albums.length === 1 ? `移动“${state.albums[0].name}”` : `移动已选的 ${state.albums.length} 个相片集`}</p>
+                  <AlbumGroupField label="目标分组" groups={groups} value={groupId}
+                    disabled={busy} onChange={setGroupId} />
+                </>
               ) : (
                 <>
                   <p className="album-modal-note">
@@ -330,7 +521,7 @@ export function AlbumActionModal({
                           <AlbumCoverThumb album={alb} />
                           <span>
                             <strong>{alb.name}</strong>
-                            <small>{alb.count} 项</small>
+                            <small>{alb.count} 项 · {groups.find((group) => group.id === alb.groupId)?.name || "未分组"}</small>
                           </span>
                           {pendingAlbumId === alb.id ? (
                             <LoaderCircle size={18} className="spin" />
@@ -364,14 +555,14 @@ export function AlbumActionModal({
               >
                 取消
               </button>
-              {state.kind === "delete" ? (
+              {isDeleting ? (
                 <button
                   type="button"
                   className="btn btn-danger"
                   disabled={busy}
                   onClick={() => void commitAction()}
                 >
-                  删除相片集
+                  {state.kind === "group-delete" ? "删除分组" : "删除相片集"}
                 </button>
               ) : isCreatingNew ? (
                 <button
@@ -382,10 +573,15 @@ export function AlbumActionModal({
                 >
                   {busy
                     ? "正在保存"
-                    : state.kind === "rename"
+                    : state.kind === "rename" || state.kind === "group-rename"
                       ? "保存"
                       : "创建"}
                 </button>
+              ) : state.kind === "move" ? (
+                <>
+                  <button type="button" className="btn" disabled={busy} onClick={() => { setIsCreatingNew(true); setErrorMsg(""); }}>新建分组</button>
+                  <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void commitAction()}>{busy ? "正在移动" : "移动"}</button>
+                </>
               ) : (
                 <button
                   type="button"
