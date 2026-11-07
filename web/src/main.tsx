@@ -439,6 +439,7 @@ function AuraApplication() {
 
   // Fetch gallery page
   const pageReqIdRef = useRef(0);
+  const galleryScopeRef = useRef("");
   const fetchGalleryPage = useCallback(
     async (cursor = "", append = false) => {
       if (!isGalleryView) return;
@@ -564,7 +565,9 @@ function AuraApplication() {
     setSelectedIds(new Set());
     setSelecting(false);
     if (isGalleryView) {
-      setAssets([]);
+      const scope = `${route.view}:${route.album}`;
+      if (galleryScopeRef.current !== scope) setAssets([]);
+      galleryScopeRef.current = scope;
       setNextCursor("");
       void fetchGalleryPage("", false);
     }
@@ -1370,19 +1373,21 @@ function AuraApplication() {
               )}
 
               {assets.length > 0 ? (
-                <VirtualizedTimelineCanvas
-                  groups={dayGroups}
-                  columns={gridPrefs.columns}
-                  mobileColumns={gridPrefs.mobileColumns}
-                  selectedIds={selectedIds}
-                  selecting={selecting}
-                  busy={batchBusy}
-                  onToggleGroup={toggleSelectDayGroup}
-                  onToggleAsset={toggleSelectAsset}
-                  onOpenAsset={(item) =>
-                    updateRoute((prev) => ({ ...prev, asset: item.id }), "push")
-                  }
-                />
+                <div className="catalog-results" aria-busy={loadingPage} inert={loadingPage || (!nextCursor && !!loadError)}>
+                  <VirtualizedTimelineCanvas
+                    groups={dayGroups}
+                    columns={gridPrefs.columns}
+                    mobileColumns={gridPrefs.mobileColumns}
+                    selectedIds={selectedIds}
+                    selecting={selecting}
+                    busy={batchBusy}
+                    onToggleGroup={toggleSelectDayGroup}
+                    onToggleAsset={toggleSelectAsset}
+                    onOpenAsset={(item) =>
+                      updateRoute((prev) => ({ ...prev, asset: item.id }), "push")
+                    }
+                  />
+                </div>
               ) : loadingPage ? (
                 <div {...gridPrefs.skeletonProps}>
                   {Array.from({ length: 21 }).map((_, idx) => (
@@ -1430,7 +1435,7 @@ function AuraApplication() {
               {loadingPage && assets.length > 0 && (
                 <div className="loading-inline">
                   <LoaderCircle size={18} className="spin" />
-                  <span>正在加载更多照片…</span>
+                  <span>{nextCursor ? "正在加载更多照片…" : "正在更新照片…"}</span>
                 </div>
               )}
             </div>
