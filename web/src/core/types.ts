@@ -100,6 +100,8 @@ export interface AlbumItem {
   name: string;
   groupId: string;
   count: number;
+  photos: number;
+  videos: number;
   cover?: CatalogAsset;
   createdAt: string;
   updatedAt: string;

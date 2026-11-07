@@ -177,7 +177,7 @@ function AlbumGridCard({
         />
         <div className="album-card-meta">
           <strong>{album.name}</strong>
-          <small>{album.count.toLocaleString("zh-CN")} 项</small>
+          <small>{album.photos.toLocaleString("zh-CN")}张照片、{album.videos.toLocaleString("zh-CN")}个视频</small>
         </div>
       </button>
       {selecting ? (

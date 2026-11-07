@@ -16,6 +16,8 @@ type Album struct {
 	Name      string `json:"name"`
 	GroupID   string `json:"groupId"`
 	Count     int    `json:"count"`
+	Photos    int    `json:"photos"`
+	Videos    int    `json:"videos"`
 	Cover     *Asset `json:"cover,omitempty"`
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
@@ -28,6 +30,7 @@ type AlbumReference struct {
 
 const albumSelect = `SELECT al.id,al.name,al.created_at,al.updated_at,
  (SELECT count(*) FROM album_assets aa JOIN assets a ON a.id=aa.asset_id WHERE aa.album_id=al.id AND a.trashed_at=''),
+ (SELECT count(*) FROM album_assets aa JOIN assets a ON a.id=aa.asset_id WHERE aa.album_id=al.id AND a.trashed_at='' AND a.kind='video'),
  COALESCE((SELECT a.id FROM decisions d JOIN files f ON f.hash=json_extract(d.detail,'$.hash')
  JOIN assets a ON a.id=f.asset_id JOIN album_assets aa ON aa.asset_id=a.id AND aa.album_id=al.id
  WHERE d.id='album-cover:'||al.id AND d.action='album-cover' AND a.trashed_at=''),
@@ -40,7 +43,8 @@ const albumSelect = `SELECT al.id,al.name,al.created_at,al.updated_at,
  AND g.action='album-group' AND COALESCE(json_extract(g.detail,'$.deleted'),0)=0 `
 
 func scanAlbum(row scanner) (a Album, cover string, err error) {
-	err = row.Scan(&a.ID, &a.Name, &a.CreatedAt, &a.UpdatedAt, &a.Count, &cover, &a.GroupID)
+	err = row.Scan(&a.ID, &a.Name, &a.CreatedAt, &a.UpdatedAt, &a.Count, &a.Videos, &cover, &a.GroupID)
+	a.Photos = a.Count - a.Videos
 	return
 }
 
