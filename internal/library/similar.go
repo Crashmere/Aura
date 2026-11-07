@@ -138,26 +138,34 @@ func (l *Library) similar(w http.ResponseWriter, r *http.Request) {
 	l.writeSimilar(w, r, items, next, paged, false, -1)
 }
 
-func similarityMinScore(q url.Values) (float32, error) {
-	if q.Get("minScore") == "" {
-		return 0, nil
+func similarityScoreRange(q url.Values) (float32, float32, error) {
+	values := [2]float64{.7, 1}
+	for i, key := range []string{"minScore", "maxScore"} {
+		if q.Get(key) == "" {
+			continue
+		}
+		score, err := strconv.ParseFloat(q.Get(key), 64)
+		if err != nil || math.IsNaN(score) || math.IsInf(score, 0) || score < .7 || score > 1 {
+			return 0, 0, fmt.Errorf("特征相似度上下限须在 70%% 到 100%% 之间")
+		}
+		values[i] = score
 	}
-	score, err := strconv.ParseFloat(q.Get("minScore"), 64)
-	if err != nil || math.IsNaN(score) || math.IsInf(score, 0) || score < .7 || score > 1 {
-		return 0, fmt.Errorf("特征相似度阈值须在 70%% 到 100%% 之间")
+	if values[0] > values[1] {
+		return 0, 0, fmt.Errorf("特征相似度下限不能大于上限")
 	}
-	return float32(score), nil
+	return float32(values[0]), float32(values[1]), nil
 }
 
-func filterSimilarScores(pairs []similarPair, minScore float32) []similarPair {
-	// Both DINO lists are score-sorted; retain a prefix without changing the cached snapshot.
-	end := sort.Search(len(pairs), func(i int) bool { return min(pairs[i].Score, 1) <= minScore })
-	return pairs[:end]
+func filterSimilarScores(pairs []similarPair, minScore, maxScore float32) []similarPair {
+	// Both DINO lists are score-sorted; select a range without changing the cached snapshot.
+	start := sort.Search(len(pairs), func(i int) bool { return min(pairs[i].Score, 1) <= maxScore })
+	end := start + sort.Search(len(pairs)-start, func(i int) bool { return min(pairs[start+i].Score, 1) < minScore })
+	return pairs[start:end]
 }
 
 func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	minScore, err := similarityMinScore(q)
+	minScore, maxScore, err := similarityScoreRange(q)
 	if err != nil {
 		fail(w, 400, err)
 		return
@@ -184,7 +192,7 @@ func (l *Library) similarDINO(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err)
 		return
 	}
-	pairs := filterSimilarScores(value.([]similarPair), minScore)
+	pairs := filterSimilarScores(value.([]similarPair), minScore, maxScore)
 	start := 0
 	if cursor.Left != "" {
 		start = sort.Search(len(pairs), func(i int) bool {

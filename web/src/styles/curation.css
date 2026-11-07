@@ -53,7 +53,14 @@
   font-size: 11.5px;
 }
 
-.similar-tabs .review-history-link {
+.similar-review-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.similar-review-toolbar .review-history-link {
   margin-left: auto;
 }
 
@@ -110,40 +117,93 @@
 
 .similar-score-toolbar,
 .similar-score-filter,
-.similar-score-filter label,
 .similar-score-result {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.similar-score-toolbar,
-.similar-score-filter {
+.similar-score-toolbar {
   flex-wrap: wrap;
+  flex: 0 1 480px;
+  max-width: 100%;
 }
 
 .similar-score-filter {
-  font-size: 13px;
-}
-
-.similar-score-input {
-  display: inline-flex;
-  align-items: center;
-  padding-right: 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
-  color: var(--text-muted);
-}
-
-.similar-score-input input {
-  width: 70px;
+  flex: 0 1 384px;
+  width: 384px;
+  max-width: 100%;
   min-width: 0;
-  padding: 8px;
-  border: 0;
-  background: transparent;
-  color: var(--text-primary);
+  min-height: 36px;
   font-size: 13px;
+}
+
+.similar-score-label {
+  white-space: nowrap;
+}
+
+.similar-score-value {
+  flex: 0 0 44px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.similar-score-track {
+  position: relative;
+  flex: 1;
+  min-width: 90px;
+  height: 32px;
+  margin: 0 9px;
+  touch-action: none;
+  user-select: none;
+  cursor: pointer;
+}
+
+.similar-score-rail,
+.similar-score-selection {
+  position: absolute;
+  top: 14px;
+  height: 4px;
+  border-radius: 999px;
+}
+
+.similar-score-rail {
+  inset-inline: 0;
+  background: var(--border-strong);
+}
+
+.similar-score-selection {
+  left: var(--score-start);
+  right: calc(100% - var(--score-end));
+  background: var(--text-primary);
+}
+
+.similar-score-thumb {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--text-primary);
+  border-radius: 50%;
+  background: var(--bg-surface);
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  touch-action: none;
+}
+
+.similar-score-thumb::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.similar-score-thumb:active {
+  cursor: grabbing;
+}
+
+.similar-score-filter[aria-disabled="true"] {
+  opacity: .5;
 }
 
 .similar-score-result {

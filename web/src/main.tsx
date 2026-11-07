@@ -54,6 +54,7 @@ import type {
   LibraryTelemetry,
   PurgeRequestReceipt,
   SimilarCandidatesPage,
+  SimilarityScoreRange,
   TimelineSummary,
   WorkspaceViewId,
 } from "./core/types";
@@ -285,7 +286,7 @@ function AuraApplication() {
 
   // Similar studio state
   const [similarSource, setSimilarSource] = useState<"dhash" | "dino">("dhash");
-  const [dinoMinScore, setDinoMinScore] = useState<number | null>(null);
+  const [dinoScoreRange, setDinoScoreRange] = useState<SimilarityScoreRange>([.7, 1]);
   const [similarPairs, setSimilarPairs] = useState<CandidatePair[]>([]);
   const [similarAssets, setSimilarAssets] = useState<Record<string, CatalogAsset>>({});
   const [similarCounts, setSimilarCounts] = useState<Record<"dhash" | "dino", number>>();
@@ -298,8 +299,8 @@ function AuraApplication() {
   const [similarLoading, setSimilarLoading] = useState(false);
   const similarRequestIdRef = useRef(0);
   const similarRequestRef = useRef<AbortController | null>(null);
-  const similarPageRef = useRef<{ source: "dhash" | "dino"; cursor: string; pageIndex: number; minScore: number | null }>({
-    source: "dhash", cursor: "", pageIndex: 0, minScore: null,
+  const similarPageRef = useRef<{ source: "dhash" | "dino"; cursor: string; pageIndex: number; scoreRange: SimilarityScoreRange }>({
+    source: "dhash", cursor: "", pageIndex: 0, scoreRange: [.7, 1],
   });
   const [ignoringKey, setIgnoringKey] = useState("");
   const [lastIgnoredPair, setLastIgnoredPair] = useState<CandidatePair | null>(null);
@@ -650,12 +651,12 @@ function AuraApplication() {
 
   // Similar Candidates Fetcher
   async function fetchSimilarCandidates(src: "dhash" | "dino", cursor = "", append = false, pageIndex = 0,
-    minScore = similarPageRef.current.minScore) {
+    scoreRange = similarPageRef.current.scoreRange) {
     const requestId = ++similarRequestIdRef.current;
     similarRequestRef.current?.abort();
     const controller = new AbortController();
     similarRequestRef.current = controller;
-    similarPageRef.current = { source: src, cursor: append ? similarPageRef.current.cursor : cursor, pageIndex, minScore };
+    similarPageRef.current = { source: src, cursor: append ? similarPageRef.current.cursor : cursor, pageIndex, scoreRange };
     setSimilarLoading(true);
     setSimilarError("");
     try {
@@ -665,7 +666,10 @@ function AuraApplication() {
         limit: "20",
         ...(cursor ? { cursor } : {}),
       });
-      if (src === "dino" && minScore !== null) q.set("minScore", String(minScore));
+      if (src === "dino") {
+        q.set("minScore", String(scoreRange[0]));
+        q.set("maxScore", String(scoreRange[1]));
+      }
       const res = await requestJson<SimilarCandidatesPage>(`similar?${q.toString()}`, undefined, undefined, controller.signal);
       if (requestId !== similarRequestIdRef.current) return;
       setSimilarPairs((prev) => (append ? [...prev, ...res.items] : res.items));
@@ -695,13 +699,13 @@ function AuraApplication() {
       setSimilarPairs([]);
       setSimilarNext("");
     }
-    void fetchSimilarCandidates(similarSource, "", false, 0, dinoMinScore);
+    void fetchSimilarCandidates(similarSource, "", false, 0, dinoScoreRange);
     return () => {
       similarRequestIdRef.current++;
       similarRequestRef.current?.abort();
       similarRequestRef.current = null;
     };
-  }, [route.view, similarSource, dinoMinScore]);
+  }, [route.view, similarSource, dinoScoreRange]);
 
   // Group loaded assets by calendar capture day
   const dayGroups = useMemo<DayAssetGroup[]>(() => {
@@ -1286,17 +1290,12 @@ function AuraApplication() {
               assetsMap={similarAssets}
               counts={similarCounts}
               total={similarTotal}
-              minScore={dinoMinScore}
-              onSelectMinScore={score => {
-                if (score === dinoMinScore) {
-                  dinoCursorsRef.current = [""];
-                  void fetchSimilarCandidates("dino", "", false, 0, score);
-                } else setDinoMinScore(score);
-              }}
+              scoreRange={dinoScoreRange}
+              onSelectScoreRange={setDinoScoreRange}
               error={similarError}
               onRetry={() => {
                 const page = similarPageRef.current;
-                void fetchSimilarCandidates(page.source, page.cursor, false, page.pageIndex, page.minScore);
+                void fetchSimilarCandidates(page.source, page.cursor, false, page.pageIndex, page.scoreRange);
               }}
               dinoIndex={dinoIndex || telemetry?.similarityIndex}
               pageIndex={dinoPageIdx}

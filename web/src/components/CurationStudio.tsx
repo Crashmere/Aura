@@ -31,6 +31,7 @@ import type {
   CurationHistoryRecord,
   CurationHistoryType,
   DinoIndexStatus,
+  SimilarityScoreRange,
 } from "../core/types";
 import { ActionButton, RoundIconButton } from "./Icons";
 import { ProgressiveStagePhoto } from "./StagePlayer";
@@ -685,8 +686,8 @@ export function SimilarWorkspaceView({
   assetsMap,
   counts,
   total,
-  minScore,
-  onSelectMinScore,
+  scoreRange,
+  onSelectScoreRange,
   error,
   onRetry,
   dinoIndex,
@@ -710,8 +711,8 @@ export function SimilarWorkspaceView({
   assetsMap: Record<string, CatalogAsset>;
   counts?: Record<"dhash" | "dino", number>;
   total: number;
-  minScore: number | null;
-  onSelectMinScore: (score: number | null) => void;
+  scoreRange: SimilarityScoreRange;
+  onSelectScoreRange: (range: SimilarityScoreRange) => void;
   error: string;
   onRetry: () => void;
   dinoIndex?: DinoIndexStatus;
@@ -755,41 +756,50 @@ export function SimilarWorkspaceView({
 
   return (
     <div className="similar-workspace">
-      <div
-        className="similar-tabs motion-tabs"
-        aria-label="相似类型"
-        ref={tabsIndicator.ref}
-        style={tabsIndicator.style}
-      >
-        <button
-          type="button"
-          className={source === "dhash" ? "active" : ""}
-          aria-pressed={source === "dhash"}
-          onClick={() => onSelectSource("dhash")}
+      <div className="similar-review-toolbar">
+        <div
+          className="similar-tabs motion-tabs"
+          aria-label="相似类型"
+          ref={tabsIndicator.ref}
+          style={tabsIndicator.style}
         >
-          <span>算法判定</span>
-          {counts && (
-            <small className="similar-count" title="候选总数">
-              {counts.dhash.toLocaleString("zh-CN")}
-            </small>
-          )}
-        </button>
+          <button
+            type="button"
+            className={source === "dhash" ? "active" : ""}
+            aria-pressed={source === "dhash"}
+            onClick={() => onSelectSource("dhash")}
+          >
+            <span>算法判定</span>
+            {counts && (
+              <small className="similar-count" title="候选总数">
+                {counts.dhash.toLocaleString("zh-CN")}
+              </small>
+            )}
+          </button>
+          <button
+            type="button"
+            className={source === "dino" ? "active" : ""}
+            aria-pressed={source === "dino"}
+            onClick={() => onSelectSource("dino")}
+          >
+            <span>智能推荐</span>
+            {counts && (
+              <small className="similar-count" title="候选总数">
+                {counts.dino.toLocaleString("zh-CN")}
+              </small>
+            )}
+          </button>
+        </div>
+        {source === "dino" && <div className="similar-score-toolbar">
+          <SimilarityScoreFilter range={scoreRange} disabled={!!ignoringKey} onChange={onSelectScoreRange} />
+          <span className="similar-score-result" role="status">
+            {loading ? <LoaderCircle size={14} className="spin" aria-label="正在筛选" /> :
+              !error && (scoreRange[0] > .7 || scoreRange[1] < 1) ? `${total.toLocaleString("zh-CN")} 组` : ""}
+          </span>
+        </div>}
         <button
           type="button"
-          className={source === "dino" ? "active" : ""}
-          aria-pressed={source === "dino"}
-          onClick={() => onSelectSource("dino")}
-        >
-          <span>智能推荐</span>
-          {counts && (
-            <small className="similar-count" title="候选总数">
-              {counts.dino.toLocaleString("zh-CN")}
-            </small>
-          )}
-        </button>
-        <button
-          type="button"
-          className="review-history-link"
+          className="btn review-history-link"
           onClick={onOpenHistory}
         >
           <History size={14} />
@@ -817,14 +827,6 @@ export function SimilarWorkspaceView({
           </div>
         )}
       </MotionPresence>
-
-      {source === "dino" && <div className="similar-score-toolbar">
-        <SimilarityScoreFilter minScore={minScore} disabled={!!ignoringKey} onChange={onSelectMinScore} />
-        <span className="similar-score-result" role="status">
-          {loading ? <><LoaderCircle size={14} className="spin" />正在筛选</> :
-            !error && minScore !== null ? `筛选结果 ${total.toLocaleString("zh-CN")} 组` : ""}
-        </span>
-      </div>}
 
       {error && <div className="asset-similar-error" role="alert">
         <span>{error}</span>
@@ -861,8 +863,8 @@ export function SimilarWorkspaceView({
           <h2>
             {source === "dino" && pageIndex > 0
               ? "当前页暂无推荐照片"
-              : source === "dino" && minScore !== null
-                ? "没有符合相似度条件的照片"
+              : source === "dino" && (scoreRange[0] > .7 || scoreRange[1] < 1)
+                ? "没有符合相似度范围的照片"
               : source === "dino" && dinoIndex?.pending
                 ? "分析完成后会显示推荐照片"
                 : source === "dino"

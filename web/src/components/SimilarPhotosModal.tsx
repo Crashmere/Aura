@@ -4,7 +4,7 @@ import { Columns2, Copy, LoaderCircle, RefreshCw, Sparkles, X } from "lucide-rea
 import { buildMediaUrl, requestJson } from "../core/client";
 import { useIsPresent } from "../core/motion";
 import { usePageScrollLock } from "../core/photo-view";
-import type { AssetSimilarPage, CatalogAsset } from "../core/types";
+import type { AssetSimilarPage, CatalogAsset, SimilarityScoreRange } from "../core/types";
 import { PhotoTile } from "./TimelineCanvas";
 import { SimilarityScoreFilter } from "./SimilarityScoreFilter";
 
@@ -20,8 +20,8 @@ function SimilarPhotoSection({
   onCompare: (target: CatalogAsset) => void;
 }) {
   const isPresent = useIsPresent();
-  const [minScore, setMinScore] = useState<number | null>(null);
-  const scope = `${asset.id}:${source}:${album}:${outsideAlbums}:${refreshSeq}:${minScore}`;
+  const [scoreRange, setScoreRange] = useState<SimilarityScoreRange>([.7, 1]);
+  const scope = `${asset.id}:${source}:${album}:${outsideAlbums}:${refreshSeq}:${scoreRange.join(":")}`;
   const [page, setPage] = useState<(AssetSimilarPage & { scope: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -38,7 +38,10 @@ function SimilarPhotoSection({
     if (outsideAlbums) query.set("outsideAlbums", "true");
     if (album) query.set("album", album);
     if (cursor) query.set("cursor", cursor);
-    if (source === "dino" && minScore !== null) query.set("minScore", String(minScore));
+    if (source === "dino") {
+      query.set("minScore", String(scoreRange[0]));
+      query.set("maxScore", String(scoreRange[1]));
+    }
     try {
       const result = await requestJson<AssetSimilarPage>(
         `assets/${asset.id}/similar?${query}`, undefined, undefined, controller.signal,
@@ -64,7 +67,7 @@ function SimilarPhotoSection({
   useEffect(() => {
     void fetchPage();
     return () => requestRef.current?.abort();
-  }, [asset.id, source, album, outsideAlbums, refreshSeq, minScore]);
+  }, [asset.id, source, album, outsideAlbums, refreshSeq, scoreRange]);
 
   const dinoState = page?.index?.state;
   const indexNote = source !== "dino" ? "" :
@@ -81,11 +84,8 @@ function SimilarPhotoSection({
         {!stale && <span className="asset-similar-count">{page.total} 张</span>}
       </header>
       <p className="asset-similar-method">{source === "dhash" ? "dHash · 图像指纹" : "DINO · 视觉特征"}</p>
-      {source === "dino" && <SimilarityScoreFilter minScore={minScore} disabled={!isPresent}
-        onChange={score => {
-          if (score === minScore) void fetchPage();
-          else setMinScore(score);
-        }} />}
+      {source === "dino" && <SimilarityScoreFilter range={scoreRange} disabled={!isPresent}
+        onChange={setScoreRange} />}
       {indexNote && !stale && <p className="asset-similar-status">{indexNote}</p>}
       {loading && <p className="loading-inline" role="status"><LoaderCircle size={16} className="spin" />正在查找相似照片</p>}
       {error && <div className="asset-similar-error" role="alert">
@@ -109,7 +109,7 @@ function SimilarPhotoSection({
         })}
       </div>}
       {!stale && !loading && !error && !page.items.length && <p className="asset-similar-empty">
-        {source === "dino" && minScore !== null ? "未找到符合相似度条件的照片" :
+        {source === "dino" && (scoreRange[0] > .7 || scoreRange[1] < 1) ? "未找到符合相似度范围的照片" :
           outsideAlbums ? "未找到所在相片集之外的相似照片" : "未找到相似照片"}
       </p>}
       {!stale && page.next && !error && <button className="btn asset-similar-more" type="button"

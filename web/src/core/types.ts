@@ -220,6 +220,8 @@ export interface CandidatePair {
   score?: number;
 }
 
+export type SimilarityScoreRange = [number, number];
+
 export interface AssetSimilarPage extends CursorPage<CandidatePair> {
   index?: DinoIndexStatus;
   assets: Record<string, CatalogAsset>;
