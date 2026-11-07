@@ -136,29 +136,30 @@ type File struct {
 }
 
 type Asset struct {
-	ID              string          `json:"id"`
-	Primary         string          `json:"primary"`
-	Motion          string          `json:"motion,omitempty"`
-	CapturedAt      string          `json:"capturedAt"`
-	Kind            string          `json:"kind"`
-	Favorite        bool            `json:"favorite"`
-	TrashedAt       string          `json:"trashedAt,omitempty"`
-	Name            string          `json:"name"`
-	Width           int             `json:"width"`
-	Height          int             `json:"height"`
-	Rotation        int             `json:"rotation"`
-	MotionRotation  int             `json:"motionRotation,omitempty"`
-	Cover           *CoverSelection `json:"cover,omitempty"`
-	Size            int64           `json:"size"`
-	Status          string          `json:"status"`
-	Variants        int             `json:"variants"`
-	ImageVersions   int             `json:"imageVersions"`
-	Grouping        string          `json:"grouping,omitempty"`
-	Duration        float64         `json:"duration,omitempty"`
-	FrameRate       float64         `json:"frameRate,omitempty"`
-	MotionDuration  float64         `json:"motionDuration,omitempty"`
-	MotionFrameRate float64         `json:"motionFrameRate,omitempty"`
-	DeletionPending bool            `json:"deletionPending,omitempty"`
+	ID              string           `json:"id"`
+	Primary         string           `json:"primary"`
+	Motion          string           `json:"motion,omitempty"`
+	CapturedAt      string           `json:"capturedAt"`
+	Kind            string           `json:"kind"`
+	Favorite        bool             `json:"favorite"`
+	TrashedAt       string           `json:"trashedAt,omitempty"`
+	Name            string           `json:"name"`
+	Width           int              `json:"width"`
+	Height          int              `json:"height"`
+	Rotation        int              `json:"rotation"`
+	MotionRotation  int              `json:"motionRotation,omitempty"`
+	Cover           *CoverSelection  `json:"cover,omitempty"`
+	Size            int64            `json:"size"`
+	Status          string           `json:"status"`
+	Variants        int              `json:"variants"`
+	ImageVersions   int              `json:"imageVersions"`
+	Grouping        string           `json:"grouping,omitempty"`
+	Duration        float64          `json:"duration,omitempty"`
+	FrameRate       float64          `json:"frameRate,omitempty"`
+	MotionDuration  float64          `json:"motionDuration,omitempty"`
+	MotionFrameRate float64          `json:"motionFrameRate,omitempty"`
+	DeletionPending bool             `json:"deletionPending,omitempty"`
+	Albums          []AlbumReference `json:"albums"`
 }
 
 const schema = `
@@ -298,13 +299,19 @@ var assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind
  EXISTS(SELECT 1 FROM deletion_pending p WHERE p.asset_id=a.id),
  CASE WHEN a.kind='video' THEN f.metadata ELSE '{}' END, ` + imageVersionsSQL + `, ` + groupingSQL + `,
  ` + rotationSQL("f.hash") + `, ` + rotationSQL("a.motion_hash") + `, ` + coverSQL("f.hash") + `,
- COALESCE((SELECT m.metadata FROM files m WHERE m.hash=a.motion_hash),'{}')
+ COALESCE((SELECT m.metadata FROM files m WHERE m.hash=a.motion_hash),'{}'),
+ (SELECT json_group_array(json_object('id',id,'name',name)) FROM
+ (SELECT al.id,al.name FROM album_assets aa JOIN albums al ON al.id=aa.album_id
+ WHERE aa.asset_id=a.id ORDER BY al.name COLLATE NOCASE,al.id))
  FROM assets a JOIN files f ON f.hash=a.primary_hash `
 
 func scanAsset(row scanner) (a Asset, err error) {
-	var rawMetadata, cover, motionMetadata string
-	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata, &a.ImageVersions, &a.Grouping, &a.Rotation, &a.MotionRotation, &cover, &motionMetadata)
+	var rawMetadata, cover, motionMetadata, albums string
+	err = row.Scan(&a.ID, &a.Primary, &a.Motion, &a.CapturedAt, &a.Kind, &a.Favorite, &a.TrashedAt, &a.Name, &a.Width, &a.Height, &a.Size, &a.Status, &a.Variants, &a.DeletionPending, &rawMetadata, &a.ImageVersions, &a.Grouping, &a.Rotation, &a.MotionRotation, &cover, &motionMetadata, &albums)
 	_ = json.Unmarshal([]byte(cover), &a.Cover)
+	if err == nil {
+		err = json.Unmarshal([]byte(albums), &a.Albums)
+	}
 	if err == nil && a.Kind == "video" {
 		var metadata map[string]any
 		if json.Unmarshal([]byte(rawMetadata), &metadata) == nil {
@@ -392,12 +399,28 @@ func mergeTx(tx *sql.Tx, keep, drop, reason string) error {
 	_, e = tx.Exec("INSERT INTO decisions(id,action,detail,created_at) VALUES(?,?,?,?)", ID(), "merge", marshal(map[string]any{"keep": keep, "drop": drop, "files": hashes, "reason": reason}), now())
 	return e
 }
+
+var errPrimarySelection = errors.New("请选择当前项目中的照片或视频作为主版本")
+
+func setPrimaryTx(tx *sql.Tx, id, hash string) error {
+	var valid bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM files WHERE hash=? AND asset_id=?
+ AND (mime LIKE 'image/%' OR mime LIKE 'video/%'))`, hash, id).Scan(&valid); err != nil {
+		return err
+	}
+	if !valid {
+		return errPrimarySelection
+	}
+	_, err := tx.Exec("INSERT INTO decisions(id,action,detail,created_at) VALUES(?,?,?,?)", ID(), "primary", marshal(map[string]string{"asset": id, "hash": hash}), now())
+	return err
+}
+
 func refreshTx(tx *sql.Tx, id string) error {
 	var primary, motion, date, mime string
 	// Preferences follow original hashes when groups are merged or split.
 	e := tx.QueryRow(`SELECT f.hash,f.captured_at,f.mime FROM decisions d
  JOIN files f ON f.hash=json_extract(d.detail,'$.hash')
- WHERE d.action='primary' AND f.asset_id=? AND f.mime LIKE 'image/%'
+ WHERE d.action='primary' AND f.asset_id=? AND (f.mime LIKE 'image/%' OR f.mime LIKE 'video/%')
  ORDER BY d.created_at DESC,d.id DESC LIMIT 1`, id).Scan(&primary, &date, &mime)
 	if e == sql.ErrNoRows {
 		e = tx.QueryRow(`SELECT hash,captured_at,mime FROM files WHERE asset_id=? ORDER BY CASE WHEN mime LIKE 'image/%' THEN 0 WHEN mime LIKE 'video/%' THEN 1 ELSE 2 END,score DESC,hash LIMIT 1`, id).Scan(&primary, &date, &mime)
@@ -405,7 +428,33 @@ func refreshTx(tx *sql.Tx, id string) error {
 	if e != nil {
 		return e
 	}
-	_ = tx.QueryRow("SELECT hash FROM files WHERE asset_id=? AND mime LIKE 'video/%' ORDER BY score DESC,hash LIMIT 1", id).Scan(&motion)
+	rows, e := tx.Query("SELECT hash,mime,content_id,hints FROM files WHERE asset_id=?", id)
+	if e != nil {
+		return e
+	}
+	files := []File{}
+	for rows.Next() {
+		var file File
+		var hints string
+		if e = rows.Scan(&file.Hash, &file.Mime, &file.ContentID, &hints); e != nil {
+			break
+		}
+		if e = json.Unmarshal([]byte(hints), &file.Hints); e != nil {
+			break
+		}
+		files = append(files, file)
+	}
+	if e == nil {
+		e = rows.Err()
+	}
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	// A chosen still must keep its own native motion after merging Live Photos.
+	if paired := rotationTargets(files, primary); len(paired) == 2 {
+		motion = paired[1].Hash
+	}
 	kind := "photo"
 	if strings.HasPrefix(mime, "video/") {
 		kind = "video"

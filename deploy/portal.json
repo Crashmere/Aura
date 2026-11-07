@@ -114,7 +114,7 @@
     {
       "method": "GET",
       "path": "/api/assets",
-      "description": "按相片集、类型、日期、关键词和设备索引查询照片；游标分页或按指定编号批量刷新卡片"
+      "description": "按相片集、类型、日期、关键词和设备索引查询照片，包含全部相片集归属；游标分页或按指定编号批量刷新卡片"
     },
     {
       "method": "GET",
@@ -164,12 +164,17 @@
     {
       "method": "GET",
       "path": "/api/album-groups",
-      "description": "相片集单层分组列表"
+      "description": "按持久化顺序返回相片集单层分组列表"
     },
     {
       "method": "POST",
       "path": "/api/album-groups",
       "description": "新建分组并可原子移入所选相片集"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/album-groups/order",
+      "description": "原子保存拖动调整的分组顺序；不改动相片集归属、照片或原件"
     },
     {
       "method": "PATCH",
@@ -214,7 +219,7 @@
     {
       "method": "GET",
       "path": "/api/assets/{id}",
-      "description": "照片详情、全部原件与合并元数据"
+      "description": "照片详情、所属相片集、全部原件与合并元数据"
     },
     {
       "method": "PATCH",
@@ -224,7 +229,7 @@
     {
       "method": "POST",
       "path": "/api/assets/{id}/merge",
-      "description": "手工归并照片，保留所有原件"
+      "description": "手工归并并可选择任一侧主版本；原子保留全部原件和相片集归属"
     },
     {
       "method": "PATCH",

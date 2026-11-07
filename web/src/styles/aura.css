@@ -756,17 +756,39 @@
   padding: 8px 20px;
   font-size: 12.5px;
   background: #141412;
+  gap: 20px;
+  flex-shrink: 0;
 }
 
-.comparison-labels span {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
+.comparison-labels > span {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
   transition: opacity 0.18s ease, transform 0.18s var(--ease-spring);
 }
 
-.comparison-labels.is-switch span:not(.is-current) {
+.comparison-labels > span > strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-labels.is-switch > span:not(.is-current) {
   opacity: 0.45;
+}
+
+.comparison-labels .asset-albums,
+.lightbox-title-text .asset-albums {
+  padding: 2px 0;
+}
+
+.comparison-labels .asset-album-badge,
+.lightbox-title-text .asset-album-badge {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .comparison-labels small {

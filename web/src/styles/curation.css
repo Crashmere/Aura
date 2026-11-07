@@ -615,6 +615,58 @@ article.task-row:hover {
   gap: 14px;
 }
 
+.merge-photos-modal {
+  width: min(600px, calc(100vw - 32px));
+}
+
+.merge-preservation-note {
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.merge-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.merge-choices .photo {
+  border-radius: var(--radius-sm);
+}
+
+.merge-choices .photo.selected {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.merge-primary-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 12px 0;
+  text-align: left;
+  font-size: 13px;
+}
+
+.merge-primary-choice strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-primary-choice span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.merge-primary-choice[aria-pressed="true"] span {
+  color: var(--accent);
+}
+
 .album-name-field {
   display: flex;
   flex-direction: column;

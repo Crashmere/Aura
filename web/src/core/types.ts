@@ -30,6 +30,12 @@ export interface CatalogAsset {
   motionDuration?: number;
   motionFrameRate?: number;
   cover?: CoverChoice;
+  albums?: AlbumReference[];
+}
+
+export interface AlbumReference {
+  id: string;
+  name: string;
 }
 
 export interface StoredFile {

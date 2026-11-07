@@ -72,6 +72,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Patch("/api/albums/group", l.moveAlbumGroup)
 	r.Get("/api/album-groups", l.listAlbumGroups)
 	r.Post("/api/album-groups", l.createAlbumGroup)
+	r.Patch("/api/album-groups/order", l.orderAlbumGroups)
 	r.Patch("/api/album-groups/{id}", l.updateAlbumGroup)
 	r.Delete("/api/album-groups/{id}", l.updateAlbumGroup)
 	r.Get("/api/albums/{id}", l.albumDetail)
@@ -314,14 +315,7 @@ func (l *Library) updateAsset(w http.ResponseWriter, r *http.Request) {
 		_, e = tx.Exec("UPDATE assets SET trashed_at=? WHERE id=?", value, id)
 	}
 	if e == nil && p.Primary != "" {
-		var m string
-		e = tx.QueryRow("SELECT mime FROM files WHERE hash=? AND asset_id=?", p.Primary, id).Scan(&m)
-		if e == nil && !strings.HasPrefix(m, "image/") {
-			e = fmt.Errorf("主版本必须为照片")
-		}
-		if e == nil {
-			_, e = tx.Exec("INSERT INTO decisions(id,action,detail,created_at) VALUES(?,?,?,?)", ID(), "primary", marshal(map[string]string{"asset": id, "hash": p.Primary}), now())
-		}
+		e = setPrimaryTx(tx, id, p.Primary)
 		if e == nil {
 			e = refreshTx(tx, id)
 		}
@@ -405,7 +399,8 @@ func (l *Library) batchUpdateAssets(w http.ResponseWriter, r *http.Request) {
 func (l *Library) merge(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var p struct {
-		Other string `json:"other"`
+		Other   string `json:"other"`
+		Primary string `json:"primary"`
 	}
 	if !decode(w, r, &p) {
 		return
@@ -429,6 +424,9 @@ func (l *Library) merge(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	e = mergeTx(tx, id, p.Other, "user review")
+	if e == nil && p.Primary != "" {
+		e = setPrimaryTx(tx, id, p.Primary)
+	}
 	if e == nil {
 		e = refreshTx(tx, id)
 	}
@@ -436,6 +434,10 @@ func (l *Library) merge(w http.ResponseWriter, r *http.Request) {
 		e = tx.Commit()
 	}
 	if e != nil {
+		if errors.Is(e, errPrimarySelection) {
+			fail(w, 400, e)
+			return
+		}
 		var pending *pendingDeletion
 		if errors.As(e, &pending) {
 			assetDeletionFailure(w, pending.request)

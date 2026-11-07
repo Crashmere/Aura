@@ -84,6 +84,8 @@ import { ActionButton, LiveRingsIcon, RoundIconButton } from "./components/Icons
 import { ImportHubModal } from "./components/ImportHub";
 import { LightboxStudio } from "./components/LightboxStudio";
 import { PipelineTaskCenter } from "./components/PipelineCenter";
+import { CurrentAlbumContext } from "./components/AssetAlbumBadges";
+import { MergePhotosModal } from "./components/MergePhotosModal";
 import {
   type DayAssetGroup,
   GridDensityControls,
@@ -210,6 +212,7 @@ function AuraApplication() {
     left: CatalogAsset;
     right: CatalogAsset;
   } | null>(null);
+  const [mergePair, setMergePair] = useState<{ left: CatalogAsset; right: CatalogAsset } | null>(null);
   const [historyKind, setHistoryKind] = useState<CurationHistoryType | null>(null);
   const [toast, setToast] = useState<{
     text: string;
@@ -771,21 +774,12 @@ function AuraApplication() {
     }
   }
 
-  async function batchMergeSelected() {
+  function batchMergeSelected() {
     const ids = [...selectedIds];
     if (ids.length !== 2 || batchBusy) return;
-    setBatchBusy(true);
-    try {
-      await requestJson(`assets/${ids[0]}/merge`, { other: ids[1] });
-      setSelectedIds(new Set());
-      setSelecting(false);
-      showToast("已归并为一项，所有原件均已保留");
-      await refreshBoundedCatalog();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), true);
-    } finally {
-      setBatchBusy(false);
-    }
+    const left = assets.find((asset) => asset.id === ids[0]);
+    const right = assets.find((asset) => asset.id === ids[1]);
+    if (left && right) setMergePair({ left, right });
   }
 
   async function batchRemoveFromCurrentAlbum() {
@@ -889,6 +883,7 @@ function AuraApplication() {
   const hasAnyFilter = !!route.query || !!route.from || !!route.to || activeChips.length > 0;
 
   return (
+    <CurrentAlbumContext value={route.view === "albums" ? route.album : ""}>
     <div
       className="aura-shell"
       onDrop={(e) => {
@@ -1298,21 +1293,7 @@ function AuraApplication() {
               onOpenHistory={() => setHistoryKind("similar")}
               onOpenAsset={(asset) => updateRoute((prev) => ({ ...prev, asset: asset.id }), "push")}
               onComparePair={(left, right) => setComparePair({ left, right })}
-              onMergePair={async (left, right) => {
-                const key = `${left.id}:${right.id}`;
-                setIgnoringKey(key);
-                try {
-                  await requestJson(`assets/${left.id}/merge`, {
-                    other: right.id,
-                  });
-                  showToast("已归并为一项，所有原件均已保留");
-                  await refreshBoundedCatalog();
-                } catch (err) {
-                  showToast(err instanceof Error ? err.message : String(err), true);
-                } finally {
-                  setIgnoringKey("");
-                }
-              }}
+              onMergePair={(left, right) => setMergePair({ left, right })}
               onIgnorePair={async (pair) => {
                 const key = `${pair.left}:${pair.right}`;
                 setIgnoringKey(key);
@@ -1356,6 +1337,8 @@ function AuraApplication() {
                 albums={albums}
                 groups={albumGroups}
                 onAction={setAlbumModal}
+                onUpdated={fetchOverview}
+                onNotify={showToast}
                 onOpenAlbum={(alb) => {
                   setActiveAlbumDetail(alb);
                   updateRoute((prev) => ({ ...prev, view: "albums", album: alb.id }), "push");
@@ -1658,8 +1641,31 @@ function AuraApplication() {
           <PhotoComparisonModal
             left={comparePair.left}
             right={comparePair.right}
+            onMergePair={(left, right) => {
+              setComparePair(null);
+              setMergePair({ left, right });
+            }}
             onClose={() => setComparePair(null)}
           />
+        )}
+      </MotionPresence>
+
+      <MotionPresence present={!!mergePair}>
+        {mergePair && (
+          <MergePhotosModal left={mergePair.left} right={mergePair.right}
+            onClose={() => setMergePair(null)}
+            onMerge={async (primary) => {
+              setBatchBusy(true);
+              try {
+                await requestJson(`assets/${mergePair.left.id}/merge`, { other: mergePair.right.id, primary });
+                setSelectedIds(new Set());
+                setSelecting(false);
+                showToast("已归并并保留所选主版本，所有原件均保留");
+                await refreshBoundedCatalog();
+              } finally {
+                setBatchBusy(false);
+              }
+            }} />
         )}
       </MotionPresence>
 
@@ -1789,6 +1795,7 @@ function AuraApplication() {
         )}
       </MotionPresence>
     </div>
+    </CurrentAlbumContext>
   );
 }
 

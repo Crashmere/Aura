@@ -50,7 +50,7 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 | `GET /api/assets/{id}` | Logical asset, all file records, and combined metadata |
 | `PATCH /api/assets/{id}` | Optional `favorite`, `trash`, or durable manual `primary` fields |
 | `PATCH /api/assets/{id}/rotation` | `{hash,rotation,expectedRotation}`; save the selected photo/video direction and exact paired motion, returning the updated detail response |
-| `POST /api/assets/{id}/merge` | `{other:"asset-id"}`; merge without discarding originals |
+| `POST /api/assets/{id}/merge` | `{other:"asset-id",primary?:"original-sha256"}`; merge and optionally select the primary in one transaction, retaining all originals and album memberships |
 | `POST /api/assets/{id}/split` | `{hash:"original-sha256"}`; separate one resource |
 | `GET /api/assets/{id}/download` | Streaming ZIP of all originals plus `aura.json` |
 | `GET /api/similar` | `source=dhash` (default) or `source=dino`; legacy array up to 100 pairs, or `paged=true` returns `{items,next}` with DINO `index` progress |
@@ -68,6 +68,10 @@ The maximum original is 32 GiB. Metadata JSON is bounded to 64 KiB. Supported fi
 Video assets include optional `duration` in seconds and `frameRate` in frames per second from the primary original's stored `Duration` and `VideoFrameRate` metadata, including group-prefixed tags. Each field is omitted until its positive finite value is available. Live Photo assets instead expose optional `motionDuration` and `motionFrameRate` from their motion resource. Listing and detail responses use the same asset representation. The viewer displays the catalog duration before playback, then uses the loaded video's duration. Frame stepping pauses playback and uses the catalog frame rate, the observed frame interval when unavailable, or 30 fps before either is known; variable-rate sources use this interval estimate.
 
 Assets include `variants` for all retained resources and `imageVersions` for resources with MIME `image/*`. When `imageVersions` is greater than one, `grouping` is `manual` if image resources moved by a recorded user merge still share the item with an image from the other side; otherwise it is `automatic`. Grouping is derived from current resource membership, so it follows later automatic regrouping and stops applying after the two sides are separated. Single-image Live Photos omit `grouping`. `GET /api/info` retains the total multi-image count `grouped` and adds disjoint `automatic` and `merged` counts for these two classes.
+
+The shared asset representation includes `albums:[{id,name}]`, ordered by album name using SQLite `NOCASE` and then ID. Items without memberships return an empty array. Lists, details, similar/review-history cards and album covers use this same representation. An album-filtered response still includes every membership; clients hide only the currently open album's label.
+
+Manual `primary` selection accepts an image or video original belonging to the item. During a merge it may belong to either input, and validation occurs after moving resources within the same transaction. An invalid selection returns 400 and rolls back both the merge and primary decision. Omitting `primary` preserves the existing automatic/preference selection. The choice follows its original hash through later grouping and reprocessing. A selected still uses only its unique Apple content-identifier motion match, or its exact PhotoKit original/full-size paired-video role when content identifiers are absent; unrelated or ambiguous motion resources remain retained but do not make that still a Live Photo. Selecting a video makes the item a video.
 
 `GET /api/assets/{id}` also returns `edits`, an array of retained native adjustment records. Each includes its original `hash`, optional `sourceKey`, editor bundle ID, format/version and record timestamp, a `state` (`parsed`, `unsupported`, or `unavailable`), optional coordinate `metadata`, and the complete `adjustments` array. Supported records contain XML-plist `adjustmentData` with raw DEFLATE JSON or direct JSON; decoding reads at most 4 MiB for the plist and decompressed payload. Binary keyed archives and other private formats remain available as original downloads and return `unsupported`. Extraction is read-only and runs when details are requested; it neither rewrites stored metadata nor queues media work. Consumers associate a record only with resources from its exact `sourceKey`. An enabled operation documents a stored treatment, including camera processing; it does not establish that the user changed that setting in Aura.
 
@@ -179,12 +183,15 @@ Album responses contain `id`, `name`, `groupId` (empty for ungrouped), `count`, 
 
 | Method and path | Behavior |
 | --- | --- |
-| `GET /api/album-groups` | Array of single-level groups ordered by creation time and ID descending |
+| `GET /api/album-groups` | Array of single-level groups in saved order, followed by unranked groups in creation-time and ID descending order |
 | `POST /api/album-groups` | `{name,albums?:[albumId]}`; create and optionally move up to 1000 albums atomically; returns 201 |
+| `PATCH /api/album-groups/order` | `{groups:[groupId]}`; replace the explicit ordering with up to 1000 unique active IDs; an empty array resets to creation order; returns `{ordered:true}` |
 | `PATCH /api/album-groups/{id}` | `{name}`; rename; returns the updated group |
 | `DELETE /api/album-groups/{id}` | Delete the group; its albums become ungrouped; returns `{deleted:true}` |
 
 Group responses contain `id`, `name`, `createdAt`, and `updatedAt`. Names follow the album name limits. Each album belongs to at most one group. Missing albums or missing/deleted destination groups return 404 without partial changes. Moving requires an explicit valid group ID or null; missing/malformed destinations and invalid batch sizes return 400. Moving or deleting a group preserves albums, photo memberships, covers and original bytes. Native import preserves the Aura-side group assignment and creates new albums ungrouped.
+
+Ordering requires a non-null array; omitted/null arrays, duplicates and oversized requests return 400, and missing/deleted IDs return 404. Invalid requests leave the saved order unchanged. Omitted groups follow explicitly ranked groups; deleting a ranked group does not affect the order of the remaining groups. Ordering persists in the existing decision log, independently of album assignment.
 
 Native import source keys use `photokit-album:<client-library-id>:<collection-id>`. Source mappings are retained in the existing decision log. The import adds at most 1000 visible items per request, preserves an Aura-side rename, and never propagates removals from Apple Photos. A mapped album deleted in Aura returns 409 with `code: "imported_album_deleted"` instead of being silently recreated. Clients preserve that user decision and surface it separately from network failures. Native clients must require `capabilities.albumImport` before enabling this operation.
 

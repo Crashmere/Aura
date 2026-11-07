@@ -35,6 +35,7 @@ import type {
 import { ActionButton, RoundIconButton } from "./Icons";
 import { ProgressiveStagePhoto } from "./StagePlayer";
 import { PhotoTile } from "./TimelineCanvas";
+import { AssetAlbumBadges } from "./AssetAlbumBadges";
 
 // ============================================================================
 // 1. Photo Comparison Studio (Side-by-Side, Split Curtain, A/B Switch with V)
@@ -44,10 +45,12 @@ export function PhotoComparisonModal({
   left,
   right,
   onClose,
+  onMergePair,
 }: {
   left: CatalogAsset;
   right: CatalogAsset;
   onClose: () => void;
+  onMergePair?: (left: CatalogAsset, right: CatalogAsset) => void;
 }) {
   const isPresent = useIsPresent();
   const presentRef = useRef(isPresent);
@@ -216,6 +219,12 @@ export function PhotoComparisonModal({
             <kbd>V</kbd>
           </button>
         </div>
+        {onMergePair && left.id !== right.id && (
+          <ActionButton disabled={!!left.deletionPending || !!right.deletionPending}
+            onClick={() => onMergePair(left, right)}>
+            <Layers3 size={15} />归并
+          </ActionButton>
+        )}
         <RoundIconButton title="关闭对比（Esc）" onClick={onClose}>
           <X size={21} />
         </RoundIconButton>
@@ -224,12 +233,14 @@ export function PhotoComparisonModal({
       <div className={`comparison-labels ${mode === "switch" ? "is-switch" : ""}`}>
         <span className={activeSide === "left" ? "is-current" : ""}>
           <strong>A · {left.name}</strong>
+          <AssetAlbumBadges asset={left} />
           <small>
             {leftDims.width} × {leftDims.height}
           </small>
         </span>
         <span className={activeSide === "right" ? "is-current" : ""}>
           <strong>B · {right.name}</strong>
+          <AssetAlbumBadges asset={right} />
           <small>
             {rightDims.width} × {rightDims.height}
           </small>
@@ -703,7 +714,7 @@ export function SimilarWorkspaceView({
   onOpenHistory: () => void;
   onOpenAsset: (asset: CatalogAsset) => void;
   onComparePair: (left: CatalogAsset, right: CatalogAsset) => void;
-  onMergePair: (left: CatalogAsset, right: CatalogAsset) => Promise<void>;
+  onMergePair: (left: CatalogAsset, right: CatalogAsset) => void;
   onIgnorePair: (pair: CandidatePair) => Promise<void>;
   onUndoIgnore: (pair: CandidatePair) => Promise<void>;
 }) {
@@ -886,7 +897,7 @@ export function SimilarWorkspaceView({
                     </ActionButton>
                     <ActionButton
                       variant="primary"
-                      disabled={loading || !!ignoringKey}
+                      disabled={loading || !!ignoringKey || !!left.deletionPending || !!right.deletionPending}
                       onClick={() => void onMergePair(left, right)}
                     >
                       <Layers3 size={15} />

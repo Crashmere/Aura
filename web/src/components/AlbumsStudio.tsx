@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   Check,
   ChevronDown,
   FolderInput,
   FolderOpen,
+  GripVertical,
   Images,
   LoaderCircle,
   Pencil,
@@ -70,6 +71,7 @@ function AlbumCoverThumb({
         <img
           src={coverSrc}
           alt=""
+          draggable={false}
           loading="lazy"
           onError={() => {
             setBroken(true);
@@ -89,12 +91,14 @@ function AlbumGridCard({
   onMove,
   selecting,
   selected,
+  onDrag,
 }: {
   album: AlbumItem;
   onSelect: (album: AlbumItem) => void;
   onMove: (album: AlbumItem) => void;
   selecting: boolean;
   selected: boolean;
+  onDrag: (e: ReactPointerEvent<HTMLButtonElement>) => void;
 }) {
   const [broken, setBroken] = useState(false);
   const [retrySeq, setRetrySeq] = useState(0);
@@ -102,6 +106,7 @@ function AlbumGridCard({
   return (
     <div className="album-card-wrapper">
       <button type="button" className={`album-card ${selected ? "is-selected" : ""}`}
+        onPointerDown={(e) => { if (e.pointerType === "mouse") onDrag(e); }}
         aria-pressed={selecting ? selected : undefined} onClick={() => onSelect(album)}>
         <AlbumCoverThumb
           album={album}
@@ -112,6 +117,10 @@ function AlbumGridCard({
           <strong>{album.name}</strong>
           <small>{album.count.toLocaleString("zh-CN")} 项</small>
         </div>
+      </button>
+      <button type="button" className="album-drag-handle" title="拖动到分组"
+        aria-label={`拖动“${album.name}”到分组`} onPointerDown={onDrag}>
+        <GripVertical size={17} />
       </button>
       {selecting ? (
         <span className={`album-selection-mark ${selected ? "is-selected" : ""}`} aria-hidden="true">
@@ -138,20 +147,170 @@ function AlbumGridCard({
   );
 }
 
+type OrganizationDrag =
+  | { kind: "albums"; ids: string[]; name: string }
+  | { kind: "group"; id: string; name: string };
+
+function useOrganizationDrag(onDrop: (drag: OrganizationDrag, target: string, after: boolean) => void) {
+  const [drag, setDrag] = useState<{ item: OrganizationDrag; target: string | null; after: boolean } | null>(null);
+  const preview = useRef<HTMLDivElement>(null);
+  const tracking = useRef<{
+    item: OrganizationDrag; pointerId: number; source: HTMLElement;
+    startX: number; startY: number; x: number; y: number;
+    active: boolean; target: string | null; after: boolean;
+  } | null>(null);
+  const frame = useRef(0);
+  const ignoreClick = useRef(false);
+
+  function locate() {
+    const current = tracking.current;
+    if (!current?.active) return;
+    if (preview.current) {
+      preview.current.style.left = `${Math.max(8, Math.min(current.x + 14, innerWidth - 280))}px`;
+      preview.current.style.top = `${Math.min(current.y + 14, innerHeight - 50)}px`;
+    }
+    const section = document.elementFromPoint(current.x, current.y)?.closest<HTMLElement>("[data-album-group-id]");
+    let target = section?.dataset.albumGroupId ?? null;
+    if (current.item.kind === "group" && (!target || target === current.item.id)) target = null;
+    const header = section?.querySelector("header")?.getBoundingClientRect();
+    const after = !!header && current.y > header.top + header.height / 2;
+    if (target !== current.target || after !== current.after) {
+      current.target = target;
+      current.after = after;
+      setDrag({ item: current.item, target, after });
+    }
+  }
+
+  function scroll() {
+    const current = tracking.current;
+    if (!current?.active) return;
+    const edge = 65;
+    const delta = current.y < edge ? -10 : current.y > innerHeight - edge ? 10 : 0;
+    if (delta) window.scrollBy({ top: delta, behavior: "instant" });
+    locate();
+    frame.current = requestAnimationFrame(scroll);
+  }
+
+  function cancel() {
+    const current = tracking.current;
+    tracking.current = null;
+    cancelAnimationFrame(frame.current);
+    // Pointer release after completion or cancellation must not also open the album.
+    if (current?.active) ignoreClick.current = true;
+    if (current?.source.hasPointerCapture(current.pointerId)) current.source.releasePointerCapture(current.pointerId);
+    setDrag(null);
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (tracking.current && e.key === "Escape" && !e.isComposing) {
+        e.preventDefault();
+        cancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", cancel);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", cancel);
+      cancelAnimationFrame(frame.current);
+    };
+  }, []);
+
+  return {
+    drag,
+    preview,
+    start(e: ReactPointerEvent<HTMLButtonElement>, item: OrganizationDrag) {
+      if (e.button !== 0 || tracking.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      tracking.current = { item, pointerId: e.pointerId, source: e.currentTarget,
+        startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
+        active: false, target: null, after: false };
+    },
+    events: {
+      onPointerDownCapture() {
+        if (!tracking.current) ignoreClick.current = false;
+      },
+      onClickCapture(e: React.MouseEvent<HTMLDivElement>) {
+        if (ignoreClick.current) { e.preventDefault(); e.stopPropagation(); ignoreClick.current = false; }
+      },
+      onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+        const current = tracking.current;
+        if (!current || current.pointerId !== e.pointerId) return;
+        current.x = e.clientX;
+        current.y = e.clientY;
+        if (!current.active && Math.hypot(current.x - current.startX, current.y - current.startY) >= 6) {
+          current.active = true;
+          setDrag({ item: current.item, target: null, after: false });
+          frame.current = requestAnimationFrame(scroll);
+        }
+        if (current.active) { e.preventDefault(); locate(); }
+      },
+      onPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
+        const current = tracking.current;
+        if (!current || current.pointerId !== e.pointerId) return;
+        locate();
+        const { item, target, after, active } = current;
+        if (active) {
+          setTimeout(() => { ignoreClick.current = false; }, 0);
+        }
+        cancel();
+        if (active && target !== null) onDrop(item, target, after);
+      },
+      onPointerCancel: cancel,
+      onLostPointerCapture: cancel,
+    },
+  };
+}
+
 export function AlbumsCollectionGrid({
   albums,
   groups,
   onOpenAlbum,
   onAction,
+  onUpdated,
+  onNotify,
 }: {
   albums: AlbumItem[];
   groups: AlbumGroup[];
   onOpenAlbum: (album: AlbumItem) => void;
   onAction: (state: AlbumModalState) => void;
+  onUpdated: () => Promise<void>;
+  onNotify: (message: string, error?: boolean) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const dragging = useOrganizationDrag((item, target, after) => { void drop(item, target, after); });
+
+  async function drop(item: OrganizationDrag, target: string, after: boolean) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (item.kind === "albums") {
+        await requestJson("albums/group", { albums: item.ids, groupId: target || null }, "PATCH");
+        setCollapsed((prev) => { const next = new Set(prev); next.delete(target); return next; });
+        setSelected(new Set());
+        setSelecting(false);
+        onNotify("相片集已移动");
+      } else {
+        const order = groups.map((group) => group.id).filter((id) => id !== item.id);
+        const index = order.indexOf(target);
+        if (index < 0) return;
+        order.splice(index + (after ? 1 : 0), 0, item.id);
+        await requestJson("album-groups/order", { groups: order }, "PATCH");
+        onNotify("分组顺序已更新");
+      }
+      await onUpdated();
+    } catch (err) {
+      onNotify(err instanceof Error ? err.message : String(err), true);
+    } finally {
+      setBusy(false);
+    }
+  }
   useEffect(() => {
     setSelected((prev) => new Set([...prev].filter((id) => albums.some((a) => a.id === id))));
   }, [albums]);
@@ -168,7 +327,7 @@ export function AlbumsCollectionGrid({
     albums: albums.filter((album) => album.groupId === group.id),
   }));
   const ungrouped = albums.filter((album) => !groups.some((group) => group.id === album.groupId));
-  if (ungrouped.length) sections.push({ id: "", name: "未分组", albums: ungrouped });
+  if (ungrouped.length || dragging.drag?.item.kind === "albums") sections.push({ id: "", name: "未分组", albums: ungrouped });
 
   function selectAlbum(album: AlbumItem) {
     if (!selecting) {
@@ -184,7 +343,12 @@ export function AlbumsCollectionGrid({
   }
 
   return (
-    <div className="album-collections">
+    <div className={`album-collections ${busy ? "is-busy" : ""}`} {...dragging.events} aria-busy={busy}>
+      {dragging.drag && (
+        <div className="album-drag-preview" ref={dragging.preview} aria-hidden="true">
+          <FolderInput size={15} />{dragging.drag.item.name}
+        </div>
+      )}
       {albums.length > 0 && (
         <div className="album-organize-toolbar">
           {selecting ? (
@@ -202,8 +366,17 @@ export function AlbumsCollectionGrid({
         </div>
       )}
       {sections.map((section) => (
-        <section key={section.id} className="album-group-section">
+        <section key={section.id} className="album-group-section" data-album-group-id={section.id}
+          data-album-drop={dragging.drag?.item.kind === "albums" && dragging.drag.target === section.id || undefined}
+          data-sort-edge={dragging.drag?.item.kind === "group" && dragging.drag.target === section.id ? dragging.drag.after ? "after" : "before" : undefined}>
           <header className="album-group-header">
+            {section.group && (
+              <button type="button" className="icon-btn group-drag-handle" title="拖动调整分组顺序"
+                aria-label={`拖动“${section.name}”调整分组顺序`} disabled={busy}
+                onPointerDown={(e) => dragging.start(e, { kind: "group", id: section.id, name: section.name })}>
+                <GripVertical size={17} />
+              </button>
+            )}
             <button type="button" className="album-group-toggle" aria-expanded={!collapsed.has(section.id)}
               aria-controls={`album-group-${section.id || "unfiled"}`}
               onClick={() => setCollapsed((prev) => {
@@ -238,6 +411,11 @@ export function AlbumsCollectionGrid({
                 {section.albums.map((album) => (
                   <AlbumGridCard key={album.id} album={album} onSelect={selectAlbum}
                     onMove={(album) => onAction({ kind: "move", albums: [album] })}
+                    onDrag={(e) => {
+                      if (busy) return;
+                      const ids = selecting && selected.has(album.id) ? [...selected] : [album.id];
+                      dragging.start(e, { kind: "albums", ids, name: ids.length === 1 ? album.name : `${ids.length} 个相片集` });
+                    }}
                     selecting={selecting} selected={selected.has(album.id)} />
                 ))}
               </div>

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -92,13 +93,82 @@ func (l *Library) listAlbumGroups(w http.ResponseWriter, r *http.Request) {
 			}
 			groups = append(groups, group)
 		}
-		return groups, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		rows.Close()
+		var detail string
+		err = l.DB.QueryRow("SELECT detail FROM decisions WHERE id='album-group-order' AND action='album-group-order'").Scan(&detail)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			var order struct {
+				Groups []string `json:"groups"`
+			}
+			if err := json.Unmarshal([]byte(detail), &order); err != nil {
+				return nil, err
+			}
+			ranks := map[string]int{}
+			for i, id := range order.Groups {
+				ranks[id] = i
+			}
+			rank := func(id string) int {
+				if value, ok := ranks[id]; ok {
+					return value
+				}
+				return len(order.Groups)
+			}
+			sort.SliceStable(groups, func(i, j int) bool { return rank(groups[i].ID) < rank(groups[j].ID) })
+		}
+		return groups, nil
 	})
 	if err != nil {
 		fail(w, 500, err)
 		return
 	}
 	writeJSON(w, 200, value)
+}
+
+func (l *Library) orderAlbumGroups(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		Groups []string `json:"groups"`
+	}
+	if !decode(w, r, &p) {
+		return
+	}
+	if p.Groups == nil || len(p.Groups) > 1000 {
+		fail(w, 400, "请提供分组顺序，每次最多 1000 个分组")
+		return
+	}
+	tx, err := l.DB.Begin()
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	defer tx.Rollback()
+	seen := map[string]bool{}
+	for _, id := range p.Groups {
+		if seen[id] {
+			fail(w, 400, "分组顺序不能包含重复分组")
+			return
+		}
+		seen[id] = true
+		if _, err := albumGroup(tx, id); err != nil {
+			albumGroupWriteError(w, err)
+			return
+		}
+	}
+	_, err = tx.Exec(`INSERT INTO decisions(id,action,detail,created_at) VALUES('album-group-order','album-group-order',?,?)
+ ON CONFLICT(id) DO UPDATE SET detail=excluded.detail,created_at=excluded.created_at`, marshal(p), now())
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ordered": true})
 }
 
 func (l *Library) createAlbumGroup(w http.ResponseWriter, r *http.Request) {

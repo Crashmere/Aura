@@ -56,6 +56,7 @@ import type {
   NativeEditRecord,
   StoredFile,
 } from "../core/types";
+import { AssetAlbumBadges } from "./AssetAlbumBadges";
 import {
   type NetworkMediaMode,
   schedulePreviewWarmup,
@@ -691,6 +692,7 @@ export function LightboxStudio({
           </RoundIconButton>
           <div className="lightbox-title-text">
             <strong>{effectiveAsset.name}</strong>
+            <AssetAlbumBadges asset={effectiveAsset} />
             <small>
               {formatHumanDate(effectiveAsset.capturedAt, true)} · {dims.width} ×{" "}
               {dims.height} · {formatByteSize(effectiveAsset.size)}

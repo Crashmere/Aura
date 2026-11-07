@@ -21,6 +21,11 @@ type Album struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type AlbumReference struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 const albumSelect = `SELECT al.id,al.name,al.created_at,al.updated_at,
  (SELECT count(*) FROM album_assets aa JOIN assets a ON a.id=aa.asset_id WHERE aa.album_id=al.id AND a.trashed_at=''),
  COALESCE((SELECT a.id FROM decisions d JOIN files f ON f.hash=json_extract(d.detail,'$.hash')

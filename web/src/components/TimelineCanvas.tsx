@@ -30,6 +30,7 @@ import {
   schedulePreviewWarmup,
 } from "../core/workspace";
 import { AspectRatioGlyph, LiveRingsIcon } from "./Icons";
+import { AssetAlbumBadges } from "./AssetAlbumBadges";
 
 // ============================================================================
 // 1. Grid Density & Aspect Ratio Controller with FLIP Animation
@@ -580,6 +581,10 @@ export function PhotoTile({
           )}
         </div>
       </button>
+
+      <div className="photo-albums">
+        <AssetAlbumBadges asset={asset} />
+      </div>
 
       {broken && (
         <button
