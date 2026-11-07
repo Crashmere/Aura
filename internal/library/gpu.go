@@ -73,18 +73,27 @@ func ffmpegProgress(ctx context.Context, args []string, duration float64, update
 func (l *Library) videoThumbnail(ctx context.Context, input, output string, duration float64, p *jobTracker) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	hdrFilters, err := l.videoFrameHDRFilters(ctx, input, 640)
+	if err != nil {
+		return err
+	}
 	modes := []string{"CPU"}
-	if l.nvidiaAvailable(ctx) {
+	// NAS has no GPU float tone mapper or JPEG encoder; HDR color conversion
+	// stays on CPU rather than reducing HDR to 8-bit before tone mapping.
+	if len(hdrFilters) == 0 && l.nvidiaAvailable(ctx) {
 		// CUDA frames retain the display matrix without applying it. JPEG
 		// cannot retain that matrix, so orient decoded pixels before upload.
 		modes = []string{"NVIDIA GPU · 软件解码", "CPU"}
 	}
-	var err error
 	for _, mode := range modes {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		p.encoding("thumbnail", mode, 0)
+		engine := mode
+		if len(hdrFilters) > 0 {
+			engine = "CPU · HDR 色调映射"
+		}
+		p.encoding("thumbnail", engine, 0)
 		args := []string{"-protocol_whitelist", "file,pipe", "-threads", "2", "-filter_threads", "1", "-filter_complex_threads", "1"}
 		gpu := mode != "CPU"
 		if gpu {
@@ -92,7 +101,9 @@ func (l *Library) videoThumbnail(ctx context.Context, input, output string, dura
 		}
 		args = append(args, "-i", input, "-map", "0:v:0")
 		filter := "scale=640:640:force_original_aspect_ratio=decrease"
-		if gpu {
+		if len(hdrFilters) > 0 {
+			filter = strings.Join(hdrFilters, ",")
+		} else if gpu {
 			filter = strings.Replace(filter, "scale=", "scale_cuda=", 1)
 			filter = "format=nv12,hwupload," + filter + ":format=yuv420p,hwdownload,format=yuv420p"
 		}
@@ -110,7 +121,7 @@ func (l *Library) videoThumbnail(ctx context.Context, input, output string, dura
 				return err
 			}
 		}
-		err = ffmpegProgress(ctx, args, duration, func(percent float64) { p.encoding("thumbnail", mode, percent) })
+		err = ffmpegProgress(ctx, args, duration, func(percent float64) { p.encoding("thumbnail", engine, percent) })
 		if release != nil {
 			release()
 		}

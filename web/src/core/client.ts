@@ -62,8 +62,8 @@ export function buildMediaUrl(
   const basePath = `${APP_BASE}media/${hash}/${kind}`;
   if (kind === "original") return basePath;
   const search = new URLSearchParams({ rotation: String(rotation || 0) });
-  if (kind === "thumb") search.set("v", "2");
   if (kind === "thumb" || kind === "preview") {
+    search.set("v", "3");
     search.set("cover", coverRevision || "original");
   }
   return `${basePath}?${search.toString()}`;

@@ -571,13 +571,16 @@ func (l *Library) removeCoverRevision(hash, revision string) error {
 }
 
 func (l *Library) videoFrame(ctx context.Context, input, output string, at float64, dimension int) error {
+	hdrFilters, err := l.videoFrameHDRFilters(ctx, input, dimension)
+	if err != nil {
+		return err
+	}
 	modes := []string{"CPU"}
-	if l.nvidiaAvailable(ctx) {
+	if len(hdrFilters) == 0 && l.nvidiaAvailable(ctx) {
 		// Software decode applies the source display matrix before CUDA resizing;
 		// JPEG has no video display matrix and cannot defer native orientation.
 		modes = []string{"NVIDIA GPU · 软件解码", "CPU"}
 	}
-	var err error
 	for _, mode := range modes {
 		if err = ctx.Err(); err != nil {
 			return err
@@ -592,7 +595,9 @@ func (l *Library) videoFrame(ctx context.Context, input, output string, at float
 		}
 		args = append(args, "-i", input, "-map", "0:v:0")
 		filter := fmt.Sprintf("scale=w='min(%d,iw)':h='min(%d,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2", dimension, dimension)
-		if gpu {
+		if len(hdrFilters) > 0 {
+			filter = strings.Join(hdrFilters, ",")
+		} else if gpu {
 			filter = "format=nv12,hwupload," + strings.Replace(filter, "scale=", "scale_cuda=", 1) + ":format=yuv420p,hwdownload,format=yuv420p"
 		}
 		args = append(args, "-vf", filter, "-frames:v", "1", "-map_metadata", "-1", "-q:v", "2", "-threads", "2", "-y", output)

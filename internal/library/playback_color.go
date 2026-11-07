@@ -53,7 +53,7 @@ func playbackHDRSignalPeak(transfer string, data []playbackHDRSideData) float64 
 }
 
 func (l *Library) probePlaybackHDRPeak(ctx context.Context, path, transfer string) float64 {
-	// The descriptor probe already holds CPU admission. One selected video
+	// The caller already holds CPU admission. One selected video
 	// packet plus decoder flushing exposes first-frame metadata without a scan.
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -80,14 +80,41 @@ func (l *Library) probePlaybackHDRPeak(ctx context.Context, path, transfer strin
 	return playbackHDRSignalPeak(transfer, raw.Frames[0].SideData)
 }
 
-func playbackHDRFilters(spec *playbackSpec) []string {
-	peak := spec.hdrPeak
+func (l *Library) videoFrameHDRFilters(ctx context.Context, path string, dimension int) ([]string, error) {
+	release, err := l.acquireCPU(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	raw, err := l.command(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0", "-show_entries", "stream=color_transfer", "-of", "json", path)
+	if err != nil {
+		return nil, err
+	}
+	var probe struct {
+		Streams []struct {
+			Transfer string `json:"color_transfer"`
+		} `json:"streams"`
+	}
+	if err = json.Unmarshal(raw, &probe); err != nil {
+		return nil, err
+	}
+	if len(probe.Streams) == 0 {
+		return nil, errFrameTime
+	}
+	transfer := probe.Streams[0].Transfer
+	if transfer != "smpte2084" && transfer != "arib-std-b67" {
+		return nil, nil
+	}
+	return videoHDRFilters(transfer, l.probePlaybackHDRPeak(ctx, path, transfer), dimension), nil
+}
+
+func videoHDRFilters(transfer string, peak float64, dimension int) []string {
 	if peak <= 0 || math.IsNaN(peak) || math.IsInf(peak, 0) {
-		peak = playbackHDRDefaultPeak(spec.transfer)
+		peak = playbackHDRDefaultPeak(transfer)
 	}
 	// Keep conversion and resize separate: zimg otherwise downsizes HDR samples
 	// before linearization. Resizing here bounds the later float tone mapper.
-	const fit = "min(1,1920/max(iw,ih))"
+	fit := "min(1," + strconv.Itoa(dimension) + "/max(iw,ih))"
 	scale := "zscale=w='max(2,trunc(round(iw*" + fit + ")/2)*2)'" +
 		":h='max(2,trunc(round(ih*" + fit + ")/2)*2)'"
 	return []string{
