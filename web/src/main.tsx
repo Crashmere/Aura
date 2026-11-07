@@ -360,6 +360,24 @@ function AuraApplication() {
     [],
   );
 
+  const returnToAlbums = useCallback(() => {
+    updateRoute((prev) => ({ ...prev, album: "" }), "push");
+  }, [updateRoute]);
+
+  useEffect(() => {
+    if (route.view !== "albums" || !route.album) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (route.asset || openAssetObj || mobileNavOpen || filterSheetOpen || uploadHubTab || albumModal || purgeTargets || comparePair || mergePair || historyKind) return;
+      // Departing overlays retain their DOM during the exit animation.
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      e.preventDefault();
+      returnToAlbums();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [route.view, route.album, route.asset, openAssetObj, mobileNavOpen, filterSheetOpen, uploadHubTab, albumModal, purgeTargets, comparePair, mergePair, historyKind, returnToAlbums]);
+
   // Debounce search box input into route.query
   useEffect(() => {
     if (searchDraft === route.query) return;
@@ -1015,7 +1033,8 @@ function AuraApplication() {
                 <button
                   type="button"
                   className="btn btn-subtle"
-                  onClick={() => updateRoute((prev) => ({ ...prev, album: "" }), "push")}
+                  title="返回相片集 (Esc)"
+                  onClick={returnToAlbums}
                 >
                   <ArrowLeft size={16} />
                   <span>相片集</span>

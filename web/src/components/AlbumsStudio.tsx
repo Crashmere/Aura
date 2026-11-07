@@ -1,4 +1,5 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   ChevronDown,
@@ -7,6 +8,7 @@ import {
   GripVertical,
   Images,
   LoaderCircle,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
@@ -90,7 +92,7 @@ function AlbumCoverThumb({
 function AlbumGridCard({
   album,
   onSelect,
-  onMove,
+  onAction,
   selecting,
   selected,
   onDrag,
@@ -98,7 +100,7 @@ function AlbumGridCard({
 }: {
   album: AlbumItem;
   onSelect: (album: AlbumItem) => void;
-  onMove: (album: AlbumItem) => void;
+  onAction: (state: AlbumModalState) => void;
   selecting: boolean;
   selected: boolean;
   onDrag: (e: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -106,6 +108,62 @@ function AlbumGridCard({
 }) {
   const [broken, setBroken] = useState(false);
   const [retrySeq, setRetrySeq] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+  const menuId = useId();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const isPresent = useIsPresent();
+  const showMenu = menuOpen && isPresent && !selecting && !dragging;
+
+  useEffect(() => {
+    if (!isPresent || selecting || dragging) setMenuOpen(false);
+  }, [isPresent, selecting, dragging]);
+
+  useLayoutEffect(() => {
+    if (!showMenu) return;
+    const button = menuButtonRef.current;
+    const menu = menuRef.current;
+    if (!button || !menu) return;
+    // Render outside the collapsible group so its clipping cannot hide menu actions.
+    const rect = button.getBoundingClientRect();
+    const above = rect.top - menu.offsetHeight - 8;
+    setMenuPosition({
+      top: Math.max(8, Math.min(above >= 8 ? above : rect.bottom + 8, window.innerHeight - menu.offsetHeight - 8)),
+      left: Math.max(8, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8)),
+    });
+  }, [showMenu]);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const close = () => setMenuOpen(false);
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.target instanceof Node && !menuRef.current?.contains(e.target) && !menuButtonRef.current?.contains(e.target)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      close();
+    };
+    const onScroll = (e: Event) => {
+      if (!(e.target instanceof Node) || !menuRef.current?.contains(e.target)) close();
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [showMenu]);
+
+  function runAction(state: AlbumModalState) {
+    setMenuOpen(false);
+    onAction(state);
+  }
 
   return (
     <div className="album-card-wrapper" data-album-id={album.id} data-album-dragging={dragging || undefined}>
@@ -127,10 +185,29 @@ function AlbumGridCard({
           {selected && <Check size={16} />}
         </span>
       ) : (
-        <button type="button" className="album-move-btn" title="移动到分组"
-          aria-label={`将“${album.name}”移动到分组`} onClick={() => onMove(album)}>
-          <FolderInput size={16} />
+        <button ref={menuButtonRef} type="button" className="album-more-btn" title="更多功能"
+          aria-label={`“${album.name}”的更多功能`} aria-haspopup="menu" aria-expanded={showMenu}
+          aria-controls={showMenu ? menuId : undefined} onClick={() => setMenuOpen((open) => !open)}>
+          <MoreHorizontal size={18} />
         </button>
+      )}
+      {showMenu && createPortal(
+        <div ref={menuRef} id={menuId} className="album-card-menu" role="menu"
+          aria-label={`“${album.name}”的更多功能`} style={menuPosition}>
+          <button type="button" role="menuitem" onClick={() => runAction({ kind: "pick", album })}>
+            <Plus size={16} />添加照片
+          </button>
+          <button type="button" role="menuitem" onClick={() => runAction({ kind: "move", albums: [album] })}>
+            <FolderInput size={16} />移动到分组
+          </button>
+          <button type="button" role="menuitem" onClick={() => runAction({ kind: "rename", album })}>
+            <Pencil size={16} />重命名相片集
+          </button>
+          <hr />
+          <button type="button" role="menuitem" className="is-danger" onClick={() => runAction({ kind: "delete", album })}>
+            <Trash2 size={16} />删除相片集
+          </button>
+        </div>, document.body,
       )}
       {broken && (
         <button
@@ -488,7 +565,7 @@ export function AlbumsCollectionGrid({
                 {section.albums.map((album) => (
                   <AlbumGridCard key={album.id} album={album} onSelect={selectAlbum}
                     dragging={draggedIds.has(album.id)}
-                    onMove={(album) => onAction({ kind: "move", albums: [album] })}
+                    onAction={onAction}
                     onDrag={(e) => {
                       if (busy) return;
                       const ids = selecting && selected.has(album.id) ? [...selected] : [album.id];
