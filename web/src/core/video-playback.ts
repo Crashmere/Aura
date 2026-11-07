@@ -3,9 +3,11 @@ import { requestJson } from "./client";
 import type { PlaybackDescriptor } from "./types";
 
 type PlaybackMode = "source" | "native-hls" | "mse-hls" | "switching";
+export type PlaybackRepresentation = "source" | "compatibility" | null;
 
 interface PlaybackCallbacks {
   onReady: (ready: boolean) => void;
+  onModeChange: (representation: PlaybackRepresentation) => void;
   onDescriptor: (descriptor: PlaybackDescriptor) => void;
   onSwitch: (time: number) => void;
   onError: (message: string) => void;
@@ -70,6 +72,7 @@ export class VideoPlayback {
     if (!this.sourceFailed && source && type && (this.video.canPlayType(type) || this.video.canPlayType(source.mime))) {
       this.mode = "source";
       this.video.src = source.url;
+      this.callbacks.onModeChange("source");
     } else {
       await this.bindStream();
     }
@@ -83,6 +86,7 @@ export class VideoPlayback {
     if (this.video.canPlayType("application/vnd.apple.mpegurl")) {
       this.mode = "native-hls";
       this.video.src = url;
+      this.callbacks.onModeChange("compatibility");
       return;
     }
     const { default: Hls } = await import("hls.js").catch(() => {
@@ -109,6 +113,7 @@ export class VideoPlayback {
     });
     this.hls = hls;
     this.mode = "mse-hls";
+    this.callbacks.onModeChange("compatibility");
     hls.on(Hls.Events.ERROR, (_event, error) => {
       if (this.disposed || this.hls !== hls || !error.fatal) return;
       hls.stopLoad();
@@ -267,7 +272,10 @@ export class VideoPlayback {
   private resetMedia(): void {
     this.ready = false;
     this.loaded = false;
-    if (!this.disposed) this.callbacks.onReady(false);
+    if (!this.disposed) {
+      this.callbacks.onReady(false);
+      this.callbacks.onModeChange(null);
+    }
     this.hls?.destroy();
     this.hls = undefined;
     this.video.pause();

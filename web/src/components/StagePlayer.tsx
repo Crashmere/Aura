@@ -27,7 +27,7 @@ import {
   orientedDimensions,
 } from "../core/client";
 import type { CatalogAsset } from "../core/types";
-import { VideoPlayback } from "../core/video-playback";
+import { VideoPlayback, type PlaybackRepresentation } from "../core/video-playback";
 import {
   cacheDecodedPreview,
   isPreviewCached,
@@ -384,6 +384,8 @@ export function StageVideoPlayer({
   const [buffering, setBuffering] = useState(live || !!framePicker);
   const [errorMsg, setErrorMsg] = useState("");
   const [sourceReady, setSourceReady] = useState(false);
+  const [playbackRepresentation, setPlaybackRepresentation] =
+    useState<PlaybackRepresentation>(null);
   const [sourceFrameRate, setSourceFrameRate] = useState<number | undefined>(undefined);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -487,11 +489,13 @@ export function StageVideoPlayer({
       setStarted(isFramePicker || live);
     }
     setSourceReady(false);
+    setPlaybackRepresentation(null);
     setSourceFrameRate(undefined);
     lastObservedMediaTime.current = undefined;
     measuredFrameInterval.current = undefined;
     const source = new VideoPlayback(el, sourceHash, sourceRotation, {
       onReady: setSourceReady,
+      onModeChange: setPlaybackRepresentation,
       onDescriptor: (descriptor) => {
         if (descriptor.frameRate && Number.isFinite(descriptor.frameRate) && descriptor.frameRate > 0) {
           setSourceFrameRate(descriptor.frameRate);
@@ -856,6 +860,16 @@ export function StageVideoPlayer({
           }
         }}
       />
+
+      {started && playbackRepresentation === "compatibility" && (
+        <span
+          className="player-compatibility-badge"
+          role="status"
+          aria-label="兼容模式，当前播放的是转码视频而非原件"
+        >
+          兼容模式 · 已转码
+        </span>
+      )}
 
       <MotionPresence present={!framePicker && !playing && !buffering && !errorMsg} variant="panel">
         {!framePicker && !playing && !buffering && !errorMsg && (

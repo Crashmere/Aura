@@ -210,6 +210,22 @@
     height 0.26s var(--ease-spring);
 }
 
+.player-compatibility-badge {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 3;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(20, 20, 18, 0.72);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .player-big-play {
   position: absolute;
   width: 64px;
