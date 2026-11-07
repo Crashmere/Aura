@@ -502,6 +502,10 @@ func (l *Library) generateCover(ctx context.Context, file File) error {
 	if readyDerivative(l.coverPath(file, "preview")) && readyDerivative(l.coverPath(file, "thumb")) {
 		return nil
 	}
+	return l.renderCover(ctx, file)
+}
+
+func (l *Library) renderCover(ctx context.Context, file File) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	work, err := os.MkdirTemp(filepath.Join(l.Root, "work"), file.Hash+"-cover-")
@@ -523,29 +527,123 @@ func (l *Library) generateCover(ctx context.Context, file File) error {
 	}
 	for _, kind := range []string{"preview", "thumb"} {
 		path := filepath.Join(work, kind+".jpg")
-		output, err := os.OpenFile(path, os.O_RDWR, 0600)
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if err = publishCoverJPEG(path, l.coverPath(file, kind)); err != nil {
+			return err
+		}
+	}
+	return syncDirectory(filepath.Join(l.Root, "derived"))
+}
+
+func publishCoverJPEG(path, destination string) error {
+	output, err := os.OpenFile(path, os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	if _, _, err = image.DecodeConfig(output); err == nil {
+		err = output.Chmod(0600)
+	}
+	if err == nil {
+		err = output.Sync()
+	}
+	closeErr := output.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(path, destination)
+}
+
+// Rebuild JPEG derivatives without publishing source metadata, classifying
+// resources, or changing the durable cover selection and rotation.
+func (l *Library) rebuildCover(w http.ResponseWriter, r *http.Request) {
+	hash := chi.URLParam(r, "hash")
+	if !validHash.MatchString(hash) {
+		fail(w, 400, "资源标识无效")
+		return
+	}
+	if err := l.rebuildFileCover(r.Context(), hash); err != nil {
+		frameFailure(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"hash": hash, "status": "ready"})
+}
+
+func rebuildCoverTargets(files []File, hash string) ([]File, error) {
+	targets := rotationTargets(files, hash)
+	if len(targets) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	if targets[0].Cover != nil {
+		return frameTargets(files, hash, targets[0].Cover.Motion)
+	}
+	if !strings.HasPrefix(targets[0].Mime, "video/") {
+		return nil, errFramePair
+	}
+	return targets, nil
+}
+
+func (l *Library) rebuildFileCover(parent context.Context, hash string) error {
+	file, err := l.File(hash)
+	if err != nil {
+		return err
+	}
+	files, err := l.Files(file.AssetID)
+	if err != nil {
+		return err
+	}
+	targets, err := rebuildCoverTargets(files, hash)
+	if err != nil {
+		return err
+	}
+	unlock := l.lockFrameTargets(targets)
+	defer unlock()
+	files, err = l.Files(file.AssetID)
+	if err != nil {
+		return err
+	}
+	current, err := rebuildCoverTargets(files, hash)
+	if err != nil {
+		return err
+	}
+	if err = checkRotationTargets(l.DB, file.AssetID, targets, current); err != nil {
+		return err
+	}
+	if coverRevision(targets[0]) != coverRevision(current[0]) {
+		return errCoverConflict
+	}
+	ctx, finish, err := l.beginFrameWork(parent, current)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	file = current[0]
+	if strings.HasPrefix(file.Mime, "video/") {
+		work, err := os.MkdirTemp(filepath.Join(l.Root, "work"), hash+"-cover-rebuild-")
 		if err != nil {
 			return err
 		}
-		if _, _, err = image.DecodeConfig(output); err == nil {
-			err = output.Chmod(0600)
-		}
-		if err == nil {
-			err = output.Sync()
-		}
-		closeErr := output.Close()
-		if err != nil {
+		defer os.RemoveAll(work)
+		output := filepath.Join(work, "thumb.jpg")
+		if err = l.videoFrame(ctx, l.Object(hash), output, 0, 640); err != nil {
 			return err
 		}
-		if closeErr != nil {
-			return closeErr
+		if err = originalDeletion(l.DB, hash, ""); err != nil {
+			return err
 		}
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		if err = os.Rename(path, l.coverPath(file, kind)); err != nil {
+		if err = publishCoverJPEG(output, l.Derived(hash, "-thumb.jpg")); err != nil {
 			return err
 		}
+	}
+	if file.Cover != nil {
+		return l.renderCover(ctx, file)
 	}
 	return syncDirectory(filepath.Join(l.Root, "derived"))
 }

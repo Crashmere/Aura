@@ -7,7 +7,7 @@ import React, {
   useState,
   useSyncExternalStore,
   type CSSProperties,
-  type HTMLAttributes,
+  type ComponentPropsWithRef,
   type ReactNode,
 } from "react";
 
@@ -92,7 +92,7 @@ export function CollapsibleRegion({
   children,
   className = "",
   ...props
-}: HTMLAttributes<HTMLDivElement> & { open: boolean; children: ReactNode }) {
+}: ComponentPropsWithRef<"div"> & { open: boolean; children: ReactNode }) {
   const parentPresent = useIsPresent();
   return (
     <div

@@ -44,7 +44,7 @@ import {
   subscribeUploadEngine,
 } from "./core/importer";
 import { ConfirmPurgeModal, PurgeStatusBanner, usePurgeTracker } from "./core/purge-tracker";
-import { CollapsibleRegion, MotionPresence, useSlidingIndicator } from "./core/motion";
+import { CollapsibleRegion, MotionPresence, prefersReducedMotion, useSlidingIndicator } from "./core/motion";
 import type {
   AlbumGroup,
   AlbumItem,
@@ -165,9 +165,57 @@ function AuraApplication() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [monthRailOpen, setMonthRailOpen] = useState(false);
+  const monthRailRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLElement>(null);
+  const monthRailAnchorRef = useRef<number | null>(null);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const navigationIndicator = useSlidingIndicator<HTMLElement>(route.view);
   const monthIndicator = useSlidingIndicator(`${route.from}:${route.to}`);
+
+  function toggleMonthRail() {
+    monthRailAnchorRef.current = window.scrollY > 0 && contentRef.current
+      ? contentRef.current.getBoundingClientRect().top
+      : null;
+    setMonthRailOpen((open) => !open);
+  }
+
+  useLayoutEffect(() => {
+    const rail = monthRailRef.current;
+    const content = contentRef.current;
+    const anchorTop = monthRailAnchorRef.current;
+    if (!rail || !content || anchorTop === null) return;
+
+    // Measure viewport drift so native scroll anchoring cannot double the offset.
+    const alignContent = () => {
+      const drift = content.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(drift) >= 0.5) window.scrollBy({ top: drift, behavior: "instant" });
+    };
+    alignContent();
+    if (prefersReducedMotion()) return;
+
+    const observer = new ResizeObserver(alignContent);
+    const stop = () => {
+      observer.disconnect();
+      rail.removeEventListener("transitionend", onTransitionEnd);
+      window.removeEventListener("wheel", stop);
+      window.removeEventListener("pointerdown", stop);
+      window.removeEventListener("keydown", stop);
+      window.removeEventListener("resize", stop);
+    };
+    const onTransitionEnd = (event: TransitionEvent) => {
+      if (event.target === rail && event.propertyName === "grid-template-rows") {
+        alignContent();
+        stop();
+      }
+    };
+    observer.observe(rail);
+    rail.addEventListener("transitionend", onTransitionEnd);
+    window.addEventListener("wheel", stop, { passive: true });
+    window.addEventListener("pointerdown", stop, { passive: true });
+    window.addEventListener("keydown", stop);
+    window.addEventListener("resize", stop);
+    return stop;
+  }, [monthRailOpen]);
 
   // Telemetry & Catalog
   const [telemetry, setTelemetry] = useState<LibraryTelemetry>();
@@ -1093,7 +1141,7 @@ function AuraApplication() {
                     <button
                       type="button"
                       className={`btn ${monthRailOpen ? "btn-active-filter" : ""}`}
-                      onClick={() => setMonthRailOpen((v) => !v)}
+                      onClick={toggleMonthRail}
                       title="按月份快速定位"
                     >
                       <CalendarDays size={15} />
@@ -1204,9 +1252,10 @@ function AuraApplication() {
             />
           </CollapsibleRegion>
 
-          {/* Floating Month Timeline Strip */}
+          {/* Collapsible Month Timeline Strip */}
           <CollapsibleRegion
-            className="month-scrubber-overlay"
+            ref={monthRailRef}
+            className="month-scrubber-region"
             open={monthRailOpen && months.length > 0 && isGalleryView}
           >
             <div
@@ -1256,7 +1305,7 @@ function AuraApplication() {
         )}
 
         {/* Main Workspace Body */}
-        <main className="aura-content" key={`${route.view}:${route.album}`}>
+        <main ref={contentRef} className="aura-content" key={`${route.view}:${route.album}`}>
           {route.view === "jobs" ? (
             <PipelineTaskCenter
               info={telemetry}

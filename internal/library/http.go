@@ -100,6 +100,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Get("/api/jobs", l.jobs)
 	r.Post("/api/files/retry", l.retryErrors)
 	r.Post("/api/files/{hash}/retry", l.retry)
+	r.Post("/api/files/{hash}/rebuild-cover", l.rebuildCover)
 	r.Post("/api/uploads", l.prepare)
 	r.Get("/api/uploads", l.listUploads)
 	r.Get("/api/uploads/{id}", l.uploadStatus)

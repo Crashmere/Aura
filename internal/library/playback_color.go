@@ -105,22 +105,44 @@ func (l *Library) videoFrameHDRFilters(ctx context.Context, path string, dimensi
 	if transfer != "smpte2084" && transfer != "arib-std-b67" {
 		return nil, nil
 	}
-	return videoHDRFilters(transfer, l.probePlaybackHDRPeak(ctx, path, transfer), dimension), nil
+	peak := l.probePlaybackHDRPeak(ctx, path, transfer)
+	if transfer == "arib-std-b67" {
+		return videoHLGCoverFilters(peak, dimension), nil
+	}
+	return videoHDRFilters(transfer, peak, dimension), nil
+}
+
+func videoHDRScale(dimension int) string {
+	// Keep conversion and resize separate: zimg otherwise downsizes HDR samples
+	// before linearization. Resizing here bounds the later float tone mapper.
+	fit := "min(1," + strconv.Itoa(dimension) + "/max(iw,ih))"
+	return "zscale=w='max(2,trunc(round(iw*" + fit + ")/2)*2)'" +
+		":h='max(2,trunc(round(ih*" + fit + ")/2)*2)'"
+}
+
+func videoHLGCoverFilters(peak float64, dimension int) []string {
+	// HLG's 1,000-nit display EOTF is normalized to the BT.2408 203-nit
+	// reference white. A filmic shoulder retains highlights in an SDR JPEG;
+	// sRGB encoding avoids treating video transfer codes as image samples.
+	peak = max(1, peak*100/203)
+	return []string{
+		"zscale=t=linear:npl=203",
+		"format=gbrpf32le",
+		videoHDRScale(dimension),
+		"tonemap=tonemap=hable:desat=0:peak=" + strconv.FormatFloat(peak, 'f', -1, 64),
+		"zscale=p=bt709:t=iec61966-2-1:m=170m:r=full",
+		"format=yuv420p",
+	}
 }
 
 func videoHDRFilters(transfer string, peak float64, dimension int) []string {
 	if peak <= 0 || math.IsNaN(peak) || math.IsInf(peak, 0) {
 		peak = playbackHDRDefaultPeak(transfer)
 	}
-	// Keep conversion and resize separate: zimg otherwise downsizes HDR samples
-	// before linearization. Resizing here bounds the later float tone mapper.
-	fit := "min(1," + strconv.Itoa(dimension) + "/max(iw,ih))"
-	scale := "zscale=w='max(2,trunc(round(iw*" + fit + ")/2)*2)'" +
-		":h='max(2,trunc(round(ih*" + fit + ")/2)*2)'"
 	return []string{
 		"zscale=t=linear:npl=100",
 		"format=gbrpf32le",
-		scale,
+		videoHDRScale(dimension),
 		"tonemap=tonemap=mobius:desat=0:peak=" + strconv.FormatFloat(peak, 'f', -1, 64),
 		"zscale=p=bt709:t=bt709:m=bt709:r=tv",
 		"format=yuv420p",

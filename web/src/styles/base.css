@@ -705,17 +705,6 @@ a {
   font-weight: 500;
 }
 
-.month-scrubber-overlay {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-}
-
-.month-scrubber-overlay:not(.is-open) {
-  pointer-events: none;
-}
-
 .month-scrubber-bar {
   display: flex;
   align-items: center;
