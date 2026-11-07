@@ -68,6 +68,8 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Get("/api/timeline", l.timeline)
 	r.Get("/api/albums", l.listAlbums)
 	r.Post("/api/albums", l.createAlbum)
+	r.Post("/api/albums/common", l.commonAlbums)
+	r.Delete("/api/albums/assets", l.removeAssetsFromAlbums)
 	r.Post("/api/albums/import", l.importAlbum)
 	r.Patch("/api/albums/group", l.moveAlbumGroup)
 	r.Get("/api/album-groups", l.listAlbumGroups)

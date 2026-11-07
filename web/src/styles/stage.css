@@ -203,6 +203,27 @@
   flex-direction: column;
 }
 
+.album-choice-list button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.album-choice-list .album-choice-check {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+}
+
+.album-choice-list button[aria-pressed="true"] .album-choice-check {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .picker-toolbar {
   display: flex;
   align-items: center;

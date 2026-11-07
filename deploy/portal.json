@@ -153,6 +153,16 @@
     },
     {
       "method": "POST",
+      "path": "/api/albums/common",
+      "description": "查询所选照片共同所在的相片集"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/albums/assets",
+      "description": "原子批量移出多个相片集；仅移除所选照片关联，保留原件"
+    },
+    {
+      "method": "POST",
       "path": "/api/albums/import",
       "description": "Apple 相册来源映射与增量添加；保留 Aura 命名和删除决定"
     },

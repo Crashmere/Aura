@@ -56,45 +56,144 @@ func (l *Library) Album(id string) (Album, error) {
 	return a, err
 }
 
+func (l *Library) readAlbums(query string, args ...any) ([]Album, error) {
+	rows, err := l.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	albums, covers := []Album{}, []string{}
+	for rows.Next() {
+		a, cover, e := scanAlbum(rows)
+		if e != nil {
+			rows.Close()
+			return nil, e
+		}
+		albums = append(albums, a)
+		covers = append(covers, cover)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	// Close the catalog cursor before fetching covers on the single connection.
+	for i, id := range covers {
+		if id == "" {
+			continue
+		}
+		a, e := l.Asset(id)
+		if e != nil {
+			return nil, e
+		}
+		albums[i].Cover = &a
+	}
+	return albums, nil
+}
+
 func (l *Library) listAlbums(w http.ResponseWriter, r *http.Request) {
 	value, err := l.cachedCatalog(r.Context(), "albums", "library", func() (any, error) {
-		rows, err := l.DB.Query(albumSelect + "ORDER BY al.created_at DESC,al.id DESC")
-		if err != nil {
-			return nil, err
-		}
-		albums, covers := []Album{}, []string{}
-		for rows.Next() {
-			a, cover, e := scanAlbum(rows)
-			if e != nil {
-				rows.Close()
-				return nil, e
-			}
-			albums = append(albums, a)
-			covers = append(covers, cover)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, err
-		}
-		// Close the catalog cursor before fetching covers on the single connection.
-		for i, id := range covers {
-			if id == "" {
-				continue
-			}
-			a, e := l.Asset(id)
-			if e != nil {
-				return nil, e
-			}
-			albums[i].Cover = &a
-		}
-		return albums, nil
+		return l.readAlbums(albumSelect + "ORDER BY al.created_at DESC,al.id DESC")
 	})
 	if err != nil {
 		fail(w, 500, err)
 		return
 	}
 	writeJSON(w, 200, value)
+}
+
+func validAlbumBatchIDs(ids []string) bool {
+	if len(ids) == 0 || len(ids) > 1000 {
+		return false
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !validID.MatchString(id) || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return true
+}
+
+func (l *Library) commonAlbums(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		Assets []string `json:"assets"`
+	}
+	if !decode(w, r, &p) {
+		return
+	}
+	if !validAlbumBatchIDs(p.Assets) {
+		fail(w, 400, "每次请选择 1–1000 个不同的项目")
+		return
+	}
+	args := make([]any, 0, len(p.Assets)+1)
+	for _, id := range p.Assets {
+		args = append(args, id)
+	}
+	args = append(args, len(p.Assets))
+	query := albumSelect + `WHERE al.id IN (
+ SELECT aa.album_id FROM album_assets aa JOIN assets a ON a.id=aa.asset_id
+ WHERE a.trashed_at='' AND a.id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(p.Assets)), ",") + `)
+ GROUP BY aa.album_id HAVING count(*)=?
+) ORDER BY al.created_at DESC,al.id DESC`
+	albums, err := l.readAlbums(query, args...)
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, albums)
+}
+
+func (l *Library) removeAssetsFromAlbums(w http.ResponseWriter, r *http.Request) {
+	var p struct {
+		Albums []string `json:"albums"`
+		Assets []string `json:"assets"`
+	}
+	if !decode(w, r, &p) {
+		return
+	}
+	if !validAlbumBatchIDs(p.Albums) || !validAlbumBatchIDs(p.Assets) {
+		fail(w, 400, "每次请选择 1–1000 个不同的相片集和项目")
+		return
+	}
+	tx, err := l.DB.Begin()
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	defer tx.Rollback()
+	for _, asset := range p.Assets {
+		if !allowAssetMutation(w, tx, asset) {
+			return
+		}
+	}
+	args := make([]any, len(p.Assets)+1)
+	for i, asset := range p.Assets {
+		args[i+1] = asset
+	}
+	query := "DELETE FROM album_assets WHERE album_id=? AND asset_id IN (" + strings.TrimSuffix(strings.Repeat("?,", len(p.Assets)), ",") + ")"
+	date := now()
+	for _, id := range p.Albums {
+		res, e := tx.Exec("UPDATE albums SET updated_at=? WHERE id=?", date, id)
+		if e != nil {
+			fail(w, 500, e)
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			fail(w, 404, "相片集不存在")
+			return
+		}
+		args[0] = id
+		if _, err = tx.Exec(query, args...); err != nil {
+			fail(w, 500, err)
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		fail(w, 500, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"removed": true})
 }
 
 func (l *Library) albumDetail(w http.ResponseWriter, r *http.Request) {

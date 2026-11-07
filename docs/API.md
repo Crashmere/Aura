@@ -174,6 +174,8 @@ Split history returns decisions without a `split-restore` record. New split deci
 | --- | --- |
 | `GET /api/albums` | Array of albums ordered by creation time and ID descending |
 | `POST /api/albums` | `{name,assets?:[assetId],groupId?:groupId}`; create, optionally assign a group and add items atomically; returns 201 |
+| `POST /api/albums/common` | `{assets:[assetId]}`; albums containing every selected visible item, in normal album order |
+| `DELETE /api/albums/assets` | `{albums:[albumId],assets:[assetId]}`; atomically remove selected memberships across multiple albums; returns `{removed:true}` |
 | `PATCH /api/albums/group` | `{albums:[albumId],groupId:groupId|null}`; atomically move 1–1000 albums to a group, or to ungrouped with explicit null |
 | `POST /api/albums/import` | `{sourceKey,name,assets:[assetId]}`; idempotent native source mapping and additive membership import |
 | `GET /api/albums/{id}` | Album name, visible item count, cover asset, and timestamps |
@@ -184,6 +186,8 @@ Split history returns decisions without a `split-restore` record. New split deci
 | `DELETE /api/albums/{id}/assets` | `{assets:[assetId]}`; idempotent removal of memberships only |
 
 Album responses contain `id`, `name`, `groupId` (empty for ungrouped), `count`, `createdAt`, `updatedAt`, and optional `cover` using the asset response shape. Counts and covers exclude recently deleted items. The selected member supplies the cover while it remains visible in the album; otherwise the newest visible member supplies the automatic fallback. Selection follows the chosen original hash through merge/split, and uses the current item's thumbnail, rotation and video-cover/key-photo revision. Cover writes require `assetId` as an ID or explicit null; a missing field, invalid ID, non-member or recently deleted item returns 400, and pending permanent deletion returns 409. Selecting or resetting a cover changes neither membership nor originals. Names contain 1–100 Unicode characters after trimming. Membership changes accept 1–1000 IDs; creation permits an empty list. Missing or recently deleted assets reject the entire addition with 400. Missing albums return 404. Removal does not require the item to remain visible. Merge transfers memberships to the retained item; split copies memberships to the new item.
+
+Common-album lookup and multi-album removal accept 1–1000 unique valid IDs per list. Lookup returns an empty array if any selected item is missing or recently deleted. Removal is idempotent for absent memberships, rejects missing albums with 404 and pending permanent deletion with 409, and commits no partial changes. It updates the affected albums' timestamps and preserves library items, originals and unrelated memberships. The selection toolbar loads the current intersection, supports choosing multiple destination albums, and requires confirmation before removing memberships.
 
 ### Album groups
 

@@ -24,6 +24,7 @@ export type AlbumModalState =
   | { kind: "create"; assets?: string[]; groupId?: string }
   | { kind: "rename"; album: AlbumItem }
   | { kind: "add"; assets: string[] }
+  | { kind: "remove"; assets: string[] }
   | { kind: "pick"; album: AlbumItem }
   | { kind: "delete"; album: AlbumItem }
   | { kind: "group-create" }
@@ -553,7 +554,8 @@ export function AlbumActionModal({
         ? state.albums[0]?.groupId || "" : "",
   );
   const [albumsList, setAlbumsList] = useState<AlbumItem[]>([]);
-  const [loadingList, setLoadingList] = useState(state.kind === "add");
+  const [loadingList, setLoadingList] = useState(state.kind === "add" || state.kind === "remove");
+  const [selectedAlbums, setSelectedAlbums] = useState<Set<string>>(new Set());
   const [isCreatingNew, setIsCreatingNew] = useState(
     state.kind === "create" || state.kind === "rename" || state.kind === "group-create" || state.kind === "group-rename",
   );
@@ -570,6 +572,7 @@ export function AlbumActionModal({
     : state.kind === "group-rename" ? "重命名分组"
     : state.kind === "group-create" || (state.kind === "move" && isCreatingNew) ? "新建分组"
     : state.kind === "move" ? "移动到分组"
+    : state.kind === "remove" ? "移出相片集"
     : state.kind === "pick"
       ? "添加照片"
       : state.kind === "rename"
@@ -602,9 +605,12 @@ export function AlbumActionModal({
   }, [isCreatingNew, isPresent]);
 
   useEffect(() => {
-    if (state.kind !== "add") return;
+    if (state.kind !== "add" && state.kind !== "remove") return;
     let alive = true;
-    requestJson<AlbumItem[]>("albums")
+    requestJson<AlbumItem[]>(
+      state.kind === "remove" ? "albums/common" : "albums",
+      state.kind === "remove" ? { assets: state.assets } : undefined,
+    )
       .then((res) => {
         if (alive) setAlbumsList(res);
       })
@@ -625,7 +631,14 @@ export function AlbumActionModal({
     setBusy(true);
     setErrorMsg("");
     try {
-      if (state.kind === "group-delete") {
+      if (state.kind === "remove") {
+        if (!selectedAlbums.size) {
+          setBusy(false);
+          return;
+        }
+        await requestJson("albums/assets", { albums: [...selectedAlbums], assets: state.assets }, "DELETE");
+        onSaved();
+      } else if (state.kind === "group-delete") {
         await requestJson(`album-groups/${state.group.id}`, undefined, "DELETE");
         onSaved();
       } else if (state.kind === "group-rename") {
@@ -756,7 +769,9 @@ export function AlbumActionModal({
               ) : (
                 <>
                   <p className="album-modal-note">
-                    将 {state.kind === "add" ? state.assets.length : 0} 项添加到相片集
+                    {state.kind === "remove"
+                      ? `选择要移出的相片集（${state.assets.length} 项共同所在）`
+                      : `将 ${state.kind === "add" ? state.assets.length : 0} 项添加到相片集`}
                   </p>
                   {loadingList ? (
                     <div className="loading-inline">
@@ -771,14 +786,30 @@ export function AlbumActionModal({
                           key={alb.id}
                           disabled={busy}
                           data-pending={pendingAlbumId === alb.id}
-                          onClick={() => void commitAction(alb)}
+                          aria-pressed={state.kind === "remove" ? selectedAlbums.has(alb.id) : undefined}
+                          onClick={() => {
+                            if (state.kind !== "remove") {
+                              void commitAction(alb);
+                              return;
+                            }
+                            setSelectedAlbums((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(alb.id)) next.delete(alb.id);
+                              else if (next.size < 1000) next.add(alb.id);
+                              return next;
+                            });
+                          }}
                         >
                           <AlbumCoverThumb album={alb} />
                           <span>
                             <strong>{alb.name}</strong>
                             <small>{alb.count} 项 · {groups.find((group) => group.id === alb.groupId)?.name || "未分组"}</small>
                           </span>
-                          {pendingAlbumId === alb.id ? (
+                          {state.kind === "remove" ? (
+                            <span className="album-choice-check" aria-hidden="true">
+                              {selectedAlbums.has(alb.id) && <Check size={15} />}
+                            </span>
+                          ) : pendingAlbumId === alb.id ? (
                             <LoaderCircle size={18} className="spin" />
                           ) : (
                             <Plus size={18} />
@@ -787,7 +818,7 @@ export function AlbumActionModal({
                       ))}
                       {!albumsList.length && !errorMsg && (
                         <p className="album-modal-note">
-                          还没有相片集，新建一个开始整理。
+                          {state.kind === "remove" ? "所选照片没有共同所在的相片集。" : "还没有相片集，新建一个开始整理。"}
                         </p>
                       )}
                     </div>
@@ -810,7 +841,16 @@ export function AlbumActionModal({
               >
                 取消
               </button>
-              {isDeleting ? (
+              {state.kind === "remove" ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy || loadingList || !selectedAlbums.size}
+                  onClick={() => void commitAction()}
+                >
+                  {busy ? "正在移出" : `移出${selectedAlbums.size ? ` (${selectedAlbums.size})` : ""}`}
+                </button>
+              ) : isDeleting ? (
                 <button
                   type="button"
                   className="btn btn-danger"

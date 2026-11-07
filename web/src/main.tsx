@@ -16,6 +16,7 @@ import {
   Columns2,
   Copy,
   FolderOpen,
+  FolderMinus,
   FolderPlus,
   History,
   Images,
@@ -797,23 +798,6 @@ function AuraApplication() {
     if (left && right) setMergePair({ left, right });
   }
 
-  async function batchRemoveFromCurrentAlbum() {
-    if (!route.album || !selectedIds.size || batchBusy) return;
-    setBatchBusy(true);
-    try {
-      const ids = [...selectedIds];
-      await requestJson(`albums/${route.album}/assets`, { assets: ids }, "DELETE");
-      setSelectedIds(new Set());
-      setSelecting(false);
-      showToast(`已从相片集移除 ${ids.length} 项`);
-      await refreshBoundedCatalog();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err), true);
-    } finally {
-      setBatchBusy(false);
-    }
-  }
-
   async function setSelectedAlbumCover() {
     if (route.view !== "albums" || !route.album || selectedIds.size !== 1 || batchBusy) return;
     const assetId = [...selectedIds][0];
@@ -1537,6 +1521,13 @@ function AuraApplication() {
                       <FolderPlus size={15} />
                       <span>加入相片集</span>
                     </ActionButton>
+                    <ActionButton
+                      disabled={batchBusy || !selectedIds.size}
+                      onClick={() => setAlbumModal({ kind: "remove", assets: [...selectedIds] })}
+                    >
+                      <FolderMinus size={15} />
+                      <span>移出相片集</span>
+                    </ActionButton>
                     {route.view === "albums" && route.album && (
                       <ActionButton
                         disabled={batchBusy || selectedIds.size !== 1}
@@ -1544,14 +1535,6 @@ function AuraApplication() {
                       >
                         <Images size={15} />
                         <span>设为相片集封面</span>
-                      </ActionButton>
-                    )}
-                    {route.view === "albums" && route.album && (
-                      <ActionButton
-                        disabled={batchBusy || !selectedIds.size}
-                        onClick={() => void batchRemoveFromCurrentAlbum()}
-                      >
-                        移出当前相片集
                       </ActionButton>
                     )}
                     <ActionButton
@@ -1722,6 +1705,10 @@ function AuraApplication() {
               setAlbumModal(null);
               if (kind === "group-create") {
                 showToast("分组已创建");
+              } else if (kind === "remove") {
+                setSelectedIds(new Set());
+                setSelecting(false);
+                showToast(`已从所选相片集移出 ${albumModal.assets.length} 项`);
               } else if (kind === "group-rename") {
                 showToast("分组已重命名");
               } else if (kind === "group-delete") {
