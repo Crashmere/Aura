@@ -7,6 +7,7 @@ import { usePageScrollLock } from "../core/photo-view";
 import type { AssetSimilarPage, CatalogAsset, SimilarityScoreRange } from "../core/types";
 import { PhotoTile } from "./TimelineCanvas";
 import { SimilarityScoreFilter } from "./SimilarityScoreFilter";
+import { CurrentAlbumContext } from "./AssetAlbumBadges";
 
 function SimilarPhotoSection({
   asset, source, active, album, outsideAlbums, refreshSeq, onOpenAsset, onCompare,
@@ -138,7 +139,8 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
   const [outsideAlbums, setOutsideAlbums] = useState(false);
   const [refreshSeq, setRefreshSeq] = useState(0);
   const currentAlbum = asset.albums?.find(item => item.id === currentAlbumId);
-  const filterAlbums = currentAlbum ? [currentAlbum] : asset.albums || [];
+  const albums = asset.albums || [];
+  const filterAlbums = currentAlbum ? [currentAlbum] : albums;
 
   usePageScrollLock();
 
@@ -167,6 +169,7 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
   });
 
   return createPortal(
+    <CurrentAlbumContext value="">
     <div className="modal-scrim asset-similar-scrim" inert={!isPresent} aria-hidden={!isPresent || undefined}
       onClick={onClose}>
       <section className="modal-card asset-similar-modal" role="dialog" aria-modal="true"
@@ -181,8 +184,8 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
         </header>
         <div className="asset-similar-reference">
           <img src={buildMediaUrl(asset.primary, "thumb", asset.rotation, asset.cover?.revision)} alt="" />
-          <div><strong>{asset.name}</strong><span title={filterAlbums.map(item => item.name).join("、")}>
-            {filterAlbums.length ? filterAlbums.map(item => item.name).join("、") : "不属于任何相片集"}
+          <div><strong>{asset.name}</strong><span title={albums.map(item => item.name).join("、")}>
+            {albums.length ? albums.map(item => item.name).join("、") : "不属于任何相片集"}
           </span></div>
           <label className="asset-similar-filter">
             <span>排除所在相片集照片</span>
@@ -207,6 +210,7 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
             refreshSeq={refreshSeq} onOpenAsset={onOpenAsset} onCompare={onCompare} />)}
         </div>
       </section>
-    </div>, document.body,
+    </div>
+    </CurrentAlbumContext>, document.body,
   );
 }

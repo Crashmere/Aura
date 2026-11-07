@@ -36,7 +36,7 @@ import type {
 import { ActionButton, RoundIconButton } from "./Icons";
 import { ProgressiveStagePhoto } from "./StagePlayer";
 import { PhotoTile } from "./TimelineCanvas";
-import { AssetAlbumBadges } from "./AssetAlbumBadges";
+import { AssetAlbumBadges, CurrentAlbumContext } from "./AssetAlbumBadges";
 import { SimilarityScoreFilter } from "./SimilarityScoreFilter";
 
 // ============================================================================
@@ -176,6 +176,7 @@ export function PhotoComparisonModal({
   const rightDims = orientedDimensions(right);
 
   return (
+    <CurrentAlbumContext value="">
     <div
       ref={rootRef}
       className={`photo-comparison ${mode === "overlay" ? "is-overlay" : ""}`}
@@ -361,6 +362,7 @@ export function PhotoComparisonModal({
         </footer>
       </CollapsibleRegion>
     </div>
+    </CurrentAlbumContext>
   );
 }
 
@@ -517,6 +519,7 @@ export function CurationHistoryModal({
   }
 
   return (
+    <CurrentAlbumContext value="">
     <div
       className="modal-scrim review-history-scrim"
       onClick={() => {
@@ -672,6 +675,7 @@ export function CurationHistoryModal({
         </div>
       </section>
     </div>
+    </CurrentAlbumContext>
   );
 }
 
@@ -755,6 +759,7 @@ export function SimilarWorkspaceView({
   );
 
   return (
+    <CurrentAlbumContext value="">
     <div className="similar-workspace">
       <div className="similar-review-toolbar">
         <div
@@ -957,5 +962,6 @@ export function SimilarWorkspaceView({
             </div>
           )}
     </div>
+    </CurrentAlbumContext>
   );
 }
