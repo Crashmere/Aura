@@ -57,7 +57,6 @@ import type {
   StoredFile,
 } from "../core/types";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
-import { SimilarPhotosModal } from "./SimilarPhotosModal";
 import {
   type NetworkMediaMode,
   schedulePreviewWarmup,
@@ -103,6 +102,7 @@ function describeEditorSource(editor?: string): string {
 export function LightboxStudio({
   asset,
   currentAlbumId,
+  covered = false,
   neighbors,
   positionIndex,
   totalLoaded,
@@ -112,6 +112,7 @@ export function LightboxStudio({
   onUpdateAsset,
   onRemoveFromAlbum,
   onOpenAlbumAdd,
+  onOpenSimilar,
   onOpenCompare,
   onOpenSplitHistory,
   onRequestPurge,
@@ -120,15 +121,17 @@ export function LightboxStudio({
 }: {
   asset: CatalogAsset;
   currentAlbumId?: string;
+  covered?: boolean;
   neighbors: CatalogAsset[];
   positionIndex: number;
   totalLoaded: number;
   hasMorePages: boolean;
   onClose: () => void;
-  onSelectAsset: (target: CatalogAsset, group?: CatalogAsset[]) => void;
+  onSelectAsset: (target: CatalogAsset) => void;
   onUpdateAsset: (patch: Record<string, unknown>) => Promise<void>;
   onRemoveFromAlbum?: () => Promise<void>;
   onOpenAlbumAdd: () => void;
+  onOpenSimilar: (asset: CatalogAsset) => void;
   onOpenCompare: (left: CatalogAsset, right: CatalogAsset) => void;
   onOpenSplitHistory: () => void;
   onRequestPurge: (target: CatalogAsset) => void;
@@ -151,7 +154,6 @@ export function LightboxStudio({
   const inspectorTabs = useSlidingIndicator(`${infoOpen}:${infoTab}`, '[aria-selected="true"]');
   const [metaFilter, setMetaFilter] = useState("");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const [similarOpen, setSimilarOpen] = useState(false);
   const [chromeHidden, setChromeHidden] = useState(false);
 
   const [rotationDeltaState, setRotationDelta] = useState(0);
@@ -173,6 +175,7 @@ export function LightboxStudio({
   const [wheelZooming, setWheelZooming] = useState(false);
   const wheelZoomTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [navDir, setNavDir] = useState<"next" | "prev" | "fade">("fade");
+  const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const gestureStartRef = useRef<{
@@ -199,6 +202,10 @@ export function LightboxStudio({
   usePageScrollLock();
 
   useLayoutEffect(() => {
+    if (!covered) rootRef.current?.focus({ preventScroll: true });
+  }, [covered]);
+
+  useLayoutEffect(() => {
     if (zoomScale <= 1.01) {
       setPanOffset(previous => previous.x || previous.y ? { x: 0, y: 0 } : previous);
     }
@@ -214,7 +221,6 @@ export function LightboxStudio({
     setRotationDelta(0);
     setCoverPickerOpen(false);
     setMoreMenuOpen(false);
-    setSimilarOpen(false);
     setZoomScale(1);
     setPanOffset({ x: 0, y: 0 });
     setIsDragging(false);
@@ -459,7 +465,7 @@ export function LightboxStudio({
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!isPresent || similarOpen || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if (!isPresent || covered || e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       const target = e.target instanceof HTMLElement ? e.target : null;
@@ -471,6 +477,7 @@ export function LightboxStudio({
 
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         if (moreMenuOpen) {
           setMoreMenuOpen(false);
         } else if (coverPickerOpen) {
@@ -685,8 +692,11 @@ export function LightboxStudio({
   return (
     <div
       className={`lightbox-studio ${chromeHidden ? "is-immersive" : ""} ${infoOpen ? "with-inspector" : ""}`}
+      ref={rootRef}
+      tabIndex={-1}
+      inert={covered}
       role="dialog"
-      aria-modal="true"
+      aria-modal={!covered}
       aria-label={effectiveAsset.name}
     >
       {/* Top Bar */}
@@ -786,7 +796,7 @@ export function LightboxStudio({
 
           {!asset.trashedAt && (
             <RoundIconButton title="查看相似照片" disabled={isLocked}
-              onClick={() => setSimilarOpen(true)}>
+              onClick={() => onOpenSimilar(asset)}>
               <Sparkles size={18} />
             </RoundIconButton>
           )}
@@ -848,7 +858,7 @@ export function LightboxStudio({
                   {!asset.trashedAt && (
                     <button type="button" role="menuitem" disabled={isLocked} onClick={() => {
                       setMoreMenuOpen(false);
-                      setSimilarOpen(true);
+                      onOpenSimilar(asset);
                     }}>
                       <Sparkles size={14} />
                       <span>查看相似照片</span>
@@ -1525,18 +1535,6 @@ export function LightboxStudio({
           )}
         </footer>
       </CollapsibleRegion>
-      <MotionPresence present={similarOpen} variant="panel">
-        {similarOpen && <SimilarPhotosModal asset={asset} currentAlbumId={currentAlbumId}
-          onClose={() => setSimilarOpen(false)}
-          onOpenAsset={(target, group) => {
-            setSimilarOpen(false);
-            onSelectAsset(target, group);
-          }}
-          onCompare={target => {
-            setSimilarOpen(false);
-            onOpenCompare(asset, target);
-          }} />}
-      </MotionPresence>
     </div>
   );
 }

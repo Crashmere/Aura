@@ -339,7 +339,24 @@ function AuraApplication() {
   });
   const [ignoringKey, setIgnoringKey] = useState("");
   const [lastIgnoredPair, setLastIgnoredPair] = useState<CandidatePair | null>(null);
-  const [similarPhoto, setSimilarPhoto] = useState<{ asset: CatalogAsset; source: "dhash" | "dino" } | null>(null);
+  const [similarPhoto, setSimilarPhoto] = useState<{
+    asset: CatalogAsset;
+    source: "dhash" | "dino";
+    returnAsset: string;
+    returnGroup: CatalogAsset[] | null;
+    viewing: boolean;
+  } | null>(null);
+
+  function openSimilarPhotos(asset: CatalogAsset, source: "dhash" | "dino" = "dhash") {
+    setSimilarPhoto({ asset, source, returnAsset: route.asset, returnGroup: viewerGroup, viewing: false });
+  }
+
+  useEffect(() => {
+    if (similarPhoto?.viewing && (!route.asset || route.asset === similarPhoto.returnAsset)) {
+      setViewerGroup(route.asset === similarPhoto.returnAsset ? similarPhoto.returnGroup : null);
+      setSimilarPhoto(previous => previous ? { ...previous, viewing: false } : null);
+    }
+  }, [route.asset, similarPhoto]);
 
   useEffect(() => setSimilarPhoto(null), [route.view, route.album, route.similarMedia]);
 
@@ -1538,7 +1555,7 @@ function AuraApplication() {
                     busy={batchBusy}
                     onToggleGroup={toggleSelectDayGroup}
                     onToggleAsset={toggleSelectAsset}
-                    onOpenSimilar={(asset, source) => setSimilarPhoto({ asset, source })}
+                    onOpenSimilar={openSimilarPhotos}
                     onLocateDate={route.view === "albums" && route.album
                       ? (asset, top) => void navigateTimeline(asset, "all", "", top)
                       : undefined}
@@ -1748,9 +1765,10 @@ function AuraApplication() {
       <MotionPresence present={!!similarPhoto} variant="panel">
         {similarPhoto && <SimilarPhotosModal asset={similarPhoto.asset} initialSource={similarPhoto.source}
           currentAlbumId={route.view === "albums" ? route.album : undefined}
+          covered={similarPhoto.viewing || !!comparePair}
           onClose={() => setSimilarPhoto(null)}
           onOpenAsset={(target, group) => {
-            setSimilarPhoto(null);
+            setSimilarPhoto(previous => previous ? { ...previous, viewing: true } : null);
             setViewerGroup(group);
             setOpenAssetObj(target);
             updateRoute((prev) => ({ ...prev, asset: target.id }), "push");
@@ -1767,6 +1785,7 @@ function AuraApplication() {
           <LightboxStudio
             asset={openAssetObj}
             currentAlbumId={route.view === "albums" ? route.album : undefined}
+            covered={!!similarPhoto && !similarPhoto.viewing}
             neighbors={viewerAssets}
             positionIndex={openAssetIndex}
             totalLoaded={viewerAssets.length}
@@ -1778,8 +1797,7 @@ function AuraApplication() {
                 updateRoute((prev) => ({ ...prev, asset: "" }), "replace");
               }
             }}
-            onSelectAsset={(target, group) => {
-              if (group) setViewerGroup(group);
+            onSelectAsset={(target) => {
               setOpenAssetObj(target);
               updateRoute((prev) => ({ ...prev, asset: target.id }), "replace");
             }}
@@ -1813,6 +1831,7 @@ function AuraApplication() {
                 : undefined
             }
             onOpenAlbumAdd={() => setAlbumModal({ kind: "add", assets: [openAssetObj.id] })}
+            onOpenSimilar={openSimilarPhotos}
             onOpenCompare={(left, right) => setComparePair({ left, right })}
             onOpenSplitHistory={() => setHistoryKind("split")}
             onRequestPurge={(target) => setPurgeTargets([target])}

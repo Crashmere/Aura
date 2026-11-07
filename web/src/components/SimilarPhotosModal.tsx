@@ -131,10 +131,11 @@ function SimilarPhotoSection({
   );
 }
 
-export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dhash", onClose, onOpenAsset, onCompare }: {
+export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dhash", covered = false, onClose, onOpenAsset, onCompare }: {
   asset: CatalogAsset;
   currentAlbumId?: string;
   initialSource?: "dhash" | "dino";
+  covered?: boolean;
   onClose: () => void;
   onOpenAsset: (target: CatalogAsset, group: CatalogAsset[]) => void;
   onCompare: (target: CatalogAsset, evidence?: CandidatePair) => void;
@@ -156,7 +157,6 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
   useEffect(() => {
     const previous = document.activeElement;
     const root = rootRef.current;
-    root?.focus({ preventScroll: true });
     return () => {
       if ((document.activeElement === document.body || root?.contains(document.activeElement)) &&
         previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true });
@@ -164,8 +164,12 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
   }, []);
 
   useEffect(() => {
+    if (!covered) rootRef.current?.focus({ preventScroll: true });
+  }, [covered]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (!isPresent || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+      if (!isPresent || covered || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
         event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key === "Escape") {
         event.preventDefault();
@@ -179,7 +183,7 @@ export function SimilarPhotosModal({ asset, currentAlbumId, initialSource = "dha
 
   return createPortal(
     <CurrentAlbumContext value="">
-    <div className="modal-scrim asset-similar-scrim" inert={!isPresent} aria-hidden={!isPresent || undefined}
+    <div className="modal-scrim asset-similar-scrim" inert={!isPresent || covered} aria-hidden={!isPresent || covered || undefined}
       onClick={onClose}>
       <section className="modal-card asset-similar-modal" role="dialog" aria-modal="true"
         aria-labelledby="asset-similar-title" ref={rootRef} tabIndex={-1} onClick={event => event.stopPropagation()}>
