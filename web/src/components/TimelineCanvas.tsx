@@ -12,11 +12,11 @@ import React, {
 import {
   Check,
   CircleCheck,
-  Copy,
   Image as ImageIcon,
   Layers3,
   LoaderCircle,
   RefreshCw,
+  Sparkles,
   Video,
 } from "lucide-react";
 import {
@@ -557,9 +557,6 @@ export function PhotoTile({
 
           <div className="photo-shade" />
 
-          {asset.kind === "video" && !!asset.duration && (
-            <span className="photo-duration">{formatDurationClock(asset.duration)}</span>
-          )}
           {asset.imageVersions > 1 && !asset.deletionPending && (
             <span
               className="photo-versions"
@@ -598,7 +595,7 @@ export function PhotoTile({
               abortSpeculativePreloads();
               onOpenSimilar?.();
             }}>
-            <Copy size={13} aria-hidden="true" />
+            <Sparkles size={13} aria-hidden="true" />
             {dhashCount > 0 && <span className="photo-similar-dhash">{dhashCount}</span>}
             {dhashCount > 0 && dinoCount > 0 && <span className="photo-similar-divider" aria-hidden="true" />}
             {dinoCount > 0 && <span className="photo-similar-dino">{dinoCount}</span>}
@@ -606,8 +603,13 @@ export function PhotoTile({
         )}
       </div>
 
-      <div className="photo-albums">
-        <AssetAlbumBadges asset={asset} />
+      <div className="photo-bottom-badges">
+        <div className="photo-albums">
+          <AssetAlbumBadges asset={asset} />
+        </div>
+        {asset.kind === "video" && !!asset.duration && (
+          <span className="photo-duration">{formatDurationClock(asset.duration)}</span>
+        )}
       </div>
 
       {broken && (
