@@ -66,19 +66,41 @@
 }
 
 .day-title {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+}
+
+.day-title:has(.day-locate)::before {
+  content: "";
+  position: absolute;
+  inset: -8px -12px -8px -24px;
 }
 
 .day-locate {
+  position: absolute;
+  right: 100%;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 16px;
+  height: 24px;
   color: #000;
-  border-radius: 5px;
+  border-radius: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.day-locate svg {
+  width: 12px;
+  height: 12px;
+}
+
+.day-title:hover .day-locate {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .day-locate:hover:not(:disabled) {
