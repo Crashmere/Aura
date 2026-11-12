@@ -21,7 +21,7 @@ ssh-keygen -l -f "$public_key" >/dev/null
 if ss -H -ltn 'sport = :18087' | grep -q .; then echo 'Port 18087 is in use' >&2; exit 1; fi
 useradd --system --home-dir "$app" --shell /usr/sbin/nologin aura
 install -d -m 0755 "$app" "$app/bin" "$app/config" "$app/releases"
-install -d -m 0700 -o aura -g aura "$app/data" "$app/backups"
+install -d -m 0700 -o aura -g aura "$app/data" "$app/backups" "$app/bin/cuda-cache"
 install -m 0755 "$binary" "$app/bin/aura"
 install -m 0644 "$scripts/nginx-location.conf" "$scripts/aura.service" "$scripts/aura-backup.service" "$scripts/aura-backup.timer" "$app/config/"
 runuser -u aura -- "$app/bin/aura" init --data "$app/data"

@@ -14,7 +14,7 @@ Environment=OMP_NUM_THREADS=1
 Environment=OPENBLAS_NUM_THREADS=1
 Environment=MAGICK_THREAD_LIMIT=1
 Environment=AURA_PLAYBACK_CACHE=/run/aura/playback
-Environment=CUDA_CACHE_PATH=/run/aura/playback
+Environment=CUDA_CACHE_PATH=/opt/aura/bin/cuda-cache
 Environment=CUDA_CACHE_MAXSIZE=33554432
 RuntimeDirectory=aura
 RuntimeDirectoryMode=0700
@@ -26,7 +26,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/opt/aura/data
+ReadWritePaths=/opt/aura/data /opt/aura/bin/cuda-cache
 Nice=5
 TasksMax=1024
 
