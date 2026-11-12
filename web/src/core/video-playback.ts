@@ -16,7 +16,7 @@ interface PlaybackCallbacks {
   onModeChange: (representation: PlaybackRepresentation) => void;
   onDescriptor: (descriptor: PlaybackDescriptor) => void;
   onSwitch: (time: number) => void;
-  onError: (message: string) => void;
+  onError: (message: string, resumeOnly?: boolean) => void;
 }
 
 export class VideoPlayback {
@@ -32,6 +32,7 @@ export class VideoPlayback {
   private suspended = false;
   private wantsPlayback = false;
   private loaded = false;
+  private sourceGeneration = 0;
   private targetTime = 0;
   private rate = 1;
   private silentAudioStart?: number;
@@ -143,7 +144,16 @@ export class VideoPlayback {
     this.targetTime = this.video.ended ? 0 : this.video.currentTime || this.targetTime;
     this.rate = this.video.playbackRate;
     this.startLoading();
-    return this.video.play();
+    return this.playMedia();
+  }
+
+  private playMedia(): Promise<void> {
+    const generation = this.sourceGeneration;
+    return this.video.play().catch((error: DOMException) => {
+      // A replaced source can reject its pending play after the new source has started.
+      if (this.disposed || generation !== this.sourceGeneration) return;
+      throw error;
+    });
   }
 
   played(): boolean {
@@ -237,12 +247,13 @@ export class VideoPlayback {
         if (this.suspended) return;
         this.startLoading();
         if (this.wantsPlayback) {
-          void this.video.play().catch((error: DOMException) => {
+          void this.playMedia().catch((error: DOMException) => {
             if (this.disposed || error.name === "AbortError") return;
             this.callbacks.onError(
               error.name === "NotAllowedError"
                 ? "点按播放以继续"
                 : "视频加载失败，请重试",
+              error.name === "NotAllowedError",
             );
           });
         }
@@ -302,6 +313,7 @@ export class VideoPlayback {
   };
 
   private resetMedia(): void {
+    this.sourceGeneration += 1;
     this.resetAudioCheck();
     this.ready = false;
     this.loaded = false;

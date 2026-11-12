@@ -426,6 +426,7 @@ export function StageVideoPlayer({
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(live || !!framePicker);
   const [errorMsg, setErrorMsg] = useState("");
+  const [resumeOnly, setResumeOnly] = useState(false);
   const [sourceReady, setSourceReady] = useState(false);
   const [playbackRepresentation, setPlaybackRepresentation] =
     useState<PlaybackRepresentation>(null);
@@ -544,6 +545,7 @@ export function StageVideoPlayer({
     setCurrentTime(retained?.time || 0);
     setPlaying(false);
     setErrorMsg("");
+    setResumeOnly(false);
     setBufferedRanges([]);
     setBuffering(isFramePicker || live || !!retained?.started);
     if (!retained) {
@@ -568,6 +570,7 @@ export function StageVideoPlayer({
       },
       onSwitch: (time) => {
         setErrorMsg("");
+        setResumeOnly(false);
         setBuffering(true);
         setPlaying(false);
         setCurrentTime(time);
@@ -576,8 +579,9 @@ export function StageVideoPlayer({
         measuredFrameInterval.current = undefined;
         callbacksRef.current.onFrame?.({ time, duration: el.duration || 0, ready: false });
       },
-      onError: (message) => {
+      onError: (message, resume) => {
         setErrorMsg(message);
+        setResumeOnly(!!resume);
         setBuffering(false);
         setPlaying(false);
         callbacksRef.current.onPlaybackChange(false);
@@ -662,12 +666,14 @@ export function StageVideoPlayer({
     setStarted(true);
     setBuffering(true);
     setErrorMsg("");
+    setResumeOnly(false);
     try {
       await source.play();
     } catch (err) {
-      if (!isMounted.current || (err as DOMException).name === "AbortError") return;
+      if (!isMounted.current || playbackRef.current !== source || (err as DOMException).name === "AbortError") return;
       if ((err as DOMException).name !== "NotAllowedError" && source.handleMediaError()) return;
       setBuffering(false);
+      setResumeOnly((err as DOMException).name === "NotAllowedError");
       setErrorMsg(
         (err as DOMException).name === "NotAllowedError"
           ? "点按播放以继续"
@@ -901,6 +907,8 @@ export function StageVideoPlayer({
         onPlaying={() => {
           playbackRef.current?.settled();
           setBuffering(false);
+          setErrorMsg("");
+          setResumeOnly(false);
         }}
         onWaiting={() => setBuffering(true)}
         onSeeking={() => {
@@ -929,6 +937,7 @@ export function StageVideoPlayer({
           if (isMounted.current && videoRef.current?.error) {
             if (playbackRef.current?.handleMediaError()) return;
             setErrorMsg("视频加载失败，请重试");
+            setResumeOnly(false);
             setBuffering(false);
             setPlaying(false);
             callbacksRef.current.onPlaybackChange(false);
@@ -977,8 +986,13 @@ export function StageVideoPlayer({
             <span>{errorMsg}</span>
             <button
               type="button"
-              disabled={locked}
+              disabled={locked || (resumeOnly && !sourceReady)}
               onClick={async () => {
+                // Keep play in the tap handler when the browser requires a user gesture.
+                if (resumeOnly) {
+                  void startPlayback();
+                  return;
+                }
                 const source = playbackRef.current;
                 if (!source) return;
                 setErrorMsg("");
@@ -995,7 +1009,7 @@ export function StageVideoPlayer({
                 }
               }}
             >
-              重试
+              {resumeOnly ? "继续播放" : "重试"}
             </button>
           </div>
         )}
