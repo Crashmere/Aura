@@ -27,6 +27,7 @@ import {
   RotateCcw,
   RotateCw,
   Scissors,
+  ShieldCheck,
   Sliders,
   Sparkles,
   Star,
@@ -149,6 +150,7 @@ export function LightboxStudio({
   const [playingVideoFileState, setPlayingVideoFile] = useState<StoredFile | null>(null);
   const [playingLiveState, setPlayingLive] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
+  const [playbackDiagnosticsOpen, setPlaybackDiagnosticsOpen] = useState(false);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoTab, setInfoTab] = useState<"overview" | "versions" | "edits" | "raw">("overview");
@@ -987,6 +989,17 @@ export function LightboxStudio({
             <MotionPresence present={moreMenuOpen} variant="menu">
               {moreMenuOpen && (
                 <div className="lightbox-dropdown" role="menu">
+                  {isVideoStage && !coverPickerOpen && <>
+                    <button type="button" role="menuitem" disabled={isLocked} onClick={() => {
+                      rootRef.current?.querySelector<HTMLButtonElement>("[data-player-compatibility]")?.click();
+                      setMoreMenuOpen(false);
+                    }}><ShieldCheck size={16} />使用兼容模式播放</button>
+                    <button type="button" role="menuitem" onClick={() => {
+                      setPlaybackDiagnosticsOpen(true);
+                      setMoreMenuOpen(false);
+                    }}><Info size={16} />播放诊断</button>
+                    <hr />
+                  </>}
                   <div className="mobile-viewer-actions">
                     {longPhoto && <button type="button" role="menuitem" disabled={isLocked} onClick={() => { zoomToWidth(); setMoreMenuOpen(false); }}><ZoomIn size={16} />适应宽度阅读</button>}
                     {!isVideoStage && zoomScale > 1.01 && <button type="button" role="menuitem" onClick={() => { setZoomScale(1); setPanOffset({ x: 0, y: 0 }); setMoreMenuOpen(false); }}><ZoomOut size={16} />查看整图</button>}
@@ -1208,6 +1221,8 @@ export function LightboxStudio({
                 live={playingLive || (coverPickerOpen && effectiveAsset.kind === "live")}
                 rotationDelta={rotationDelta}
                 locked={isLocked}
+                diagnosticsOpen={playbackDiagnosticsOpen}
+                onCloseDiagnostics={() => setPlaybackDiagnosticsOpen(false)}
                 chromeHidden={chromeHidden}
                 onToggleChrome={() => { if (!chromePinned) setChromeHidden((v) => !v); }}
                 onActivity={revealChrome}

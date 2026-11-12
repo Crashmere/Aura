@@ -36,6 +36,9 @@ export class VideoPlayback {
   private targetTime = 0;
   private rate = 1;
   private silentAudioStart?: number;
+  private diagnosticEvents: { event: string; at: number; time: number; paused: boolean; ready: number }[] = [];
+  private readonly diagnosticStart = performance.now();
+  private readonly observedEvents = ["play", "playing", "pause", "waiting", "stalled", "seeking", "seeked", "loadedmetadata", "loadeddata", "emptied", "error"];
 
   constructor(
     private video: HTMLVideoElement,
@@ -49,6 +52,44 @@ export class VideoPlayback {
     video.addEventListener("loadedmetadata", this.restorePosition);
     video.addEventListener("timeupdate", this.checkSourceAudio);
     video.addEventListener("seeking", this.resetAudioCheck);
+    for (const event of this.observedEvents) video.addEventListener(event, this.observeMedia);
+  }
+
+  private observeMedia = (event: Event): void => { this.recordEvent(event.type); };
+
+  private recordEvent(event: string): void {
+    this.diagnosticEvents.push({
+      event,
+      at: Math.round(performance.now() - this.diagnosticStart),
+      time: this.video.currentTime,
+      paused: this.video.paused,
+      ready: this.video.readyState,
+    });
+    if (this.diagnosticEvents.length > 30) this.diagnosticEvents.shift();
+  }
+
+  getDiagnostics() {
+    const video = this.video;
+    return {
+      mode: this.mode,
+      ready: this.ready,
+      wantsPlayback: this.wantsPlayback,
+      suspended: this.suspended,
+      changingSource: this.changingSource,
+      time: video.currentTime,
+      targetTime: this.targetTime,
+      duration: video.duration,
+      paused: video.paused,
+      seeking: video.seeking,
+      ended: video.ended,
+      rate: video.playbackRate,
+      muted: video.muted,
+      readyState: video.readyState,
+      networkState: video.networkState,
+      buffered: Array.from({ length: video.buffered.length }, (_, index) => [video.buffered.start(index), video.buffered.end(index)]),
+      error: video.error ? { code: video.error.code, message: video.error.message } : null,
+      events: [...this.diagnosticEvents],
+    };
   }
 
   get changingSource(): boolean {
@@ -143,15 +184,19 @@ export class VideoPlayback {
     this.suspended = false;
     this.targetTime = this.video.ended ? 0 : this.video.currentTime || this.targetTime;
     this.rate = this.video.playbackRate;
+    this.recordEvent("request-play");
     this.startLoading();
     return this.playMedia();
   }
 
   private playMedia(): Promise<void> {
     const generation = this.sourceGeneration;
-    return this.video.play().catch((error: DOMException) => {
+    return this.video.play().then(() => {
+      if (!this.disposed && generation === this.sourceGeneration) this.recordEvent("play-resolved");
+    }).catch((error: DOMException) => {
       // A replaced source can reject its pending play after the new source has started.
       if (this.disposed || generation !== this.sourceGeneration) return;
+      this.recordEvent(`play-rejected:${error.name}`);
       throw error;
     });
   }
@@ -178,6 +223,7 @@ export class VideoPlayback {
     this.wantsPlayback = false;
     this.suspended = false;
     this.targetTime = Math.max(0, time);
+    this.recordEvent("request-frame");
     this.startLoading();
     if (this.video.readyState >= 1) this.restorePosition();
   }
@@ -203,6 +249,7 @@ export class VideoPlayback {
   suspend(): void {
     this.suspended = true;
     this.wantsPlayback = false;
+    this.recordEvent("request-suspend");
     this.video.pause();
     this.hls?.stopLoad();
   }
@@ -229,13 +276,18 @@ export class VideoPlayback {
     return this.useCompatibility();
   }
 
-  useCompatibility(): boolean {
+  useCompatibility(resume = false): boolean {
+    if (resume && (this.mode === "source" || this.mode === "switching")) {
+      this.wantsPlayback = true;
+      this.suspended = false;
+    }
     if (this.mode === "switching") return true;
     if (this.mode !== "source" || !this.descriptor) return false;
     this.sourceFailed = true;
     this.targetTime = this.video.currentTime || this.targetTime;
     this.rate = this.video.playbackRate;
     this.switching = true;
+    this.recordEvent("request-compatibility");
     this.mode = "switching";
     this.callbacks.onSwitch(this.targetTime);
     this.resetMedia();
@@ -334,6 +386,7 @@ export class VideoPlayback {
     this.video.removeEventListener("loadedmetadata", this.restorePosition);
     this.video.removeEventListener("timeupdate", this.checkSourceAudio);
     this.video.removeEventListener("seeking", this.resetAudioCheck);
+    for (const event of this.observedEvents) this.video.removeEventListener(event, this.observeMedia);
     this.resetMedia();
   }
 }

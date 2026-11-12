@@ -395,6 +395,8 @@ export function StageVideoPlayer({
   onNext,
   onClose,
   framePicker,
+  diagnosticsOpen = false,
+  onCloseDiagnostics,
 }: {
   asset: CatalogAsset;
   live?: boolean;
@@ -408,6 +410,8 @@ export function StageVideoPlayer({
   onPrevious: () => void;
   onNext: () => void;
   onClose: () => void;
+  diagnosticsOpen?: boolean;
+  onCloseDiagnostics?: () => void;
   framePicker?: {
     initialTime: number;
     onChange: (frame: FramePlayheadState) => void;
@@ -427,6 +431,8 @@ export function StageVideoPlayer({
   const [buffering, setBuffering] = useState(live || !!framePicker);
   const [errorMsg, setErrorMsg] = useState("");
   const [resumeOnly, setResumeOnly] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<ReturnType<VideoPlayback["getDiagnostics"]> | null>(null);
+  const [diagnosticsCopy, setDiagnosticsCopy] = useState("");
   const [sourceReady, setSourceReady] = useState(false);
   const [playbackRepresentation, setPlaybackRepresentation] =
     useState<PlaybackRepresentation>(null);
@@ -657,6 +663,15 @@ export function StageVideoPlayer({
     if (locked || !isPresent) playbackRef.current?.suspend();
     else restorePausedFrame();
   }, [locked, isPresent]);
+
+  useEffect(() => {
+    if (!diagnosticsOpen) { setDiagnostics(null); return; }
+    setDiagnosticsCopy("");
+    const update = () => setDiagnostics(playbackRef.current?.getDiagnostics() || null);
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [diagnosticsOpen, sourceReady]);
 
   async function startPlayback() {
     const el = videoRef.current;
@@ -946,6 +961,29 @@ export function StageVideoPlayer({
         }}
       />
 
+      {diagnosticsOpen && (
+        <section className="player-diagnostics" aria-label="播放诊断">
+          <div className="player-diagnostics-actions">
+            <strong>播放诊断</strong>
+            <button type="button" onClick={() => {
+              const report = JSON.stringify({
+                video: asset.name,
+                userAgent: navigator.userAgent,
+                visibility: document.visibilityState,
+                standalone: window.matchMedia("(display-mode: standalone)").matches || !!(navigator as Navigator & { standalone?: boolean }).standalone,
+                bundle: document.querySelector<HTMLScriptElement>('script[type="module"][src]')?.getAttribute("src"),
+                ...playbackRef.current?.getDiagnostics(),
+              }, null, 2);
+              if (!navigator.clipboard) { setDiagnosticsCopy("请选择下方文本复制"); return; }
+              void navigator.clipboard.writeText(report).then(() => setDiagnosticsCopy("已复制"), () => setDiagnosticsCopy("请选择下方文本复制"));
+            }}>复制诊断</button>
+            <button type="button" onClick={onCloseDiagnostics}>关闭</button>
+          </div>
+          {diagnosticsCopy && <small role="status">{diagnosticsCopy}</small>}
+          <pre>{JSON.stringify(diagnostics, null, 2)}</pre>
+        </section>
+      )}
+
       {started && playbackRepresentation === "compatibility" && (
         <span
           className="player-compatibility-badge"
@@ -1201,17 +1239,19 @@ export function StageVideoPlayer({
           </div>
 
           <div className="player-options">
-            {!framePicker && playbackRepresentation === "source" && (
+            {!framePicker && (
               <button
                 type="button"
                 title="使用兼容模式播放（转码）"
                 aria-label="使用兼容模式播放"
+                data-player-compatibility
+                hidden={playbackRepresentation !== "source"}
                 disabled={locked || !sourceReady}
                 onClick={() => {
-                  if (playbackRef.current?.useCompatibility()) {
+                  if (playbackRef.current?.useCompatibility(true)) {
                     setErrorMsg("");
                     setBuffering(true);
-                  }
+                  } else void startPlayback();
                 }}
               >
                 <ShieldCheck size={18} />

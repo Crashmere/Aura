@@ -289,6 +289,26 @@
   transition: opacity 0.22s var(--ease-out), transform 0.22s var(--ease-out);
 }
 
+.player-diagnostics {
+  position: absolute;
+  top: calc(84px + env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  z-index: 4;
+  max-height: calc(100dvh - 200px - env(safe-area-inset-top));
+  overflow: auto;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: rgba(20, 20, 18, 0.96);
+  color: #fff;
+  user-select: text;
+}
+.player-diagnostics-actions { display: flex; align-items: center; gap: 12px; }
+.player-diagnostics-actions strong { margin-right: auto; }
+.player-diagnostics-actions button { min-height: 44px; color: inherit; }
+.player-diagnostics pre { font-size: 11px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.player-buttons [data-player-compatibility][hidden] { display: none; }
+
 .player-seek-row {
   display: flex;
   align-items: center;
