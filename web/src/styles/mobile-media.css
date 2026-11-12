@@ -1,0 +1,55 @@
+.mobile-viewer-actions { display: none; }
+.aura-player.controls-hidden .player-controls,
+.lightbox-studio.is-immersive .lightbox-nav {
+  opacity: 0;
+  pointer-events: none;
+}
+.lightbox-dropdown a { display: flex; align-items: center; gap: 10px; padding: 10px; color: inherit; }
+.aura-player:fullscreen { background: #0d0d0c; width: 100%; height: 100%; }
+
+@media (max-width: 900px), (pointer: coarse) {
+  .lightbox-studio { height: 100dvh; overflow: hidden; }
+  .lightbox-workspace { position: absolute; inset: 0; }
+  .lightbox-topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    flex-wrap: nowrap; gap: 6px; min-height: 64px;
+    padding: calc(8px + env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left));
+    background: linear-gradient(#0d0d0ce8, #0d0d0c8c);
+  }
+  .lightbox-title-group { flex: 1; width: auto; min-width: 0; }
+  .lightbox-title-text strong { font-size: 13px; }
+  .lightbox-title-text small { font-size: 11px; }
+  .lightbox-title-text .asset-album-badges { display: none; }
+  .lightbox-toolbar { flex: 0 0 auto; width: auto; flex-wrap: nowrap; gap: 0; }
+  .lightbox-toolbar > * { display: none; }
+  .lightbox-toolbar > .lightbox-more-wrap:last-of-type,
+  .lightbox-toolbar > .mobile-viewer-info,
+  .lightbox-toolbar > button[title="播放实况照片"] { display: inline-flex; }
+  .lightbox-toolbar > button[title="播放实况照片"] { width: 44px; height: 44px; padding: 0; justify-content: center; }
+  .lightbox-toolbar > button[title="播放实况照片"] span { display: none; }
+  .lightbox-topbar .icon-btn { width: 44px; height: 44px; }
+  .mobile-viewer-actions { display: contents; }
+  .lightbox-dropdown { top: calc(100% + 4px); right: max(8px, env(safe-area-inset-right)); max-height: min(650px, 76dvh); overflow-y: auto; }
+  .lightbox-dropdown button, .lightbox-dropdown a { min-height: 44px; font-size: 13px; gap: 10px; }
+  .lightbox-footer-reveal { display: none; position: absolute; bottom: 0; left: 0; right: 0; z-index: 5; }
+  .lightbox-studio.with-filmstrip .lightbox-footer-reveal { display: block; }
+  .lightbox-bottom-bar { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .lightbox-nav { width: 44px; height: 44px; }
+  .lightbox-nav.prev { left: max(8px, env(safe-area-inset-left)); }
+  .lightbox-nav.next { right: max(8px, env(safe-area-inset-right)); }
+  .lightbox-bar-reveal:not(.lightbox-footer-reveal) { position: absolute; top: calc(64px + env(safe-area-inset-top)); left: 0; right: 0; z-index: 6; max-height: 48dvh; overflow-y: auto; }
+  .inspector-reveal { position: absolute; bottom: 0; left: 0; right: 0; z-index: 7; }
+  .inspector-reveal .lightbox-inspector { max-height: 60dvh; padding-bottom: env(safe-area-inset-bottom); border-radius: 18px 18px 0 0; }
+  .player-controls { left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); bottom: calc(12px + env(safe-area-inset-bottom)); padding: 8px 10px; gap: 2px; }
+  .player-buttons { gap: 4px; }
+  .player-volume, .player-transport, .player-options { gap: 0; }
+  .player-buttons button { min-width: 44px; height: 44px; font-size: 13px; }
+  .player-volume input, .player-transport > button:not(.player-toggle), .player-options > button:not(.player-speed):not([data-player-fullscreen]) { display: none; }
+  .player-seek input[type="range"] { height: 44px; touch-action: none; }
+  .player-time { font-size: 11px; min-width: 32px; }
+  .aura-player.is-frame-picker .player-frame-step { display: inline-flex; }
+  .lightbox-studio.with-filmstrip .player-controls { bottom: calc(78px + env(safe-area-inset-bottom)); }
+  .viewer-image-loading, .viewer-quality-action { bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .viewer-quality-action button { min-height: 44px; }
+  .aura-player:fullscreen .player-controls { bottom: calc(12px + env(safe-area-inset-bottom)); }
+}

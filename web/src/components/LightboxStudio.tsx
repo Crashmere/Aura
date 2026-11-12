@@ -159,6 +159,8 @@ export function LightboxStudio({
   const [locating, setLocating] = useState(false);
   const locateMenuRef = useRef<HTMLDivElement>(null);
   const [chromeHidden, setChromeHidden] = useState(false);
+  const [filmstripOpen, setFilmstripOpen] = useState(false);
+  const chromeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const [rotationDeltaState, setRotationDelta] = useState(0);
   const [savingRotation, setSavingRotation] = useState(false);
@@ -188,8 +190,10 @@ export function LightboxStudio({
     pinchDist: number;
     startZoom: number;
     moved: boolean;
+    pinched: boolean;
   } | null>(null);
-  const lastTapRef = useRef<number>(0);
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Navigation must not mount the outgoing asset's live/video resources for the new photo.
   const hasCurrentTransients = transientAssetId === asset.id;
@@ -229,8 +233,32 @@ export function LightboxStudio({
     setIsDragging(false);
     pointersRef.current.clear();
     gestureStartRef.current = null;
-    lastTapRef.current = 0;
+    lastTapRef.current = null;
+    clearTimeout(tapTimer.current);
   }, [asset.id]);
+
+  useEffect(() => () => {
+    clearTimeout(tapTimer.current);
+    clearTimeout(chromeTimer.current);
+  }, []);
+
+  const chromePinned = infoOpen || moreMenuOpen || locateMenuOpen || coverPickerOpen || rotationDelta !== 0;
+  useEffect(() => {
+    clearTimeout(chromeTimer.current);
+    if (chromePinned) {
+      setChromeHidden(false);
+    } else if (videoPlaying && !chromeHidden) {
+      chromeTimer.current = setTimeout(() => setChromeHidden(true), 2600);
+    }
+    return () => clearTimeout(chromeTimer.current);
+  }, [videoPlaying, chromeHidden, chromePinned, asset.id]);
+  useEffect(() => { if (!videoPlaying) setChromeHidden(false); }, [videoPlaying]);
+
+  function revealChrome() {
+    setChromeHidden(false);
+    clearTimeout(chromeTimer.current);
+    if (videoPlaying && !chromePinned) chromeTimer.current = setTimeout(() => setChromeHidden(true), 2600);
+  }
 
   useEffect(() => {
     if (!locateMenuOpen) return;
@@ -565,7 +593,9 @@ export function LightboxStudio({
 
   // Pointer gestures on photo stage
   const handleStagePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (isVideoStage || e.button !== 0) return;
+    if (isVideoStage || isLocked || e.button !== 0 ||
+      (e.target instanceof Element && e.target.closest("button, a, input"))) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const pts = [...pointersRef.current.values()];
     if (pts.length === 2) {
@@ -578,6 +608,7 @@ export function LightboxStudio({
         pinchDist: Math.max(10, dist),
         startZoom: zoomScale,
         moved: true,
+        pinched: true,
       };
     } else if (pts.length === 1) {
       gestureStartRef.current = {
@@ -588,6 +619,7 @@ export function LightboxStudio({
         pinchDist: 0,
         startZoom: zoomScale,
         moved: false,
+        pinched: false,
       };
     }
   };
@@ -603,8 +635,14 @@ export function LightboxStudio({
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       setIsDragging(true);
       const nextZoom = Math.max(1, Math.min(5, start.startZoom * (dist / start.pinchDist)));
+      const rect = stageRef.current!.getBoundingClientRect();
+      const midpoint = { x: (pts[0].x + pts[1].x) / 2 - rect.left - rect.width / 2,
+        y: (pts[0].y + pts[1].y) / 2 - rect.top - rect.height / 2 };
+      const anchor = { x: start.x - rect.left - rect.width / 2, y: start.y - rect.top - rect.height / 2 };
+      const ratio = nextZoom / start.startZoom;
       setZoomScale(nextZoom);
-      if (nextZoom <= 1.01) setPanOffset({ x: 0, y: 0 });
+      setPanOffset(clampPhotoPan({ x: midpoint.x - (anchor.x - start.panX) * ratio,
+        y: midpoint.y - (anchor.y - start.panY) * ratio }, nextZoom, rect.width, rect.height));
       return;
     }
 
@@ -625,30 +663,39 @@ export function LightboxStudio({
   const handleStagePointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     pointersRef.current.delete(e.pointerId);
     const start = gestureStartRef.current;
+    if (pointersRef.current.size === 1 && start?.pinched) {
+      const remaining = [...pointersRef.current.values()][0];
+      gestureStartRef.current = { x: remaining.x, y: remaining.y, panX: panOffset.x,
+        panY: panOffset.y, pinchDist: 0, startZoom: zoomScale, moved: true, pinched: true };
+      return;
+    }
     if (pointersRef.current.size === 0) {
       gestureStartRef.current = null;
       setIsDragging(false);
     }
-    if (!start || isVideoStage) return;
+    if (!start || isVideoStage || start.pinched || e.type === "pointercancel") return;
 
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
 
     if (!start.moved) {
       const now = Date.now();
-      if (now - lastTapRef.current < 280) {
-        lastTapRef.current = 0;
+      const last = lastTapRef.current;
+      if (last && now - last.time < 280 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 32) {
+        clearTimeout(tapTimer.current);
+        lastTapRef.current = null;
         if (zoomScale > 1.01) {
           setZoomScale(1);
           setPanOffset({ x: 0, y: 0 });
         } else {
+          const rect = stageRef.current!.getBoundingClientRect();
           setZoomScale(2.5);
+          setPanOffset(clampPhotoPan({ x: (e.clientX - rect.left - rect.width / 2) * -1.5,
+            y: (e.clientY - rect.top - rect.height / 2) * -1.5 }, 2.5, rect.width, rect.height));
         }
       } else {
-        lastTapRef.current = now;
-        if (zoomScale <= 1.01) {
-          setChromeHidden((v) => !v);
-        }
+        lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+        tapTimer.current = setTimeout(() => { if (!chromePinned) setChromeHidden((v) => !v); }, 280);
       }
       return;
     }
@@ -704,7 +751,7 @@ export function LightboxStudio({
 
   return (
     <div
-      className={`lightbox-studio ${chromeHidden ? "is-immersive" : ""} ${infoOpen ? "with-inspector" : ""}`}
+      className={`lightbox-studio ${chromeHidden ? "is-immersive" : ""} ${infoOpen ? "with-inspector" : ""} ${filmstripOpen ? "with-filmstrip" : ""}`}
       ref={rootRef}
       tabIndex={-1}
       inert={covered}
@@ -904,6 +951,20 @@ export function LightboxStudio({
             <MotionPresence present={moreMenuOpen} variant="menu">
               {moreMenuOpen && (
                 <div className="lightbox-dropdown" role="menu">
+                  <div className="mobile-viewer-actions">
+                    <button type="button" role="menuitem" disabled={isLocked || coverPickerOpen} onClick={() => { rotateBy(-90); setMoreMenuOpen(false); }}><RotateCcw size={16} />向左旋转</button>
+                    <button type="button" role="menuitem" disabled={isLocked || coverPickerOpen} onClick={() => { rotateBy(90); setMoreMenuOpen(false); }}><RotateCw size={16} />向右旋转</button>
+                    {canPickCover && <button type="button" role="menuitem" disabled={isLocked} onClick={() => { openCoverEditor(); setMoreMenuOpen(false); }}><Film size={16} />{effectiveAsset.kind === "live" ? "选择实况主画面" : "选择视频封面"}</button>}
+                    <button type="button" role="menuitem" onClick={() => { setFilmstripOpen(v => !v); setMoreMenuOpen(false); }}><Layers3 size={16} />{filmstripOpen ? "收起相邻照片与版本" : "相邻照片与版本"}</button>
+                    {!asset.trashedAt && <>
+                      <button type="button" role="menuitem" disabled={isLocked} onClick={() => { setMoreMenuOpen(false); onOpenAlbumAdd(); }}><FolderPlus size={16} />加入相片集</button>
+                      <button type="button" role="menuitem" disabled={isLocked || locating} onClick={() => { setMoreMenuOpen(false); void locateAsset(currentAlbumId || assetAlbums[0]?.id || ""); }}><TimelineCrosshairIcon />定位照片</button>
+                    </>}
+                    <a role="menuitem" href={asset.variants > 1 ? `${APP_BASE}api/assets/${asset.id}/download` : buildMediaUrl(effectiveAsset.primary, "original")} download><Download size={16} />下载原件</a>
+                    <button type="button" role="menuitem" disabled={isLocked} onClick={() => { setMoreMenuOpen(false); void onUpdateAsset({ trash: !asset.trashedAt }); }}><Trash2 size={16} />{asset.trashedAt ? "恢复照片" : "移入最近删除"}</button>
+                    {asset.trashedAt && <button type="button" role="menuitem" disabled={isLocked} onClick={() => { setMoreMenuOpen(false); onRequestPurge(asset); }}><Trash2 size={16} />永久删除</button>}
+                    <hr />
+                  </div>
                   {!asset.trashedAt && (
                     <button type="button" role="menuitem" disabled={isLocked} onClick={() => {
                       setMoreMenuOpen(false);
@@ -966,6 +1027,7 @@ export function LightboxStudio({
           </div>
 
           <RoundIconButton
+            className="mobile-viewer-info"
             title="信息与原始资源面版（I）"
             active={infoOpen}
             onClick={() => setInfoOpen((v) => !v)}
@@ -1111,8 +1173,9 @@ export function LightboxStudio({
                 live={playingLive || (coverPickerOpen && effectiveAsset.kind === "live")}
                 rotationDelta={rotationDelta}
                 locked={isLocked}
-                onToggleChrome={() => setChromeHidden((v) => !v)}
-                onActivity={() => {}}
+                chromeHidden={chromeHidden}
+                onToggleChrome={() => { if (!chromePinned) setChromeHidden((v) => !v); }}
+                onActivity={revealChrome}
                 onPlaybackChange={setVideoPlaying}
                 onEnded={() => {
                   if (playingLive) setPlayingLive(false);
@@ -1135,6 +1198,7 @@ export function LightboxStudio({
                 asset={effectiveAsset}
                 zoomed={zoomScale > 1.05}
                 rotationDelta={rotationDelta}
+                originalMime={activeFile?.mime}
                 onClearReady={handleClearPhotoReady}
               />
             )}

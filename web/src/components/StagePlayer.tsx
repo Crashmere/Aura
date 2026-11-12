@@ -80,11 +80,13 @@ export function ProgressiveStagePhoto({
   asset,
   zoomed = false,
   rotationDelta = 0,
+  originalMime,
   onClearReady,
 }: {
   asset: CatalogAsset;
   zoomed?: boolean;
   rotationDelta?: number;
+  originalMime?: string;
   onClearReady: () => void;
 }) {
   const mediaPolicy = useNetworkMediaPolicy();
@@ -96,6 +98,30 @@ export function ProgressiveStagePhoto({
   const detailImgRef = useRef<HTMLImageElement>(null);
   const frameBoxRef = useRef<HTMLDivElement>(null);
   const rotationCss = useQuarterTurnBoxStyle(frameBoxRef, rotationDelta);
+  const originalRotationCss = useQuarterTurnBoxStyle(frameBoxRef, (asset.rotation || 0) + rotationDelta);
+  const [originalReady, setOriginalReady] = useState(false);
+  const [originalLoading, setOriginalLoading] = useState(false);
+  const [originalFailed, setOriginalFailed] = useState(false);
+  const originalUrl = buildMediaUrl(asset.primary, "original");
+  const format = originalMime || asset.name.split(".").pop()?.toLowerCase() || "";
+  const browserOriginal = !asset.cover && /^(image\/(jpeg|png|webp|avif)|jpe?g|png|webp|avif)$/.test(format)
+    && asset.size <= 32 * 1024 * 1024 && asset.width * asset.height <= 40_000_000;
+  useEffect(() => {
+    if (!zoomed || !browserOriginal || originalReady || originalFailed) return;
+    let active = true;
+    const image = new Image();
+    const timer = setTimeout(() => {
+      setOriginalLoading(true);
+      image.onload = async () => {
+        try { await image.decode(); if (active) setOriginalReady(true); }
+        catch { if (active) setOriginalFailed(true); }
+        finally { if (active) setOriginalLoading(false); }
+      };
+      image.onerror = () => { if (active) { setOriginalFailed(true); setOriginalLoading(false); } };
+      image.src = originalUrl;
+    }, 300);
+    return () => { active = false; clearTimeout(timer); image.src = ""; setOriginalLoading(false); };
+  }, [zoomed, browserOriginal, originalReady, originalFailed, originalUrl]);
 
   const dims = orientedDimensions({
     ...asset,
@@ -183,8 +209,8 @@ export function ProgressiveStagePhoto({
           <img
             ref={detailImgRef}
             className={`viewer-image-detail ${clearLoaded ? "is-ready" : ""}`}
-            style={rotationCss}
-            src={activePreviewUrl}
+            style={originalReady ? originalRotationCss : rotationCss}
+            src={originalReady ? originalUrl : activePreviewUrl}
             alt=""
             aria-hidden="true"
             decoding="async"
@@ -198,17 +224,23 @@ export function ProgressiveStagePhoto({
                 /* Decoded enough to display */
               }
               if (detailImgRef.current !== target) return;
-              cacheDecodedPreview(target);
+              if (!originalReady) cacheDecodedPreview(target);
               setClearLoaded(true);
               setClearFailed(false);
             }}
             onError={() => {
+              if (originalReady) { setOriginalReady(false); setOriginalFailed(true); return; }
               setClearFailed(true);
               setClearLoaded(false);
             }}
           />
         )}
       </div>
+
+      {zoomed && clearLoaded && <div className="viewer-image-loading" role="status">
+        {originalLoading && <LoaderCircle size={15} className="spin" />}
+        <span>{originalLoading ? "正在加载原图细节" : originalReady ? "原图" : "清晰预览"}</span>
+      </div>}
 
       <MotionPresence present={!clearLoaded && mountClearImg && !clearFailed} variant="panel">
         {!clearLoaded && mountClearImg && !clearFailed && (
@@ -350,6 +382,7 @@ export function StageVideoPlayer({
   live = false,
   rotationDelta = 0,
   locked,
+  chromeHidden = false,
   onToggleChrome,
   onActivity,
   onPlaybackChange,
@@ -363,6 +396,7 @@ export function StageVideoPlayer({
   live?: boolean;
   rotationDelta?: number;
   locked: boolean;
+  chromeHidden?: boolean;
   onToggleChrome: () => void;
   onActivity: () => void;
   onPlaybackChange: (playing: boolean) => void;
@@ -379,6 +413,9 @@ export function StageVideoPlayer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageBoxRef = useRef<HTMLDivElement>(null);
   const rotationCss = useQuarterTurnBoxStyle(stageBoxRef, rotationDelta);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [controlsHidden, setControlsHidden] = useState(false);
+  const controlTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const [started, setStarted] = useState(live || !!framePicker);
   const [playing, setPlaying] = useState(false);
@@ -403,12 +440,31 @@ export function StageVideoPlayer({
   const activeScrubValue = useRef<number | null>(null);
   const pendingPreviewTime = useRef<number | null>(null);
   const seekRafId = useRef(0);
-  const touchStart = useRef<{ x: number; y: number } | undefined>(undefined);
+  const touchStart = useRef<{ id: number; x: number; y: number; canceled: boolean } | undefined>(undefined);
   const ignoreNextClick = useRef(false);
   const isMounted = useRef(true);
   const lastObservedMediaTime = useRef<number | undefined>(undefined);
   const measuredFrameInterval = useRef<number | undefined>(undefined);
   const playbackRef = useRef<VideoPlayback | null>(null);
+
+  useEffect(() => {
+    const changed = () => setFullscreen(document.fullscreenElement === stageBoxRef.current);
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+  useEffect(() => {
+    clearTimeout(controlTimer.current);
+    if (!playing || buffering || errorMsg || framePicker) setControlsHidden(false);
+    else controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
+    return () => clearTimeout(controlTimer.current);
+  }, [playing, buffering, errorMsg, fullscreen, !!framePicker]);
+
+  function controlActivity() {
+    setControlsHidden(false);
+    clearTimeout(controlTimer.current);
+    if (playing && !buffering && !framePicker) controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
+    onActivity();
+  }
   const retainedPlaybackRef = useRef<{
     hash: string;
     time: number;
@@ -684,9 +740,10 @@ export function StageVideoPlayer({
     const el = videoRef.current as WebkitFullscreenVideo | null;
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
-      else if (stageBoxRef.current?.requestFullscreen)
-        await stageBoxRef.current.requestFullscreen();
-      else el?.webkitEnterFullscreen?.();
+      else if (stageBoxRef.current?.requestFullscreen) {
+        try { await stageBoxRef.current.requestFullscreen(); }
+        catch (error) { if (el?.webkitEnterFullscreen) el.webkitEnterFullscreen(); else throw error; }
+      } else el?.webkitEnterFullscreen?.();
     } catch {
       setErrorMsg("暂时无法进入全屏");
     }
@@ -714,7 +771,7 @@ export function StageVideoPlayer({
   return (
     <div
       ref={stageBoxRef}
-      className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""} ${framePicker ? "is-frame-picker" : ""}`}
+      className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""} ${framePicker ? "is-frame-picker" : ""} ${playing && !buffering && !errorMsg && !framePicker && (fullscreen ? controlsHidden : chromeHidden) ? "controls-hidden" : ""}`}
     >
       <video
         ref={videoRef}
@@ -731,7 +788,13 @@ export function StageVideoPlayer({
         aria-label={live ? `${asset.name} · 实况` : asset.name}
         onPointerDown={(e) => {
           if (e.pointerType === "touch" && !locked && !framePicker) {
-            touchStart.current = { x: e.clientX, y: e.clientY };
+            if (touchStart.current) {
+              touchStart.current.canceled = true;
+              ignoreNextClick.current = true;
+              return;
+            }
+            e.currentTarget.setPointerCapture(e.pointerId);
+            touchStart.current = { id: e.pointerId, x: e.clientX, y: e.clientY, canceled: false };
             ignoreNextClick.current = false;
           }
         }}
@@ -745,8 +808,9 @@ export function StageVideoPlayer({
         }}
         onPointerUp={(e) => {
           const start = touchStart.current;
+          if (!start || start.id !== e.pointerId) return;
           touchStart.current = undefined;
-          if (!start || locked) return;
+          if (start.canceled || locked) return;
           const dx = e.clientX - start.x;
           const dy = e.clientY - start.y;
           if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.4) {
@@ -767,7 +831,10 @@ export function StageVideoPlayer({
             return;
           }
           if (!started || !playing) togglePlayPause();
-          else onToggleChrome();
+          else if (fullscreen) {
+            if (controlsHidden) controlActivity();
+            else setControlsHidden(true);
+          } else onToggleChrome();
         }}
         onLoadedMetadata={(e) => {
           const el = e.currentTarget;
@@ -930,9 +997,10 @@ export function StageVideoPlayer({
         className="player-controls"
         onPointerDown={(e) => {
           e.stopPropagation();
-          onActivity();
+          controlActivity();
         }}
         onPointerMove={(e) => e.stopPropagation()}
+        onPointerEnter={controlActivity}
       >
         <div className="player-seek-row">
           <span className="player-time">{formatDurationClock(effectiveTime)}</span>
