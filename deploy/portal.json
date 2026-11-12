@@ -45,7 +45,7 @@
       "name": "GPU 编译缓存",
       "path": "/opt/aura/bin/cuda-cache",
       "purpose": "独立的 32 MiB CUDA 编译缓存，跨 Aura 重启复用；不含照片、播放片段或恢复数据，可由运行时重新生成。",
-      "kind": "cache",
+      "kind": "binaries",
       "browse": false,
       "cleanup": false
     },
