@@ -24,6 +24,7 @@ import {
   ListChecks,
   LoaderCircle,
   Menu,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
@@ -44,6 +45,7 @@ import {
 } from "./core/importer";
 import { ConfirmPurgeModal, PurgeStatusBanner, usePurgeTracker } from "./core/purge-tracker";
 import { CollapsibleRegion, MotionPresence, prefersReducedMotion, useSlidingIndicator } from "./core/motion";
+import { useCompactViewer, usePageScrollLock } from "./core/photo-view";
 import type {
   AlbumGroup,
   AlbumItem,
@@ -87,11 +89,13 @@ import { LightboxStudio } from "./components/LightboxStudio";
 import { PipelineTaskCenter } from "./components/PipelineCenter";
 import { CurrentAlbumContext } from "./components/AssetAlbumBadges";
 import { MergePhotosModal } from "./components/MergePhotosModal";
+import { MobileActionSheet } from "./components/MobileActionSheet";
 import { SimilarPhotosModal } from "./components/SimilarPhotosModal";
 import { VideoComparisonModal } from "./components/VideoComparisonModal";
 import {
   type DayAssetGroup,
   type TimelineJump,
+  DEFAULT_ZOOM_STEP,
   GridDensityControls,
   useGridDisplayPreferences,
   VirtualizedTimelineCanvas,
@@ -103,6 +107,7 @@ import "./styles/motion-gallery.css";
 import "./styles/motion-studios.css";
 import "./styles/motion-viewer.css";
 import "./styles/mobile-media.css";
+import "./styles/mobile-home.css";
 
 // ============================================================================
 // Global Keyboard Focus & Tab Interception Policy
@@ -166,6 +171,10 @@ function AuraApplication() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [monthRailOpen, setMonthRailOpen] = useState(false);
+  const [viewSettingsOpen, setViewSettingsOpen] = useState(false);
+  const [batchMenuOpen, setBatchMenuOpen] = useState(false);
+  const compact = useCompactViewer();
+  usePageScrollLock(compact && mobileNavOpen);
   const monthRailRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLElement>(null);
   const monthRailAnchorRef = useRef<number | null>(null);
@@ -237,6 +246,25 @@ function AuraApplication() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastClickedIdRef = useRef<string>("");
   const [batchBusy, setBatchBusy] = useState(false);
+
+  useEffect(() => {
+    setViewSettingsOpen(false);
+    setBatchMenuOpen(false);
+  }, [route.view, route.album, selecting, compact]);
+
+  useEffect(() => {
+    if (!compact) setMobileNavOpen(false);
+    if (!mobileNavOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setMobileNavOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [compact, mobileNavOpen]);
 
   // Modals & Studios
   const [uploadHubTab, setUploadHubTab] = useState<string | null>(null);
@@ -988,7 +1016,7 @@ function AuraApplication() {
         params.set("view", view);
         params.set("album", album);
       }
-      const columns = window.innerWidth <= 720 ? gridPrefs.mobileColumns : gridPrefs.columns;
+      const columns = compact ? gridPrefs.mobileColumns : gridPrefs.columns;
       const width = contentRef.current?.querySelector(".virtual-gallery")?.getBoundingClientRect().width || 960;
       const followingItems = (Math.ceil(window.innerHeight / Math.max(1, width / columns - 3)) + 2) * columns;
       const items: CatalogAsset[] = [];
@@ -1065,10 +1093,44 @@ function AuraApplication() {
   const activeChips = useMemo(() => buildActiveFilterChips(route.filters), [route.filters]);
   const hasAnyFilter = !!route.query || !!route.from || !!route.to || activeChips.length > 0;
 
+  const extraBatchActions = (
+    <>
+      {selectedIds.size === 2 && (
+        <>
+          <ActionButton disabled={batchBusy} onClick={() => {
+            const [idA, idB] = [...selectedIds];
+            const left = assets.find((asset) => asset.id === idA);
+            const right = assets.find((asset) => asset.id === idB);
+            if (left && right) setComparePair({ left, right });
+          }}>
+            <Columns2 size={15} /><span>对比所选</span>
+          </ActionButton>
+          <ActionButton disabled={batchBusy} onClick={batchMergeSelected}>
+            <Layers3 size={15} /><span>归并为一项</span>
+          </ActionButton>
+        </>
+      )}
+      {route.view !== "trash" && (
+        <>
+          <ActionButton disabled={batchBusy || !selectedIds.size}
+            onClick={() => setAlbumModal({ kind: "remove", assets: [...selectedIds] })}>
+            <FolderMinus size={15} /><span>移出相片集</span>
+          </ActionButton>
+          {route.view === "albums" && route.album && (
+            <ActionButton disabled={batchBusy || selectedIds.size !== 1}
+              onClick={() => void setSelectedAlbumCover()}>
+              <Images size={15} /><span>设为相片集封面</span>
+            </ActionButton>
+          )}
+        </>
+      )}
+    </>
+  );
+
   return (
     <CurrentAlbumContext value={route.view === "albums" ? route.album : ""}>
     <div
-      className="aura-shell"
+      className={`aura-shell ${selecting ? "is-selecting" : ""}`}
       onDrop={(e) => {
         e.preventDefault();
         setDragHover(false);
@@ -1081,8 +1143,11 @@ function AuraApplication() {
       }}
     >
       {/* Left Navigation Sidebar */}
-      <aside className={`aura-sidebar ${mobileNavOpen ? "is-open" : ""}`}>
+      <aside className={`aura-sidebar ${mobileNavOpen ? "is-open" : ""}`}
+        inert={compact && !mobileNavOpen} aria-hidden={compact && !mobileNavOpen || undefined}>
         <div className="sidebar-brand">
+          <button type="button" className="icon-btn mobile-sidebar-close"
+            aria-label="关闭导航菜单" onClick={() => setMobileNavOpen(false)}><X size={20} /></button>
           <div className="brand-mark">
             <img src="/aura/favicon.svg" alt="Aura" />
             <div>
@@ -1189,14 +1254,18 @@ function AuraApplication() {
               <button
                 type="button"
                 className="icon-btn mobile-menu-trigger"
-                aria-label="打开导航菜单"
-                onClick={() => setMobileNavOpen(true)}
+                aria-label={compact && route.view === "albums" && route.album ? "返回相片集" : "打开导航菜单"}
+                aria-expanded={mobileNavOpen}
+                onClick={() => compact && route.view === "albums" && route.album ? returnToAlbums() : setMobileNavOpen(true)}
               >
-                <Menu size={20} />
+                {compact && route.view === "albums" && route.album ? <ArrowLeft size={20} /> : <Menu size={20} />}
               </button>
 
-              {route.view === "albums" && route.album ? (
+              {compact && selecting ? (
+                <div className="header-title-block"><h1>已选 {selectedIds.size} 项</h1></div>
+              ) : route.view === "albums" && route.album ? (
                 <div className="album-breadcrumb" key={`album:${route.album}`}>
+                  {!compact && <>
                   <button
                     type="button"
                     className="btn btn-subtle"
@@ -1214,6 +1283,7 @@ function AuraApplication() {
                       <Pencil size={16} />
                     </RoundIconButton>
                   )}
+                  </>}
                   <h1>{activeAlbumDetail?.name || "相片集"}</h1>
                   {activeAlbumDetail && (
                     <small className="header-count-pill">{activeAlbumDetail.count} 项</small>
@@ -1227,6 +1297,17 @@ function AuraApplication() {
                   )}
                 </div>
               )}
+              <div className="mobile-header-actions">
+                {!selecting && <ActionButton onClick={() => setUploadHubTab("files")}>
+                  <CloudUpload size={17} /><span>导入</span>
+                </ActionButton>}
+                {currentModule.supportsBatchSelection && !isAlbumOverview && assets.length > 0 && (
+                  <ActionButton variant={selecting ? "primary" : "default"} onClick={() => {
+                    setSelecting(!selecting);
+                    setSelectedIds(new Set());
+                  }}>{selecting ? "完成" : "选择"}</ActionButton>
+                )}
+              </div>
             </div>
 
             <div className="header-controls">
@@ -1236,7 +1317,7 @@ function AuraApplication() {
                   <input
                     type="search"
                     aria-label="搜索照片文件名、相机或元数据"
-                    placeholder="搜索文件名、相机、镜头…"
+                    placeholder={compact ? "搜索照片…" : "搜索文件名、相机、镜头…"}
                     value={searchDraft}
                     onChange={(e) => setSearchDraft(e.target.value)}
                   />
@@ -1270,7 +1351,7 @@ function AuraApplication() {
                     )}
                   </button>
 
-                  {months.length > 0 && (
+                  {!compact && months.length > 0 && (
                     <button
                       type="button"
                       className={`btn ${monthRailOpen ? "btn-active-filter" : ""}`}
@@ -1282,7 +1363,7 @@ function AuraApplication() {
                     </button>
                   )}
 
-                  <GridDensityControls
+                  {!compact && <GridDensityControls
                     zoom={gridPrefs.zoom}
                     maxZoom={gridPrefs.maxZoom}
                     desktopColumnSteps={gridPrefs.desktopColumnSteps}
@@ -1290,7 +1371,11 @@ function AuraApplication() {
                     onZoomChange={gridPrefs.setZoom}
                     layout={gridPrefs.layout}
                     onLayoutChange={gridPrefs.setLayout}
-                  />
+                  />}
+                  {compact && <button type="button" className="btn mobile-view-settings"
+                    onClick={() => setViewSettingsOpen(true)} aria-label="照片视图设置">
+                    <Columns2 size={17} /><span>视图</span>
+                  </button>}
                 </>
               )}
 
@@ -1307,7 +1392,7 @@ function AuraApplication() {
                 </ActionButton>
               )}
 
-              {route.view === "albums" && route.album && activeAlbumDetail && (
+              {!compact && route.view === "albums" && route.album && activeAlbumDetail && (
                 <div className="album-header-actions">
                   <ActionButton
                     variant="primary"
@@ -1325,14 +1410,14 @@ function AuraApplication() {
                 </div>
               )}
 
-              {(route.view === "automatic" || route.view === "merged") && (
+              {!compact && (route.view === "automatic" || route.view === "merged") && (
                 <ActionButton onClick={() => setHistoryKind("split")}>
                   <History size={15} />
                   <span>分离记录</span>
                 </ActionButton>
               )}
 
-              {currentModule.supportsBatchSelection && !isAlbumOverview && assets.length > 0 && (
+              {!compact && currentModule.supportsBatchSelection && !isAlbumOverview && assets.length > 0 && (
                 <ActionButton
                   variant={selecting ? "primary" : "default"}
                   onClick={() => {
@@ -1387,7 +1472,7 @@ function AuraApplication() {
           <CollapsibleRegion
             ref={monthRailRef}
             className="month-scrubber-region"
-            open={monthRailOpen && months.length > 0 && isGalleryView}
+            open={!compact && monthRailOpen && months.length > 0 && isGalleryView}
           >
             <div
               className="month-scrubber-bar motion-tabs"
@@ -1580,6 +1665,7 @@ function AuraApplication() {
                     selectedIds={selectedIds}
                     selecting={selecting}
                     busy={batchBusy}
+                    compact={compact}
                     onToggleGroup={toggleSelectDayGroup}
                     onToggleAsset={toggleSelectAsset}
                     onOpenSimilar={openSimilarPhotos}
@@ -1673,26 +1759,7 @@ function AuraApplication() {
               </div>
 
               <div className="dock-buttons">
-                {selectedIds.size === 2 && (
-                  <>
-                    <ActionButton
-                      disabled={batchBusy}
-                      onClick={() => {
-                        const [idA, idB] = [...selectedIds];
-                        const left = assets.find((a) => a.id === idA);
-                        const right = assets.find((a) => a.id === idB);
-                        if (left && right) setComparePair({ left, right });
-                      }}
-                    >
-                      <Columns2 size={15} />
-                      <span>对比所选</span>
-                    </ActionButton>
-                    <ActionButton disabled={batchBusy} onClick={() => void batchMergeSelected()}>
-                      <Layers3 size={15} />
-                      <span>归并为一项</span>
-                    </ActionButton>
-                  </>
-                )}
+                <div className="dock-secondary-actions">{extraBatchActions}</div>
 
                 {route.view === "trash" ? (
                   <>
@@ -1726,22 +1793,6 @@ function AuraApplication() {
                       <span>加入相片集</span>
                     </ActionButton>
                     <ActionButton
-                      disabled={batchBusy || !selectedIds.size}
-                      onClick={() => setAlbumModal({ kind: "remove", assets: [...selectedIds] })}
-                    >
-                      <FolderMinus size={15} />
-                      <span>移出相片集</span>
-                    </ActionButton>
-                    {route.view === "albums" && route.album && (
-                      <ActionButton
-                        disabled={batchBusy || selectedIds.size !== 1}
-                        onClick={() => void setSelectedAlbumCover()}
-                      >
-                        <Images size={15} />
-                        <span>设为相片集封面</span>
-                      </ActionButton>
-                    )}
-                    <ActionButton
                       variant="danger"
                       disabled={batchBusy || !selectedIds.size}
                       onClick={() => void batchSetTrash(true)}
@@ -1752,7 +1803,10 @@ function AuraApplication() {
                   </>
                 )}
 
-                <ActionButton
+                {compact && <ActionButton disabled={batchBusy} onClick={() => setBatchMenuOpen(true)}>
+                  <MoreHorizontal size={18} /><span>更多</span>
+                </ActionButton>}
+                <ActionButton className="dock-cancel"
                   onClick={() => {
                     setSelecting(false);
                     setSelectedIds(new Set());
@@ -1766,12 +1820,56 @@ function AuraApplication() {
         </MotionPresence>
       </div>
 
+      <MotionPresence present={compact && viewSettingsOpen} variant="menu">
+        {compact && viewSettingsOpen && <MobileActionSheet title="照片视图" onClose={() => setViewSettingsOpen(false)}>
+          <div className="mobile-grid-settings">
+            <div className="mobile-column-presets" aria-label="照片列数">
+              {[2, 3, 4].map((columns) => <button type="button" key={columns}
+                aria-pressed={gridPrefs.mobileColumns === columns}
+                onClick={() => gridPrefs.setMobileColumns(columns)}>{columns} 列</button>)}
+            </div>
+            <GridDensityControls zoom={gridPrefs.zoom} maxZoom={gridPrefs.maxZoom}
+              desktopColumnSteps={gridPrefs.desktopColumnSteps} mobileColumnSteps={gridPrefs.mobileColumnSteps}
+              onZoomChange={gridPrefs.setZoom} layout={gridPrefs.layout} onLayoutChange={gridPrefs.setLayout} />
+            <span className="mobile-grid-value">{gridPrefs.layout === "square" ? "正方形" : "原始比例"} · {gridPrefs.mobileColumns} 列</span>
+            <button type="button" className="btn" onClick={() => gridPrefs.setZoom(DEFAULT_ZOOM_STEP)}>恢复默认大小</button>
+          </div>
+          <div className="mobile-view-actions" onClick={() => setViewSettingsOpen(false)}>
+            {(route.view === "automatic" || route.view === "merged") && <ActionButton onClick={() => setHistoryKind("split")}>
+              <History size={17} /><span>分离记录</span>
+            </ActionButton>}
+            {route.view === "albums" && route.album && activeAlbumDetail && <>
+              <ActionButton onClick={() => setAlbumModal({ kind: "pick", album: activeAlbumDetail })}>
+                <Plus size={17} /><span>添加照片</span>
+              </ActionButton>
+              <ActionButton onClick={() => setAlbumModal({ kind: "rename", album: activeAlbumDetail })}>
+                <Pencil size={17} /><span>重命名相片集</span>
+              </ActionButton>
+              <ActionButton variant="danger" onClick={() => setAlbumModal({ kind: "delete", album: activeAlbumDetail })}>
+                <Trash2 size={17} /><span>删除相片集</span>
+              </ActionButton>
+            </>}
+          </div>
+        </MobileActionSheet>}
+      </MotionPresence>
+
+      <MotionPresence present={compact && batchMenuOpen && selecting} variant="menu">
+        {compact && batchMenuOpen && selecting && <MobileActionSheet title="批量操作" onClose={() => setBatchMenuOpen(false)}>
+          <div className="mobile-batch-actions" onClick={() => setBatchMenuOpen(false)}>
+            {extraBatchActions}
+            <ActionButton disabled={batchBusy} onClick={selectAllLoaded}>全选已加载 ({assets.filter((asset) => !asset.deletionPending).length})</ActionButton>
+            <ActionButton disabled={batchBusy || !selectedIds.size} onClick={() => setSelectedIds(new Set())}>清空选择</ActionButton>
+          </div>
+        </MobileActionSheet>}
+      </MotionPresence>
+
       {/* Filter Popover Sheet */}
       <MotionPresence present={filterSheetOpen} variant="menu">
         {filterSheetOpen && (
           <FilterSheet
             value={{ ...route.filters, from: route.from, to: route.to }}
             anchorRef={filterBtnRef}
+            months={months}
             onClose={() => setFilterSheetOpen(false)}
             onApply={(draft) => {
               const { from, to, ...restFilters } = draft;

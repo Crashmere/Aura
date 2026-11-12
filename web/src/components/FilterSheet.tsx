@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import { CalendarDays, Camera, Check, FileImage, Search, SlidersHorizontal, X } from "lucide-react";
 import { formatIsoDayLocal, requestJson } from "../core/client";
 import { useIsPresent } from "../core/motion";
+import { useCompactViewer, usePageScrollLock } from "../core/photo-view";
 import {
   type ActiveFilterChip,
   createEmptyFilters,
   FILTER_ENUM_OPTIONS,
+  resolveMonthBounds,
   type FilterParameterKey,
   type LibraryFilterDraft,
 } from "../core/workspace";
@@ -74,12 +76,16 @@ export function FilterSheet({
   anchorRef,
   onApply,
   onClose,
+  months = [],
 }: {
   value: LibraryFilterDraft;
   anchorRef: RefObject<HTMLButtonElement | null>;
   onApply: (draft: LibraryFilterDraft) => void;
   onClose: () => void;
+  months?: { month: string; count: number }[];
 }) {
+  const compact = useCompactViewer();
+  usePageScrollLock();
   const isPresent = useIsPresent();
   const [draft, setDraft] = useState<LibraryFilterDraft>(value);
   const [mbInputs, setMbInputs] = useState({
@@ -327,7 +333,7 @@ export function FilterSheet({
       <section
         ref={sheetRef}
         className="filter-panel"
-        style={coords}
+        style={compact ? undefined : coords}
         id="library-filters"
         role="dialog"
         aria-modal="true"
@@ -387,6 +393,19 @@ export function FilterSheet({
                   今年
                 </button>
               </div>
+              {compact && months.length > 0 && <label className="filter-field filter-months">
+                <span>拍摄月份</span>
+                <select aria-label="拍摄月份" value={months.find(({ month }) => {
+                  const bounds = resolveMonthBounds(month);
+                  return draft.from === bounds.from && draft.to === bounds.to;
+                })?.month || ""} onChange={(event) => {
+                  const bounds = event.target.value ? resolveMonthBounds(event.target.value) : { from: "", to: "" };
+                  setDraft((previous) => ({ ...previous, ...bounds }));
+                }}>
+                  <option value="">全部月份 / 自定义日期</option>
+                  {months.map(({ month, count }) => <option key={month} value={month}>{month} · {count} 项</option>)}
+                </select>
+              </label>}
               {renderDateRange("from", "to", "拍摄日期")}
               {renderDateRange("addedFrom", "addedTo", "导入日期")}
             </section>

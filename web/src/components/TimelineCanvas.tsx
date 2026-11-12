@@ -32,7 +32,7 @@ import {
 } from "../core/workspace";
 import { AspectRatioGlyph, LiveRingsIcon, TimelineCrosshairIcon } from "./Icons";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
-import { whenPageScrollUnlocked } from "../core/photo-view";
+import { useCompactViewer, whenPageScrollUnlocked } from "../core/photo-view";
 
 // ============================================================================
 // 1. Grid Density & Aspect Ratio Controller with FLIP Animation
@@ -43,7 +43,8 @@ export const MOBILE_COLUMN_STEPS = [7, 6, 5, 4, 3, 2, 1] as const;
 export const DEFAULT_ZOOM_STEP = 3;
 
 const LEGACY_ZOOM_PREF_KEY = "aura-grid-zoom-v2";
-const ZOOM_PREF_KEY = "aura-grid-zoom-v3";
+const PREVIOUS_ZOOM_PREF_KEY = "aura-grid-zoom-v3";
+const ZOOM_PREF_KEY = "aura-grid-zoom-v4";
 const DESKTOP_COLUMN_OFFSETS = [13, 7, 3, 0, -1, -2, -3] as const;
 const MOBILE_COLUMN_OFFSETS = [8, 4, 2, 0, -1, -2, -3] as const;
 const ASPECT_PREF_KEY = "aura-grid-layout-v1";
@@ -54,6 +55,7 @@ export type GridAspectMode = "square" | "original";
 
 interface GridZoomPreference {
   baseline: number;
+  mobileBaseline: number;
   zoom: number;
 }
 
@@ -75,16 +77,23 @@ function maxZoomStep(baseline: number, mobile: boolean): number {
 
 function loadSavedZoomPreference(): GridZoomPreference {
   let baseline = DEFAULT_ZOOM_STEP;
+  let mobileBaseline = 4;
   try {
-    const raw = localStorage.getItem(ZOOM_PREF_KEY);
-    if (raw !== null) {
+    for (const key of [ZOOM_PREF_KEY, PREVIOUS_ZOOM_PREF_KEY]) {
+      const raw = localStorage.getItem(key);
+      if (raw === null) continue;
       const saved = JSON.parse(raw) as GridZoomPreference;
       if (
         saved &&
         Number.isInteger(saved.baseline) && saved.baseline >= 0 && saved.baseline <= 6 &&
         Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom <= 6
       ) {
-        return { baseline: saved.baseline, zoom: saved.zoom };
+        return {
+          baseline: saved.baseline,
+          mobileBaseline: Number.isInteger(saved.mobileBaseline) && saved.mobileBaseline >= 0 && saved.mobileBaseline <= 6
+            ? saved.mobileBaseline : saved.baseline,
+          zoom: saved.zoom,
+        };
       }
     }
   } catch {
@@ -93,11 +102,14 @@ function loadSavedZoomPreference(): GridZoomPreference {
   try {
     // Preserve the current size while moving it to the center of the new range.
     const legacy = localStorage.getItem(LEGACY_ZOOM_PREF_KEY);
-    if (legacy !== null && /^[0-6]$/.test(legacy)) baseline = Number(legacy);
+    if (legacy !== null && /^[0-6]$/.test(legacy)) {
+      baseline = Number(legacy);
+      mobileBaseline = baseline;
+    }
   } catch {
     /* Storage optional */
   }
-  return { baseline, zoom: DEFAULT_ZOOM_STEP };
+  return { baseline, mobileBaseline, zoom: DEFAULT_ZOOM_STEP };
 }
 
 function loadSavedAspectMode(): GridAspectMode {
@@ -130,14 +142,14 @@ function captureGridSnapshot(container: HTMLDivElement): FlipCaptureSnapshot {
 
 export function useGridDisplayPreferences() {
   const [density, setDensity] = useState(loadSavedZoomPreference);
-  const [mobile, setMobile] = useState(() => window.innerWidth <= 720);
-  const maxZoom = maxZoomStep(density.baseline, mobile);
+  const mobile = useCompactViewer();
+  const maxZoom = maxZoomStep(mobile ? density.mobileBaseline : density.baseline, mobile);
   const zoom = Math.min(density.zoom, maxZoom);
   const desktopColumnSteps = DESKTOP_COLUMN_OFFSETS.map((offset) =>
     Math.max(1, DESKTOP_COLUMN_STEPS[density.baseline] + offset),
   );
   const mobileColumnSteps = MOBILE_COLUMN_OFFSETS.map((offset) =>
-    Math.max(1, MOBILE_COLUMN_STEPS[density.baseline] + offset),
+    Math.max(1, MOBILE_COLUMN_STEPS[density.mobileBaseline] + offset),
   );
   const [layout, setLayoutRaw] = useState<GridAspectMode>(loadSavedAspectMode);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -161,11 +173,11 @@ export function useGridDisplayPreferences() {
   }, []);
 
   const captureNextDisplay = useCallback(
-    (nextZoom: number, nextLayout: GridAspectMode) => {
+    (nextZoom: number, nextLayout: GridAspectMode, force = false) => {
       stopRunningAnimations();
       snapshotRef.current =
         containerRef.current &&
-        (nextZoom !== committedZoom.current || nextLayout !== committedLayout.current) &&
+        (force || nextZoom !== committedZoom.current || nextLayout !== committedLayout.current) &&
         !window.matchMedia(REDUCED_MOTION_QUERY).matches &&
         typeof Element.prototype.animate === "function"
           ? captureGridSnapshot(containerRef.current)
@@ -205,6 +217,14 @@ export function useGridDisplayPreferences() {
     },
     [captureNextDisplay],
   );
+
+  function changeMobileColumns(columns: number) {
+    const baseline = MOBILE_COLUMN_STEPS.findIndex((step) => step === columns);
+    if (baseline < 0 || (baseline === density.mobileBaseline && zoom === DEFAULT_ZOOM_STEP)) return;
+    captureNextDisplay(DEFAULT_ZOOM_STEP, requestedLayout.current, true);
+    requestedZoom.current = DEFAULT_ZOOM_STEP;
+    setDensity((current) => ({ ...current, mobileBaseline: baseline, zoom: DEFAULT_ZOOM_STEP }));
+  }
 
   useEffect(() => {
     try {
@@ -290,7 +310,7 @@ export function useGridDisplayPreferences() {
     });
 
     return stopRunningAnimations;
-  }, [zoom, layout, stopRunningAnimations]);
+  }, [zoom, layout, density.mobileBaseline, stopRunningAnimations]);
 
   useLayoutEffect(() => {
     const mq = window.matchMedia(REDUCED_MOTION_QUERY);
@@ -298,15 +318,11 @@ export function useGridDisplayPreferences() {
       snapshotRef.current = null;
       stopRunningAnimations();
     };
-    const resize = () => {
-      abort();
-      setMobile(window.innerWidth <= 720);
-    };
     mq.addEventListener("change", abort);
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", abort);
     return () => {
       mq.removeEventListener("change", abort);
-      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", abort);
       abort();
     };
   }, [stopRunningAnimations]);
@@ -324,6 +340,7 @@ export function useGridDisplayPreferences() {
     desktopColumnSteps,
     mobileColumnSteps,
     setZoom: changeZoom,
+    setMobileColumns: changeMobileColumns,
     layout,
     setLayout: changeLayout,
     columns,
@@ -428,6 +445,8 @@ export function PhotoTile({
   highlighted = false,
   disabled = false,
   originalAspect = false,
+  directTouchOpen = false,
+  onLongPress,
 }: {
   asset: CatalogAsset;
   onClick: (e: MouseEvent<HTMLButtonElement>) => void;
@@ -439,10 +458,30 @@ export function PhotoTile({
   highlighted?: boolean;
   disabled?: boolean;
   originalAspect?: boolean;
+  directTouchOpen?: boolean;
+  onLongPress?: () => void;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
+  const press = useRef<{
+    pointer: number; x: number; y: number;
+    timer: ReturnType<typeof setTimeout>; cleanup: () => void;
+  } | null>(null);
+  const suppressClick = useRef(false);
+
+  function cancelPress() {
+    if (press.current) {
+      clearTimeout(press.current.timer);
+      press.current.cleanup();
+    }
+    press.current = null;
+  }
+
+  useEffect(() => {
+    cancelPress();
+    return cancelPress;
+  }, [asset.id, disabled]);
   const [retryCount, setRetryCount] = useState(0);
   const [measuredRatio, setMeasuredRatio] = useState<{ src: string; ratio: number } | null>(
     null,
@@ -513,14 +552,77 @@ export function PhotoTile({
         }}
         onPointerLeave={abortSpeculativePreloads}
         onPointerDown={(e) => {
+          cancelPress();
+          suppressClick.current = false;
+          if (e.pointerType === "touch" && onLongPress && !selecting && !disabled && !asset.deletionPending) {
+            if (!e.isPrimary) {
+              suppressClick.current = true;
+              return;
+            }
+            abortSpeculativePreloads();
+            // Track outside the tile without capturing native touch scrolling.
+            const abortPress = () => { cancelPress(); suppressClick.current = true; };
+            const move = (event: PointerEvent) => {
+              const active = press.current;
+              if (active && active.pointer === event.pointerId && Math.hypot(event.clientX - active.x, event.clientY - active.y) > 10) abortPress();
+            };
+            const anotherPointer = (event: PointerEvent) => {
+              if (event.pointerType === "touch" && event.pointerId !== press.current?.pointer) abortPress();
+            };
+            const end = (event: PointerEvent) => {
+              if (event.pointerId === press.current?.pointer) cancelPress();
+            };
+            window.addEventListener("pointermove", move, { passive: true });
+            window.addEventListener("pointerdown", anotherPointer, true);
+            window.addEventListener("pointerup", end);
+            window.addEventListener("pointercancel", abortPress);
+            window.addEventListener("scroll", abortPress, { passive: true });
+            window.addEventListener("blur", abortPress);
+            document.addEventListener("visibilitychange", abortPress);
+            press.current = {
+              pointer: e.pointerId, x: e.clientX, y: e.clientY,
+              timer: setTimeout(() => {
+                cancelPress();
+                suppressClick.current = true;
+                onLongPress();
+              }, 450),
+              cleanup: () => {
+                window.removeEventListener("pointermove", move);
+                window.removeEventListener("pointerdown", anotherPointer, true);
+                window.removeEventListener("pointerup", end);
+                window.removeEventListener("pointercancel", abortPress);
+                window.removeEventListener("scroll", abortPress);
+                window.removeEventListener("blur", abortPress);
+                document.removeEventListener("visibilitychange", abortPress);
+              },
+            };
+            return;
+          }
           if (e.ctrlKey || e.metaKey || e.shiftKey) {
             abortSpeculativePreloads();
           } else if (!selecting && !disabled) {
             schedulePreviewWarmup([asset], 0);
           }
         }}
-        onClick={onClick}
+        onPointerUp={cancelPress}
+        onPointerCancel={() => { cancelPress(); suppressClick.current = true; }}
+        onTouchStart={(e) => {
+          if (e.touches.length > 1) { cancelPress(); suppressClick.current = true; }
+        }}
+        onClick={(e) => {
+          if (suppressClick.current) {
+            suppressClick.current = false;
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+          onClick(e);
+        }}
         onContextMenu={(e) => {
+          if (directTouchOpen) {
+            e.preventDefault();
+            return;
+          }
           // macOS reports Ctrl-left-click as a context menu instead of a click.
           if (e.ctrlKey && e.button === 0 && !disabled) {
             e.preventDefault();
@@ -640,7 +742,7 @@ export function PhotoTile({
         </button>
       )}
 
-      {onToggleSelect && (
+      {onToggleSelect && (!directTouchOpen || selecting) && (
         <button
           type="button"
           className={`select-photo ${selected ? "checked" : ""}`}
@@ -702,6 +804,7 @@ export function VirtualizedTimelineCanvas({
   onOpenAlbum,
   jump,
   onJumpComplete,
+  compact = false,
 }: {
   groups: DayAssetGroup[];
   columns: number;
@@ -717,11 +820,11 @@ export function VirtualizedTimelineCanvas({
   onOpenAlbum?: (asset: CatalogAsset, albumId: string, viewportTop: number) => void;
   jump?: TimelineJump | null;
   onJumpComplete: (id: number) => void;
+  compact?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
     width: 960,
-    mobile: window.innerWidth <= 720,
     measured: false,
   });
   const [visibleWindow, setVisibleWindow] = useState({
@@ -729,12 +832,13 @@ export function VirtualizedTimelineCanvas({
     bottom: window.innerHeight + 900,
   });
   const scrollAnchor = useRef<{ id: string; offsetTop: number } | undefined>(undefined);
+  const pendingLayoutAnchor = useRef<{ id: string; offsetTop: number } | undefined>(undefined);
   const layoutSignature = useRef("");
   const completedJump = useRef<number | undefined>(undefined);
   const [highlight, setHighlight] = useState<{ assetId: string; jumpId: number } | null>(null);
 
-  const activeCols = viewport.mobile ? mobileColumns : columns;
-  const gridGap = viewport.mobile ? 2 : 3;
+  const activeCols = compact ? mobileColumns : columns;
+  const gridGap = compact ? 2 : 3;
 
   const { rows, totalHeight } = useMemo(() => {
     const computedRows: VirtualRowSlice[] = [];
@@ -742,8 +846,9 @@ export function VirtualizedTimelineCanvas({
     const tileEdge = Math.max(1, (viewport.width - (activeCols - 1) * gridGap) / activeCols);
 
     for (const group of groups) {
-      computedRows.push({ group, top: currentTop, height: 44 });
-      currentTop += 44;
+      const headingHeight = compact && !selecting ? 36 : 44;
+      computedRows.push({ group, top: currentTop, height: headingHeight });
+      currentTop += headingHeight;
       for (let idx = 0; idx < group.items.length; idx += activeCols) {
         computedRows.push({
           group,
@@ -753,16 +858,16 @@ export function VirtualizedTimelineCanvas({
         });
         currentTop += tileEdge + gridGap;
       }
-      currentTop += 24 - gridGap;
+      currentTop += (compact ? 16 : 24) - gridGap;
     }
 
     return { rows: computedRows, totalHeight: currentTop };
-  }, [groups, activeCols, gridGap, viewport.width]);
+  }, [groups, activeCols, gridGap, viewport.width, compact, selecting]);
 
   useLayoutEffect(() => {
     // The estimated initial width is not a user layout change.
     if (!viewport.measured) return;
-    const sig = `${activeCols}:${viewport.width}`;
+    const sig = `${activeCols}:${viewport.width}:${compact}:${selecting}`;
     if (
       layoutSignature.current &&
       layoutSignature.current !== sig &&
@@ -770,19 +875,23 @@ export function VirtualizedTimelineCanvas({
       scrollAnchor.current &&
       rootRef.current
     ) {
-      const saved = scrollAnchor.current;
-      const targetRow = rows.find((r) => r.assets?.some((a) => a.id === saved.id));
-      if (targetRow) {
-        window.scrollBy({
-          top:
-            rootRef.current.getBoundingClientRect().top +
-            targetRow.top -
-            saved.offsetTop,
-          behavior: "instant",
-        });
-      }
+      pendingLayoutAnchor.current ??= scrollAnchor.current;
     }
     layoutSignature.current = sig;
+    if (pendingLayoutAnchor.current) {
+      const saved = pendingLayoutAnchor.current;
+      // View settings can change the grid behind a scroll-locked sheet.
+      return whenPageScrollUnlocked(() => {
+        const targetRow = rows.find((r) => r.assets?.some((a) => a.id === saved.id));
+        if (targetRow && rootRef.current) {
+          window.scrollBy({
+            top: rootRef.current.getBoundingClientRect().top + targetRow.top - saved.offsetTop,
+            behavior: "instant",
+          });
+        }
+        pendingLayoutAnchor.current = undefined;
+      });
+    }
   }, [activeCols, viewport.width, viewport.measured, rows]);
 
   useLayoutEffect(() => {
@@ -793,20 +902,22 @@ export function VirtualizedTimelineCanvas({
     const measure = () => {
       rafId = 0;
       const rect = el.getBoundingClientRect();
-      const isMobile = window.innerWidth <= 720;
       setViewport((prev) =>
-        prev.measured && prev.width === rect.width && prev.mobile === isMobile
+        prev.measured && prev.width === rect.width
           ? prev
-          : { width: rect.width, mobile: isMobile, measured: true },
+          : { width: rect.width, measured: true },
       );
       const topBound = Math.max(0, -rect.top - 700);
       const bottomBound = Math.max(0, window.innerHeight - rect.top + 700);
 
       // Read unanimated row geometry so an in-flight FLIP cannot change the saved anchor.
+      const minimumTop = compact
+        ? document.querySelector(".header-left")?.getBoundingClientRect().bottom || 60
+        : 180;
       for (const grid of el.querySelectorAll<HTMLElement>(".photo-grid")) {
         const top = grid.getBoundingClientRect().top;
         const tile = grid.firstElementChild as HTMLElement | null;
-        if (top < 180 || !tile?.dataset.assetId) continue;
+        if (top < minimumTop || !tile?.dataset.assetId) continue;
         scrollAnchor.current = { id: tile.dataset.assetId, offsetTop: top };
         break;
       }
@@ -834,7 +945,7 @@ export function VirtualizedTimelineCanvas({
       window.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, [totalHeight]);
+  }, [totalHeight, compact]);
 
   useLayoutEffect(() => {
     const el = rootRef.current;
@@ -928,7 +1039,7 @@ export function VirtualizedTimelineCanvas({
             <span>{group.date.slice(0, 4)}</span>
           </h2>
         </div>
-        <button
+        {compact && !selecting ? <span className="day-count">{group.items.length} 项</span> : <button
           type="button"
           className="day-select"
           disabled={busy || selectableItems.length === 0}
@@ -941,7 +1052,7 @@ export function VirtualizedTimelineCanvas({
             {allGroupSelected ? "取消选择" : "选择当天"}
           </span>
           <CircleCheck size={15} />
-        </button>
+        </button>}
       </div>
     );
   };
@@ -978,14 +1089,16 @@ export function VirtualizedTimelineCanvas({
                   selected={selectedIds.has(asset.id)}
                   selecting={selecting}
                   disabled={busy}
+                  directTouchOpen={compact}
+                  onLongPress={() => onToggleAsset(asset.id, false)}
                   onToggleSelect={(e) => onToggleAsset(asset.id, e.shiftKey)}
-                  onOpenSimilar={(source) => onOpenSimilar(asset, source)}
-                  onOpenAlbum={onOpenAlbum
+                  onOpenSimilar={compact ? undefined : (source) => onOpenSimilar(asset, source)}
+                  onOpenAlbum={!compact && onOpenAlbum
                     ? (albumId) => onOpenAlbum(asset, albumId, dateViewportTop(row.group.date))
                     : undefined}
                   highlighted={highlight?.assetId === asset.id}
                   onClick={(e) => {
-                    if (selecting || e.shiftKey || e.ctrlKey || e.metaKey) {
+                    if (selecting || (!compact && (e.shiftKey || e.ctrlKey || e.metaKey))) {
                       e.preventDefault();
                       if (!asset.deletionPending) onToggleAsset(asset.id, e.shiftKey);
                     } else {

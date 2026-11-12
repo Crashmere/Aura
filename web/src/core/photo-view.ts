@@ -14,8 +14,9 @@ export function whenPageScrollUnlocked(scroll: () => void): () => void {
   return () => { pendingScrolls.delete(scroll); };
 }
 
-export function usePageScrollLock() {
+export function usePageScrollLock(enabled = true) {
   useLayoutEffect(() => {
+    if (!enabled) return;
     if (scrollLocks++ === 0) {
       const root = document.documentElement;
       const rootOverflow = root.style.overflow;
@@ -34,7 +35,7 @@ export function usePageScrollLock() {
       };
     }
     return () => {
-      // Comparisons can cover a viewer; only the last photo dialog unlocks the page.
+      // Overlapping dialogs and drawers share one saved page position.
       if (--scrollLocks === 0) {
         restoreScroll?.();
         restoreScroll = undefined;
@@ -43,7 +44,7 @@ export function usePageScrollLock() {
         for (const scroll of scrolls) scroll();
       }
     };
-  }, []);
+  }, [enabled]);
 }
 
 const compactQuery = window.matchMedia("(max-width: 900px), (pointer: coarse)");
