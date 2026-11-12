@@ -49,7 +49,8 @@
   .player-time { font-size: 11px; min-width: 32px; }
   .aura-player.is-frame-picker .player-frame-step { display: inline-flex; }
   .lightbox-studio.with-filmstrip .player-controls { bottom: calc(78px + env(safe-area-inset-bottom)); }
-  .viewer-image-loading, .viewer-quality-action { bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .viewer-image-loading, .viewer-quality-action { bottom: calc(18px + env(safe-area-inset-bottom)); max-width: calc(100% - 24px); }
+  .lightbox-studio.with-filmstrip .viewer-image-loading, .lightbox-studio.with-filmstrip .viewer-quality-action { bottom: calc(90px + env(safe-area-inset-bottom)); }
   .viewer-quality-action button { min-height: 44px; }
   .aura-player:fullscreen .player-controls { bottom: calc(12px + env(safe-area-inset-bottom)); }
 }

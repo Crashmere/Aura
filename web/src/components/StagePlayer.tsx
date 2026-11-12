@@ -35,6 +35,7 @@ import {
   readCachedPreviewUrl,
   useNetworkMediaPolicy,
 } from "../core/workspace";
+import { useCompactViewer } from "../core/photo-view";
 import { MotionPresence, useIsPresent } from "../core/motion";
 import { SkipSecondsGlyph } from "./Icons";
 
@@ -81,12 +82,14 @@ export function ProgressiveStagePhoto({
   zoomed = false,
   rotationDelta = 0,
   originalMime,
+  view,
   onClearReady,
 }: {
   asset: CatalogAsset;
   zoomed?: boolean;
   rotationDelta?: number;
   originalMime?: string;
+  view?: { scale: number; pan: { x: number; y: number } };
   onClearReady: () => void;
 }) {
   const mediaPolicy = useNetworkMediaPolicy();
@@ -188,6 +191,7 @@ export function ProgressiveStagePhoto({
       <div
         ref={frameBoxRef}
         className="viewer-image-frame"
+        style={view ? { transform: `translate(${view.pan.x}px, ${view.pan.y}px) scale(${view.scale})` } : undefined}
         role="img"
         aria-label={asset.name}
         data-image-width={dims.width}
@@ -409,6 +413,7 @@ export function StageVideoPlayer({
     onChange: (frame: FramePlayheadState) => void;
   };
 }) {
+  const compact = useCompactViewer();
   const isPresent = useIsPresent();
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageBoxRef = useRef<HTMLDivElement>(null);
@@ -554,6 +559,9 @@ export function StageVideoPlayer({
       onReady: setSourceReady,
       onModeChange: setPlaybackRepresentation,
       onDescriptor: (descriptor) => {
+        if (descriptor.duration && Number.isFinite(descriptor.duration) && descriptor.duration > 0) {
+          setDuration(descriptor.duration);
+        }
         if (descriptor.frameRate && Number.isFinite(descriptor.frameRate) && descriptor.frameRate > 0) {
           setSourceFrameRate(descriptor.frameRate);
         }
@@ -681,7 +689,7 @@ export function StageVideoPlayer({
     cancelAnimationFrame(seekRafId.current);
     seekRafId.current = 0;
     pendingPreviewTime.current = null;
-    el.currentTime = val;
+    playbackRef.current?.loadFrame(val);
     setCurrentTime(val);
     setScrubTime(null);
     activeScrubValue.current = null;
@@ -1032,18 +1040,22 @@ export function StageVideoPlayer({
               }
               step={framePicker ? ".001" : ".1"}
               value={effectiveTime}
-              disabled={locked || !duration}
+              disabled={locked || !sourceReady || !effectiveDuration}
               onPointerDown={() => {
                 resumeOnRelease.current =
                   !!videoRef.current && !videoRef.current.paused;
+                activeScrubValue.current = videoRef.current?.currentTime || currentTime;
+                setScrubTime(activeScrubValue.current);
                 videoRef.current?.pause();
               }}
               onChange={(e) => {
                 const val = Number(e.target.value);
                 activeScrubValue.current = val;
                 setScrubTime(val);
-                pendingPreviewTime.current = val;
-                schedulePreviewSeek();
+                if (!compact || framePicker) {
+                  pendingPreviewTime.current = val;
+                  schedulePreviewSeek();
+                }
               }}
               onPointerUp={finishScrub}
               onPointerCancel={finishScrub}

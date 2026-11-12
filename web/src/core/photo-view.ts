@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { TrackpadSwipe } from "./trackpad-swipe";
 
 let scrollLocks = 0;
@@ -46,19 +46,28 @@ export function usePageScrollLock() {
   }, []);
 }
 
-export function zoomPhotoWithWheel(scale: number, event: WheelEvent, viewportHeight: number) {
+const compactQuery = window.matchMedia("(max-width: 900px), (pointer: coarse)");
+export function useCompactViewer() {
+  return useSyncExternalStore(callback => {
+    compactQuery.addEventListener("change", callback);
+    return () => compactQuery.removeEventListener("change", callback);
+  }, () => compactQuery.matches);
+}
+
+export function zoomPhotoWithWheel(scale: number, event: WheelEvent, viewportHeight: number, maximum = 5) {
   const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewportHeight : 1);
-  return Math.max(1, Math.min(5, scale * Math.exp(-delta * (event.ctrlKey ? 0.01 : 0.002))));
+  return Math.max(1, Math.min(maximum, scale * Math.exp(-delta * (event.ctrlKey ? 0.01 : 0.002))));
 }
 
 type PhotoPan = { x: number; y: number };
 type PhotoView = { scale: number; pan: PhotoPan };
 type PhotoGestureEvent = Event & { scale: number; clientX: number; clientY: number };
 
-export function clampPhotoPan(pan: PhotoPan, scale: number, width: number, height: number): PhotoPan {
+export function clampPhotoPan(pan: PhotoPan, scale: number, width: number, height: number, imageWidth = width, imageHeight = height): PhotoPan {
   if (scale <= 1.01) return { x: 0, y: 0 };
-  const maxX = width * (scale - 1) / 2;
-  const maxY = height * (scale - 1) / 2;
+  const fit = imageWidth > 0 && imageHeight > 0 ? Math.min(width / imageWidth, height / imageHeight) : 1;
+  const maxX = Math.max(0, (imageWidth * fit * scale - width) / 2);
+  const maxY = Math.max(0, (imageHeight * fit * scale - height) / 2);
   return {
     x: Math.max(-maxX, Math.min(maxX, pan.x)),
     y: Math.max(-maxY, Math.min(maxY, pan.y)),
@@ -66,7 +75,7 @@ export function clampPhotoPan(pan: PhotoPan, scale: number, width: number, heigh
 }
 
 export function usePhotoViewGestures({
-  stageRef, scale, pan, enabled, navigationOnly = false, onChange, onNavigate, getViewport,
+  stageRef, scale, pan, enabled, navigationOnly = false, onChange, onNavigate, getViewport, imageSize, maximum = 5,
 }: {
   stageRef: RefObject<HTMLElement | null>;
   scale: number;
@@ -76,6 +85,8 @@ export function usePhotoViewGestures({
   onChange: (view: PhotoView) => void;
   onNavigate?: (direction: -1 | 1) => void;
   getViewport?: (target: Element) => HTMLElement | null;
+  imageSize?: { width: number; height: number };
+  maximum?: number;
 }) {
   const viewRef = useRef<PhotoView>({ scale, pan });
   const wheelRef = useRef<{
@@ -129,7 +140,7 @@ export function usePhotoViewGestures({
       pan: clampPhotoPan({
         x: x - (x - previous.pan.x) * ratio,
         y: y - (y - previous.pan.y) * ratio,
-      }, nextScale, rect.width, rect.height),
+      }, nextScale, rect.width, rect.height, imageSize?.width, imageSize?.height),
     });
   }
 
@@ -156,7 +167,7 @@ export function usePhotoViewGestures({
     }
     wheel.time = now;
     if (!navigationOnly && (event.ctrlKey || !wheel.trackpad)) {
-      zoomAt(zoomPhotoWithWheel(viewRef.current.scale, event, viewport.clientHeight), viewport, event.clientX, event.clientY);
+      zoomAt(zoomPhotoWithWheel(viewRef.current.scale, event, viewport.clientHeight, maximum), viewport, event.clientX, event.clientY);
       return;
     }
     if (navigationOnly) wheel.action = "navigate";
@@ -166,7 +177,7 @@ export function usePhotoViewGestures({
       changeView({ scale: view.scale, pan: clampPhotoPan({
         x: view.pan.x - event.deltaX,
         y: view.pan.y - event.deltaY,
-      }, view.scale, viewport.clientWidth, viewport.clientHeight) });
+      }, view.scale, viewport.clientWidth, viewport.clientHeight, imageSize?.width, imageSize?.height) });
       return;
     }
     const direction = wheel.swipe.consume(event.deltaX, event.deltaY);
@@ -186,7 +197,7 @@ export function usePhotoViewGestures({
     } else if (event.type === "gestureend") {
       safariRef.current = null;
     } else if (safariRef.current && Number.isFinite(gesture.scale) && gesture.scale > 0) {
-      zoomAt(Math.max(1, Math.min(5, safariRef.current.scale * gesture.scale)), viewport, gesture.clientX, gesture.clientY);
+      zoomAt(Math.max(1, Math.min(maximum, safariRef.current.scale * gesture.scale)), viewport, gesture.clientX, gesture.clientY);
     }
   });
 

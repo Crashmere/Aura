@@ -181,6 +181,7 @@ export function LightboxStudio({
   const [navDir, setNavDir] = useState<"next" | "prev" | "fade">("fade");
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const gestureStartRef = useRef<{
     x: number;
@@ -370,15 +371,55 @@ export function LightboxStudio({
     !!asset.deletionPending || savingRotation || savingCover || mutatingVersion;
   const isVideoStage =
     effectiveAsset.kind === "video" || playingLive || coverPickerOpen;
+  const dims = orientedDimensions({
+    ...effectiveAsset,
+    rotation: normalizeQuarterAngle((effectiveAsset.rotation || 0) + rotationDelta),
+  });
+  const fit = dims.width > 0 && dims.height > 0 && stageSize.width > 0 && stageSize.height > 0
+    ? Math.min(stageSize.width / dims.width, stageSize.height / dims.height) : 1;
+  const widthZoom = dims.width > 0 && stageSize.width > 0 ? Math.max(1, stageSize.width / (dims.width * fit)) : 1;
+  const longPhoto = !isVideoStage && dims.height >= dims.width * 2.5 && widthZoom > 1.05;
+  const maximumZoom = longPhoto ? Math.max(5, widthZoom) : 5;
   const canPickCover =
     effectiveAsset.kind === "video" ||
     (effectiveAsset.kind === "live" && !!effectiveAsset.motion);
   const hasRotationChange = normalizeQuarterAngle(rotationDelta) !== 0;
 
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setStageSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+      pointersRef.current.clear();
+      gestureStartRef.current = null;
+      setIsDragging(false);
+    });
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const scale = Math.min(maximumZoom, zoomScale);
+    setZoomScale(previous => Math.min(maximumZoom, previous));
+    setPanOffset(previous => {
+      const next = clampPhotoPan(previous, scale, stageSize.width, stageSize.height, dims.width, dims.height);
+      return next.x === previous.x && next.y === previous.y ? previous : next;
+    });
+  }, [stageSize.width, stageSize.height, dims.width, dims.height, maximumZoom]);
+
+  function boundPan(pan: { x: number; y: number }, scale: number) {
+    return clampPhotoPan(pan, scale, stageSize.width, stageSize.height, dims.width, dims.height);
+  }
+
+  function zoomToWidth() {
+    setZoomScale(widthZoom);
+    setPanOffset(boundPan(panOffset, widthZoom));
+  }
+
   const trackpadActive = usePhotoViewGestures({
     stageRef, scale: zoomScale, pan: panOffset,
     enabled: isPresent && !covered && !coverPickerOpen,
     navigationOnly: isVideoStage,
+    imageSize: dims, maximum: maximumZoom,
     onChange: view => { setZoomScale(view.scale); setPanOffset(view.pan); },
     onNavigate: direction => { if (!isLocked) navigateBy(direction); },
   });
@@ -634,15 +675,15 @@ export function LightboxStudio({
     if (pts.length === 2 && start.pinchDist > 0) {
       const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       setIsDragging(true);
-      const nextZoom = Math.max(1, Math.min(5, start.startZoom * (dist / start.pinchDist)));
+      const nextZoom = Math.max(1, Math.min(maximumZoom, start.startZoom * (dist / start.pinchDist)));
       const rect = stageRef.current!.getBoundingClientRect();
       const midpoint = { x: (pts[0].x + pts[1].x) / 2 - rect.left - rect.width / 2,
         y: (pts[0].y + pts[1].y) / 2 - rect.top - rect.height / 2 };
       const anchor = { x: start.x - rect.left - rect.width / 2, y: start.y - rect.top - rect.height / 2 };
       const ratio = nextZoom / start.startZoom;
       setZoomScale(nextZoom);
-      setPanOffset(clampPhotoPan({ x: midpoint.x - (anchor.x - start.panX) * ratio,
-        y: midpoint.y - (anchor.y - start.panY) * ratio }, nextZoom, rect.width, rect.height));
+      setPanOffset(boundPan({ x: midpoint.x - (anchor.x - start.panX) * ratio,
+        y: midpoint.y - (anchor.y - start.panY) * ratio }, nextZoom));
       return;
     }
 
@@ -654,8 +695,7 @@ export function LightboxStudio({
         setIsDragging(true);
       }
       if (zoomScale > 1.01) {
-        setPanOffset(clampPhotoPan({ x: start.panX + dx, y: start.panY + dy }, zoomScale,
-          stageRef.current?.clientWidth || 800, stageRef.current?.clientHeight || 600));
+        setPanOffset(boundPan({ x: start.panX + dx, y: start.panY + dy }, zoomScale));
       }
     }
   };
@@ -689,9 +729,10 @@ export function LightboxStudio({
           setPanOffset({ x: 0, y: 0 });
         } else {
           const rect = stageRef.current!.getBoundingClientRect();
-          setZoomScale(2.5);
-          setPanOffset(clampPhotoPan({ x: (e.clientX - rect.left - rect.width / 2) * -1.5,
-            y: (e.clientY - rect.top - rect.height / 2) * -1.5 }, 2.5, rect.width, rect.height));
+          const scale = longPhoto ? widthZoom : 2.5;
+          setZoomScale(scale);
+          setPanOffset(boundPan({ x: (e.clientX - rect.left - rect.width / 2) * (1 - scale),
+            y: (e.clientY - rect.top - rect.height / 2) * (1 - scale) }, scale));
         }
       } else {
         lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
@@ -709,11 +750,6 @@ export function LightboxStudio({
       }
     }
   };
-
-  const dims = orientedDimensions({
-    ...effectiveAsset,
-    rotation: normalizeQuarterAngle((effectiveAsset.rotation || 0) + rotationDelta),
-  });
 
   const combinedMeta = detail?.metadata || {};
   const cameraText = pickMetaValue(combinedMeta, ["Model", "Make"]);
@@ -952,6 +988,8 @@ export function LightboxStudio({
               {moreMenuOpen && (
                 <div className="lightbox-dropdown" role="menu">
                   <div className="mobile-viewer-actions">
+                    {longPhoto && <button type="button" role="menuitem" disabled={isLocked} onClick={() => { zoomToWidth(); setMoreMenuOpen(false); }}><ZoomIn size={16} />适应宽度阅读</button>}
+                    {!isVideoStage && zoomScale > 1.01 && <button type="button" role="menuitem" onClick={() => { setZoomScale(1); setPanOffset({ x: 0, y: 0 }); setMoreMenuOpen(false); }}><ZoomOut size={16} />查看整图</button>}
                     <button type="button" role="menuitem" disabled={isLocked || coverPickerOpen} onClick={() => { rotateBy(-90); setMoreMenuOpen(false); }}><RotateCcw size={16} />向左旋转</button>
                     <button type="button" role="menuitem" disabled={isLocked || coverPickerOpen} onClick={() => { rotateBy(90); setMoreMenuOpen(false); }}><RotateCw size={16} />向右旋转</button>
                     {canPickCover && <button type="button" role="menuitem" disabled={isLocked} onClick={() => { openCoverEditor(); setMoreMenuOpen(false); }}><Film size={16} />{effectiveAsset.kind === "live" ? "选择实况主画面" : "选择视频封面"}</button>}
@@ -1159,10 +1197,7 @@ export function LightboxStudio({
             className={`lightbox-canvas nav-${navDir} ${isDragging || trackpadActive ? "is-dragging" : ""}`}
             style={
               !isVideoStage && zoomScale > 1.01
-                ? ({
-                    transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})`,
-                    cursor: isDragging ? "grabbing" : "grab",
-                  } as CSSProperties)
+                ? { cursor: isDragging ? "grabbing" : "grab" }
                 : undefined
             }
           >
@@ -1197,6 +1232,7 @@ export function LightboxStudio({
                 key={`${effectiveAsset.primary}:${effectiveAsset.rotation || 0}:${effectiveAsset.cover?.revision || ""}`}
                 asset={effectiveAsset}
                 zoomed={zoomScale > 1.05}
+                view={{ scale: zoomScale, pan: panOffset }}
                 rotationDelta={rotationDelta}
                 originalMime={activeFile?.mime}
                 onClearReady={handleClearPhotoReady}
