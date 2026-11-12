@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	playbackSegmentSeconds = 4.0
+	playbackSegmentSeconds = 2.0
 	playbackCacheLimit     = int64(256 << 20)
 	playbackSegmentLimit   = int64(8 << 20)
 	playbackReservation    = 2 * playbackSegmentLimit

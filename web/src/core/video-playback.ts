@@ -5,6 +5,8 @@ import type { PlaybackDescriptor } from "./types";
 type PlaybackMode = "source" | "native-hls" | "mse-hls" | "switching";
 export type PlaybackRepresentation = "source" | "compatibility" | null;
 
+const stalledOriginals = new Set<string>();
+
 type NativeMediaDiagnostics = HTMLVideoElement & {
   webkitAudioDecodedByteCount?: number;
   mozHasAudio?: boolean;
@@ -36,6 +38,9 @@ export class VideoPlayback {
   private targetTime = 0;
   private rate = 1;
   private silentAudioStart?: number;
+  private progressTimer?: ReturnType<typeof setInterval>;
+  private progressProbe?: { time: number; at: number };
+  private progressPlaybackStarted = false;
   private diagnosticEvents: { event: string; at: number; time: number; paused: boolean; ready: number }[] = [];
   private readonly diagnosticStart = performance.now();
   private readonly observedEvents = ["play", "playing", "pause", "waiting", "stalled", "seeking", "seeked", "loadedmetadata", "loadeddata", "emptied", "error"];
@@ -55,7 +60,61 @@ export class VideoPlayback {
     for (const event of this.observedEvents) video.addEventListener(event, this.observeMedia);
   }
 
-  private observeMedia = (event: Event): void => { this.recordEvent(event.type); };
+  private observeMedia = (event: Event): void => {
+    this.recordEvent(event.type);
+    if (event.type === "play") this.startProgressCheck();
+    else if (event.type === "playing") {
+      this.progressPlaybackStarted = true;
+      this.progressProbe = undefined;
+      this.startProgressCheck();
+    }
+    else if (event.type === "pause" && this.video.paused) this.stopProgressCheck();
+    else if (["seeking", "waiting", "emptied"].includes(event.type)) this.progressProbe = undefined;
+  };
+
+  private startProgressCheck(): void {
+    if (this.disposed || this.mode !== "source" || this.progressTimer) return;
+    this.progressTimer = setInterval(this.checkSourceProgress, 500);
+  }
+
+  private stopProgressCheck(): void {
+    clearInterval(this.progressTimer);
+    this.progressTimer = undefined;
+    this.progressProbe = undefined;
+    this.progressPlaybackStarted = false;
+  }
+
+  private checkSourceProgress = (): void => {
+    if (this.disposed || this.mode !== "source" || !this.wantsPlayback || this.suspended) {
+      this.stopProgressCheck();
+      return;
+    }
+    const video = this.video;
+    const time = video.currentTime;
+    const buffered = video.buffered;
+    let bufferedAhead = false;
+    for (let index = 0; index < buffered.length; index++) {
+      if (buffered.start(index) <= time && buffered.end(index) >= time + 1) bufferedAhead = true;
+    }
+    // Observe only started, buffered playback; loading, seeks and pauses are not clock failures.
+    if ((document.hidden && document.pictureInPictureElement !== video) || video.paused ||
+      video.seeking || video.ended || video.playbackRate <= 0 || video.readyState < 3 ||
+      !this.progressPlaybackStarted || !bufferedAhead || (Number.isFinite(video.duration) && video.duration - time < 0.5)) {
+      this.progressProbe = undefined;
+      return;
+    }
+    const now = performance.now();
+    if (!this.progressProbe || Math.abs(time - this.progressProbe.time) > 0.02) {
+      this.progressProbe = { time, at: now };
+      return;
+    }
+    if (now - this.progressProbe.at < 3000) return;
+    this.recordEvent("source-clock-stalled");
+    this.stopProgressCheck();
+    stalledOriginals.add(this.hash);
+    if (stalledOriginals.size > 32) stalledOriginals.delete(stalledOriginals.values().next().value!);
+    this.useCompatibility();
+  };
 
   private recordEvent(event: string): void {
     this.diagnosticEvents.push({
@@ -115,6 +174,10 @@ export class VideoPlayback {
     if (this.disposed) return;
     this.descriptor = descriptor;
     this.callbacks.onDescriptor(descriptor);
+    if (stalledOriginals.has(this.hash)) {
+      this.sourceFailed = true;
+      this.recordEvent("reuse-source-clock-fallback");
+    }
     const source = descriptor.source;
     // Container/codec hints cannot prove that the native decoder will accept the tracks.
     if (!this.sourceFailed && source) {
@@ -186,13 +249,18 @@ export class VideoPlayback {
     this.rate = this.video.playbackRate;
     this.recordEvent("request-play");
     this.startLoading();
+    this.startProgressCheck();
     return this.playMedia();
   }
 
   private playMedia(): Promise<void> {
     const generation = this.sourceGeneration;
     return this.video.play().then(() => {
-      if (!this.disposed && generation === this.sourceGeneration) this.recordEvent("play-resolved");
+      if (!this.disposed && generation === this.sourceGeneration) {
+        this.progressPlaybackStarted = true;
+        this.progressProbe = undefined;
+        this.recordEvent("play-resolved");
+      }
     }).catch((error: DOMException) => {
       // A replaced source can reject its pending play after the new source has started.
       if (this.disposed || generation !== this.sourceGeneration) return;
@@ -203,6 +271,7 @@ export class VideoPlayback {
 
   played(): boolean {
     if (this.disposed || !this.ready || this.video.paused) return false;
+    this.startProgressCheck();
     if (this.wantsPlayback) return true;
     this.wantsPlayback = true;
     this.suspended = false;
@@ -215,11 +284,13 @@ export class VideoPlayback {
   setRate(rate: number): void {
     if (this.disposed) return;
     this.rate = rate;
+    this.progressProbe = undefined;
     this.video.defaultPlaybackRate = rate;
     this.video.playbackRate = rate;
   }
 
   loadFrame(time = this.targetTime): void {
+    this.stopProgressCheck();
     this.wantsPlayback = false;
     this.suspended = false;
     this.targetTime = Math.max(0, time);
@@ -242,11 +313,13 @@ export class VideoPlayback {
 
   paused(): void {
     if (this.changingSource || this.video.error) return;
+    this.stopProgressCheck();
     this.wantsPlayback = false;
     if (!this.video.seeking) this.hls?.stopLoad();
   }
 
   suspend(): void {
+    this.stopProgressCheck();
     this.suspended = true;
     this.wantsPlayback = false;
     this.recordEvent("request-suspend");
@@ -365,6 +438,7 @@ export class VideoPlayback {
   };
 
   private resetMedia(): void {
+    this.stopProgressCheck();
     this.sourceGeneration += 1;
     this.resetAudioCheck();
     this.ready = false;

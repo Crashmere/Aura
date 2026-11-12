@@ -35,6 +35,37 @@ type playbackDescriptor struct {
 	FrameRate float64         `json:"frameRate,omitempty"`
 }
 
+type playbackTimeline string
+
+const playbackShortSegments playbackTimeline = "s2"
+
+func requestPlaybackTimeline(r *http.Request) (playbackTimeline, error) {
+	values, ok := r.URL.Query()["timeline"]
+	if !ok {
+		return "", nil
+	}
+	if len(values) != 1 || values[0] != string(playbackShortSegments) {
+		return "", errPlaybackTime
+	}
+	return playbackShortSegments, nil
+}
+
+func (timeline playbackTimeline) seconds() float64 {
+	if timeline == playbackShortSegments {
+		return playbackSegmentSeconds
+	}
+	return 4
+}
+
+func (timeline playbackTimeline) segment(duration float64, index int) (start, length float64) {
+	if index < 0 {
+		return 0, 0
+	}
+	seconds := timeline.seconds()
+	start = float64(index) * seconds
+	return start, max(0, min(seconds, duration-start))
+}
+
 type playbackSpec struct {
 	hash, stamp, path          string
 	duration, start, frameRate float64
@@ -273,7 +304,7 @@ func (l *Library) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		playbackFailure(w, err)
 		return
 	}
-	result := playbackDescriptor{Stream: playbackSource{URL: fmt.Sprintf("/aura/media/%s/stream/index.m3u8?rotation=%d", spec.hash, rotation), Mime: "application/vnd.apple.mpegurl"}, Duration: spec.duration, FrameRate: spec.frameRate}
+	result := playbackDescriptor{Stream: playbackSource{URL: fmt.Sprintf("/aura/media/%s/stream/index.m3u8?rotation=%d&timeline=%s", spec.hash, rotation, playbackShortSegments), Mime: "application/vnd.apple.mpegurl"}, Duration: spec.duration, FrameRate: spec.frameRate}
 	if rotation == 0 && spec.sourceMime != "" {
 		result.Source = &playbackSource{URL: "/aura/media/" + spec.hash + "/source?rotation=0", Mime: spec.sourceMime, Audio: spec.sourceAudio}
 	}
@@ -287,15 +318,27 @@ func (l *Library) playbackInfo(w http.ResponseWriter, r *http.Request) {
 func (l *Library) streamPlaylist(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	_, spec, rotation, err := l.playbackRequest(r)
+	timeline, timelineErr := requestPlaybackTimeline(r)
+	if err == nil {
+		err = timelineErr
+	}
 	if err != nil {
 		playbackFailure(w, err)
 		return
 	}
 	var playlist strings.Builder
-	playlist.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n")
-	for index, count := 0, int(math.Ceil(spec.duration/playbackSegmentSeconds)); index < count; index++ {
-		duration := min(playbackSegmentSeconds, spec.duration-float64(index)*playbackSegmentSeconds)
-		fmt.Fprintf(&playlist, "#EXTINF:%.6f,\n%d.ts?rotation=%d\n", duration, index, rotation)
+	fmt.Fprintf(&playlist, "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:%.0f\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n", timeline.seconds())
+	for index := 0; ; index++ {
+		_, duration := timeline.segment(spec.duration, index)
+		if duration <= 0 {
+			break
+		}
+		fmt.Fprintf(&playlist, "#EXTINF:%.6f,\n%d.ts?rotation=%d", duration, index, rotation)
+		// Keep unversioned URLs on the old four-second timeline for cached playlists.
+		if timeline != "" {
+			fmt.Fprintf(&playlist, "&timeline=%s", timeline)
+		}
+		playlist.WriteByte('\n')
 	}
 	playlist.WriteString("#EXT-X-ENDLIST\n")
 	if err = originalDeletion(l.DB, spec.hash, ""); err != nil {
@@ -310,9 +353,13 @@ func (l *Library) streamPlaylist(w http.ResponseWriter, r *http.Request) {
 func (l *Library) streamSegment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	p, spec, rotation, err := l.playbackRequest(r)
+	timeline, timelineErr := requestPlaybackTimeline(r)
 	index, parseErr := strconv.Atoi(chi.URLParam(r, "segment"))
-	if err == nil && (parseErr != nil || index < 0 || float64(index)*playbackSegmentSeconds >= spec.duration) {
-		err = errPlaybackTime
+	if err == nil {
+		_, duration := timeline.segment(spec.duration, index)
+		if timelineErr != nil || parseErr != nil || duration <= 0 {
+			err = errPlaybackTime
+		}
 	}
 	if err != nil {
 		playbackFailure(w, err)
@@ -322,14 +369,14 @@ func (l *Library) streamSegment(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		p.mu.Lock()
 		p.expireLocked(time.Now())
-		entry = p.entries[playbackSegmentKey(spec, rotation, index)]
+		entry = p.entries[playbackSegmentKey(spec, rotation, index, timeline)]
 		if entry != nil {
 			entry.refs++
 			entry.used = time.Now()
 		}
 		p.mu.Unlock()
 	} else {
-		entry, err = p.segment(r.Context(), l, spec, rotation, index)
+		entry, err = p.segment(r.Context(), l, spec, rotation, index, timeline)
 	}
 	if err != nil {
 		playbackFailure(w, err)
