@@ -365,6 +365,9 @@ func (l *Library) process(parent context.Context, f File) (result error) {
 	result = l.publish(f)
 	if result == nil {
 		l.Notify()
+		if strings.HasPrefix(f.Mime, "video/") {
+			l.warmCoverStrip(f.Hash)
+		}
 	}
 	progress.result("catalog", result)
 	return result

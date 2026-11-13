@@ -5,6 +5,7 @@ import type {
 } from "./types";
 
 export const APP_BASE = "/aura/";
+export const COVER_STRIP_INVALIDATED_EVENT = "aura:cover-strips-invalidated";
 
 export class HttpServiceError extends Error {
   readonly status: number;
@@ -38,6 +39,7 @@ export async function requestJson<T>(
   });
 
   if (res.status === 401) {
+    window.dispatchEvent(new Event(COVER_STRIP_INVALIDATED_EVENT));
     throw new HttpServiceError("设备授权已失效，请返回门户重新登录", res.status);
   }
 
@@ -50,7 +52,13 @@ export async function requestJson<T>(
     );
   }
 
-  return res.json() as Promise<T>;
+  const result = await res.json() as T;
+  if (payload !== undefined && (
+    endpoint === "assets/purge" || endpoint === "assets" ||
+    /^assets\/[^/]+\/(split|merge)$/.test(endpoint) || endpoint.startsWith("splits/") ||
+    /^assets\/[^/]+$/.test(endpoint) && typeof payload === "object" && payload !== null && "trash" in payload
+  )) window.dispatchEvent(new Event(COVER_STRIP_INVALIDATED_EVENT));
+  return result;
 }
 
 export function buildMediaUrl(
@@ -80,7 +88,7 @@ export function buildFramePreviewUrl(
   const search = new URLSearchParams({
     hash,
     motion: motionHash,
-    time: timeSeconds.toFixed(6),
+    time: timeSeconds.toFixed(9),
     rotation: String(rotation || 0),
     size,
   });

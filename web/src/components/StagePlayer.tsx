@@ -28,6 +28,7 @@ import {
 } from "../core/client";
 import type { CatalogAsset } from "../core/types";
 import { coverFrameTimes } from "../core/cover-frames";
+import type { CoverStrip, CoverStripFrame, CoverStripState } from "../core/cover-strip";
 import { VideoPlayback, type PlaybackRepresentation } from "../core/video-playback";
 import {
   cacheDecodedPreview,
@@ -292,6 +293,39 @@ export function ProgressiveStagePhoto({
 // 3. Timeline Strip for Cover / Live Photo Key Frame Selection
 // ============================================================================
 
+function FrameStripImage({ strip, frame, rotation, className, contain = false }: {
+  strip: CoverStrip; frame: CoverStripFrame; rotation: number; className?: string; contain?: boolean;
+}) {
+  const odd = rotation % 180 !== 0;
+  const transform = rotation === 90 ? `translate(${frame.height},0) rotate(90)`
+    : rotation === 180 ? `translate(${frame.width},${frame.height}) rotate(180)`
+    : rotation === 270 ? `translate(0,${frame.width}) rotate(270)` : undefined;
+  return (
+    <svg className={className} viewBox={`0 0 ${odd ? frame.height : frame.width} ${odd ? frame.width : frame.height}`}
+      preserveAspectRatio={`xMidYMid ${contain ? "meet" : "slice"}`} aria-hidden="true" focusable="false">
+      <g transform={transform}>
+        <svg width={frame.width} height={frame.height} overflow="hidden">
+          <image href={strip.imageUrl} x={-frame.x} y={-frame.y} width={strip.width} height={strip.height} />
+        </svg>
+      </g>
+    </svg>
+  );
+}
+
+export function ExactCoverPreview({ asset, time, strip }: { asset: CatalogAsset; time: number; strip?: CoverStrip }) {
+  const motion = asset.kind === "live" ? asset.motion! : asset.primary;
+  const url = buildFramePreviewUrl(asset.id, asset.primary, motion, time, asset.rotation || 0, "preview");
+  const [loaded, setLoaded] = useState("");
+  const frame = strip?.frames.find((frame) => Math.abs(frame.time - time) < 1e-5);
+  return <>
+    {strip && frame && loaded !== url && (
+      <FrameStripImage strip={strip} frame={frame} rotation={asset.rotation || 0} contain className="cover-frame-candidate-preview" />
+    )}
+    <img key={url} className="cover-frame-exact-preview" src={url} alt="当前选中帧预览"
+      style={{ opacity: loaded === url ? 1 : 0 }} onLoad={() => setLoaded(url)} />
+  </>;
+}
+
 function StripFrameThumb({ url, viewportRef }: {
   url: string;
   viewportRef: RefObject<HTMLDivElement | null>;
@@ -333,20 +367,24 @@ export function FrameTimelineStrip({
   time,
   duration,
   locked,
+  stripState,
   onSeek,
 }: {
   asset: CatalogAsset;
   time: number;
   duration: number;
   locked: boolean;
+  stripState: CoverStripState;
   onSeek: (targetSeconds: number) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const fps = (asset.kind === "live" ? asset.motionFrameRate : asset.frameRate) || 30;
-  const timestamps = coverFrameTimes(duration, fps);
+  const strip = stripState.strip;
+  const timestamps = strip?.frames.map((frame) => frame.time) || coverFrameTimes(duration, fps);
   const maxEnd = timestamps[timestamps.length - 1];
   const motionHash = asset.kind === "live" ? asset.motion! : asset.primary;
   const playheadPercent = maxEnd ? Math.min(100, (time / maxEnd) * 100) : 0;
+  const closest = timestamps.reduce((best, at, index) => Math.abs(at - time) < Math.abs(timestamps[best] - time) ? index : best, 0);
 
   return (
     <div ref={viewportRef} className="frame-strip-scroll">
@@ -371,11 +409,15 @@ export function FrameTimelineStrip({
               key={idx}
               disabled={locked || !duration}
               aria-label={`选择 ${formatDurationClock(ts)} 的帧`}
-              aria-pressed={idx === Math.round((playheadPercent / 100) * (timestamps.length - 1))}
+              aria-pressed={idx === closest}
               title={`${ts.toFixed(3)} 秒`}
               onClick={() => onSeek(ts)}
             >
-              {duration > 0 && <StripFrameThumb key={frameSrc} url={frameSrc} viewportRef={viewportRef} />}
+              {duration > 0 && (strip ? (
+                <span className="frame-strip-thumb"><FrameStripImage strip={strip} frame={strip.frames[idx]} rotation={asset.rotation || 0} className="frame-strip-image" /></span>
+              ) : stripState.status === "error" ? (
+                <StripFrameThumb key={frameSrc} url={frameSrc} viewportRef={viewportRef} />
+              ) : <span className="frame-strip-thumb"><LoaderCircle size={14} className="spin" /></span>)}
             </button>
           );
         })}

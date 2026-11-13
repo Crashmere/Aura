@@ -32,12 +32,14 @@ type playbackEntry struct {
 	used                           time.Time
 	refs                           int
 	retired                        bool
+	strip                          *coverStripRecord
 }
 
 type playbackJob struct {
 	hash     string
 	owner    string
 	frame    bool
+	strip    bool
 	cancel   context.CancelFunc
 	done     chan struct{}
 	waiters  int
@@ -65,6 +67,7 @@ type playbackCache struct {
 	reserved     int64
 	closed       bool
 	slots        chan struct{}
+	stripSlots   chan struct{}
 	frameActive  int
 	frameWaiters []*frameWaiter
 	running      sync.WaitGroup
@@ -104,7 +107,7 @@ func (l *Library) StartPlayback(parent context.Context) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	p := &playbackCache{ctx: ctx, cancel: cancel, scratch: scratch, entries: map[string]*playbackEntry{}, specs: map[string]playbackSpecEntry{}, jobs: map[string]*playbackJob{}, slots: make(chan struct{}, 2)}
+	p := &playbackCache{ctx: ctx, cancel: cancel, scratch: scratch, entries: map[string]*playbackEntry{}, specs: map[string]playbackSpecEntry{}, jobs: map[string]*playbackJob{}, slots: make(chan struct{}, 2), stripSlots: make(chan struct{}, 1)}
 	l.runtimeCtx = ctx
 	l.playback = p
 	p.running.Add(1)
@@ -248,7 +251,7 @@ func (p *playbackCache) newJobLocked(key, hash string, reserve int64, deadline t
 		limit = 24
 	}
 	for _, job := range p.jobs {
-		if job.frame == frame {
+		if job.frame == frame && !job.strip {
 			count++
 		}
 	}

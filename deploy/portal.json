@@ -35,7 +35,7 @@
       "id": "derived",
       "name": "预览缓存",
       "path": "/opt/aura/data/derived",
-      "purpose": "可再生缩略图、浏览预览、自选视频封面与实况关键照片帧、无损 JPEG 方向副本及照片和多帧视频特征、相似候选；视频使用原件或按需短片段，不保存整段播放副本。nas 手工全量备份收录已存图片与特征，原生工具仍不收录。",
+      "purpose": "可再生缩略图、浏览预览、自选视频封面与实况关键照片帧、候选帧 JPEG 图集及时间戳、无损 JPEG 方向副本及照片和多帧视频特征、相似候选；视频使用原件或按需短片段，不保存整段播放副本。nas 手工全量备份收录已存图片与特征，原生工具仍不收录。",
       "kind": "cache",
       "browse": false,
       "cleanup": false
@@ -259,6 +259,11 @@
       "method": "PATCH",
       "path": "/api/assets/{id}/rotation",
       "description": "保存照片、视频与准确配对实况资源的方向；JPEG 写入方向标记，视频按需片段应用方向，不改写原件"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assets/{id}/frames",
+      "description": "读取视频或准确配对实况视频的候选帧时间戳和 JPEG 图集；异步预生成、重启复用，缺失时按需生成，不保存修改"
     },
     {
       "method": "GET",

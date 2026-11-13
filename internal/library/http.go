@@ -89,6 +89,7 @@ func (l *Library) Handler(frontend fs.FS) http.Handler {
 	r.Patch("/api/assets/{id}/rotation", l.rotate)
 	r.Patch("/api/assets/{id}/cover", l.saveCover)
 	r.Get("/api/assets/{id}/frame", l.frame)
+	r.Get("/api/assets/{id}/frames", l.frameStrip)
 	r.Post("/api/assets/{id}/merge", l.merge)
 	r.Post("/api/assets/{id}/split", l.split)
 	r.Get("/api/assets/{id}/download", l.download)

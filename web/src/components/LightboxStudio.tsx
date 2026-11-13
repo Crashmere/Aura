@@ -37,7 +37,6 @@ import {
 } from "lucide-react";
 import {
   APP_BASE,
-  buildFramePreviewUrl,
   buildMediaUrl,
   describeOriginalRole,
   formatByteSize,
@@ -55,6 +54,7 @@ import type {
   NativeEditRecord,
   StoredFile,
 } from "../core/types";
+import { acquireCoverStrip, coverStripResource, useCoverStrip } from "../core/cover-strip";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
 import {
   type NetworkMediaMode,
@@ -73,6 +73,7 @@ import { clampPhotoPan, usePageScrollLock, usePhotoViewGestures } from "../core/
 import {
   type FramePlayheadState,
   FrameTimelineStrip,
+  ExactCoverPreview,
   PLAYER_SKIP_SECONDS,
   ProgressiveStagePhoto,
   StageVideoPlayer,
@@ -386,6 +387,18 @@ export function LightboxStudio({
   const canPickCover =
     effectiveAsset.kind === "video" ||
     (effectiveAsset.kind === "live" && !!effectiveAsset.motion);
+  const stripResource = coverStripResource(effectiveAsset);
+  const stripState = useCoverStrip(stripResource, coverPickerOpen);
+  useEffect(() => {
+    if (!stripResource || !isPresent || covered || !mediaPolicy.prefetch) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      if (!document.hidden) void acquireCoverStrip(stripResource, controller.signal).then((loaded) => loaded.release(), () => {});
+    }, 400);
+    const stopHidden = () => { if (document.hidden) controller.abort(); };
+    document.addEventListener("visibilitychange", stopHidden);
+    return () => { clearTimeout(timer); controller.abort(); document.removeEventListener("visibilitychange", stopHidden); };
+  }, [stripResource, isPresent, covered, mediaPolicy.prefetch]);
   const hasRotationChange = normalizeQuarterAngle(rotationDelta) !== 0;
 
   useLayoutEffect(() => {
@@ -1169,6 +1182,7 @@ export function LightboxStudio({
                 time={frameState.time}
                 duration={frameState.duration}
                 locked={savingCover}
+                stripState={stripState}
                 onSeek={(t) => {
                   const video = stageRef.current?.querySelector("video");
                   if (video) {
@@ -1258,20 +1272,7 @@ export function LightboxStudio({
 
             {/* Extracted high-res cover preview overlay when paused in frame picker */}
             {coverPickerOpen && frameState.ready && frameState.duration > 0 && (
-              <img
-                className="cover-frame-exact-preview"
-                src={buildFramePreviewUrl(
-                  effectiveAsset.id,
-                  effectiveAsset.primary,
-                  effectiveAsset.kind === "live"
-                    ? effectiveAsset.motion!
-                    : effectiveAsset.primary,
-                  frameState.time,
-                  effectiveAsset.rotation || 0,
-                  "preview",
-                )}
-                alt="当前选中帧预览"
-              />
+              <ExactCoverPreview asset={effectiveAsset} time={frameState.time} strip={stripState.strip} />
             )}
           </div>
 

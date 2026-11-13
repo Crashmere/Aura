@@ -628,7 +628,8 @@
   height: 100%;
 }
 
-.frame-strip img {
+.frame-strip img,
+.frame-strip-image {
   width: 100%;
   height: 100%;
   object-fit: cover;

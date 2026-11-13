@@ -309,21 +309,7 @@ func (l *Library) extractVideoFrames(ctx context.Context, hash, work string) (vi
 			}
 			args = append(args, "-vf", filter+",showinfo", "-fps_mode", "vfr", "-frames:v", strconv.Itoa(frames),
 				"-map_metadata", "-1", "-q:v", "3", "-threads", "2", "-y", outputPath)
-			var release func()
-			if gpu {
-				release, err = l.acquireGPU(ctx)
-			} else {
-				release, err = l.acquireCPU(ctx)
-			}
-			if err != nil {
-				return record, nil, err
-			}
-			logs := &limitedBuffer{max: 256 << 10}
-			cmd := mediaCommand(ctx, "ffmpeg", args...)
-			cmd.Stderr = logs
-			err = cmd.Run()
-			release()
-			output = logs.String()
+			output, err = l.runVideoSampleCommand(ctx, args, gpu, mode != "NVIDIA GPU · CUDA 解码")
 			if err != nil {
 				break
 			}
