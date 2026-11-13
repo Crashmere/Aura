@@ -27,6 +27,7 @@ import {
   orientedDimensions,
 } from "../core/client";
 import type { CatalogAsset } from "../core/types";
+import { coverFrameTimes } from "../core/cover-frames";
 import { VideoPlayback, type PlaybackRepresentation } from "../core/video-playback";
 import {
   cacheDecodedPreview,
@@ -288,21 +289,42 @@ export function ProgressiveStagePhoto({
 }
 
 // ============================================================================
-// 3. 7-Frame Timeline Strip for Cover / Live Photo Key Frame Selection
+// 3. Timeline Strip for Cover / Live Photo Key Frame Selection
 // ============================================================================
 
-function StripFrameThumb({ url }: { url: string }) {
+function StripFrameThumb({ url, viewportRef }: {
+  url: string;
+  viewportRef: RefObject<HTMLDivElement | null>;
+}) {
+  const thumbRef = useRef<HTMLSpanElement>(null);
+  const [requested, setRequested] = useState(false);
   const [failed, setFailed] = useState(false);
-  return failed ? (
-    <ImageIcon size={17} />
-  ) : (
-    <img
-      src={url}
-      alt=""
-      draggable={false}
-      decoding="async"
-      onError={() => setFailed(true)}
-    />
+
+  useEffect(() => {
+    const thumb = thumbRef.current;
+    if (!thumb) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setRequested(true);
+        observer.disconnect();
+      }
+    }, { root: viewportRef.current, rootMargin: "0px 64px" });
+    observer.observe(thumb);
+    return () => observer.disconnect();
+  }, [viewportRef]);
+
+  return (
+    <span ref={thumbRef} className="frame-strip-thumb">
+      {failed ? <ImageIcon size={17} /> : requested && (
+        <img
+          src={url}
+          alt=""
+          draggable={false}
+          decoding="async"
+          onError={() => setFailed(true)}
+        />
+      )}
+    </span>
   );
 }
 
@@ -319,44 +341,52 @@ export function FrameTimelineStrip({
   locked: boolean;
   onSeek: (targetSeconds: number) => void;
 }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
   const fps = (asset.kind === "live" ? asset.motionFrameRate : asset.frameRate) || 30;
-  const maxEnd = Math.max(0, duration - 0.5 / fps);
+  const timestamps = coverFrameTimes(duration, fps);
+  const maxEnd = timestamps[timestamps.length - 1];
   const motionHash = asset.kind === "live" ? asset.motion! : asset.primary;
-  const timestamps = Array.from({ length: 7 }, (_, idx) => (maxEnd * idx) / 6);
   const playheadPercent = maxEnd ? Math.min(100, (time / maxEnd) * 100) : 0;
 
   return (
-    <div className="frame-strip" role="group" aria-label="缩略帧时间轴">
-      {timestamps.map((ts, idx) => {
-        const frameSrc = buildFramePreviewUrl(
-          asset.id,
-          asset.primary,
-          motionHash,
-          ts,
-          asset.rotation || 0,
-          "thumb",
-        );
-        return (
-          <button
-            type="button"
-            key={idx}
-            disabled={locked || !duration}
-            aria-label={`选择 ${formatDurationClock(ts)} 的帧`}
-            aria-pressed={idx === Math.round((playheadPercent / 100) * 6)}
-            title={`${ts.toFixed(3)} 秒`}
-            onClick={() => onSeek(ts)}
-          >
-            {duration > 0 && <StripFrameThumb key={frameSrc} url={frameSrc} />}
-          </button>
-        );
-      })}
-      {duration > 0 && (
-        <span
-          className="frame-strip-position"
-          style={{ left: `${playheadPercent}%` }}
-          aria-hidden="true"
-        />
-      )}
+    <div ref={viewportRef} className="frame-strip-scroll">
+      <div
+        className="frame-strip"
+        role="group"
+        aria-label="缩略帧时间轴"
+        style={{ "--frame-count": timestamps.length } as CSSProperties}
+      >
+        {timestamps.map((ts, idx) => {
+          const frameSrc = buildFramePreviewUrl(
+            asset.id,
+            asset.primary,
+            motionHash,
+            ts,
+            asset.rotation || 0,
+            "thumb",
+          );
+          return (
+            <button
+              type="button"
+              key={idx}
+              disabled={locked || !duration}
+              aria-label={`选择 ${formatDurationClock(ts)} 的帧`}
+              aria-pressed={idx === Math.round((playheadPercent / 100) * (timestamps.length - 1))}
+              title={`${ts.toFixed(3)} 秒`}
+              onClick={() => onSeek(ts)}
+            >
+              {duration > 0 && <StripFrameThumb key={frameSrc} url={frameSrc} viewportRef={viewportRef} />}
+            </button>
+          );
+        })}
+        {duration > 0 && (
+          <span
+            className="frame-strip-position"
+            style={{ left: `clamp(0px, ${playheadPercent}%, calc(100% - 3px))` }}
+            aria-hidden="true"
+          />
+        )}
+      </div>
     </div>
   );
 }
