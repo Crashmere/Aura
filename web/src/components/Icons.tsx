@@ -48,6 +48,26 @@ export function AspectRatioGlyph() {
   );
 }
 
+export function CompatibilityPlaybackGlyph({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 9V8a3 3 0 0 1 3-3h13m-3-3 3 3-3 3" />
+      <path d="M20 15v1a3 3 0 0 1-3 3H4m3-3-3 3 3 3" />
+      <path d="m10 8.5 5.5 3.5-5.5 3.5Z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function SkipSecondsGlyph({ forward = false }: { forward?: boolean }) {
   return (
     <svg

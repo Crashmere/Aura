@@ -14,7 +14,6 @@ import {
   PictureInPicture2,
   Play,
   RefreshCw,
-  ShieldCheck,
   StepBack,
   StepForward,
   Volume2,
@@ -37,7 +36,7 @@ import {
 } from "../core/workspace";
 import { useCompactViewer } from "../core/photo-view";
 import { MotionPresence, useIsPresent } from "../core/motion";
-import { SkipSecondsGlyph } from "./Icons";
+import { CompatibilityPlaybackGlyph, SkipSecondsGlyph } from "./Icons";
 
 // ============================================================================
 // 1. Live Quarter-Turn CSS Rotation Preview Hook
@@ -1254,7 +1253,7 @@ export function StageVideoPlayer({
                   } else void startPlayback();
                 }}
               >
-                <ShieldCheck size={18} />
+                <CompatibilityPlaybackGlyph />
               </button>
             )}
             <button

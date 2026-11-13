@@ -27,7 +27,6 @@ import {
   RotateCcw,
   RotateCw,
   Scissors,
-  ShieldCheck,
   Sliders,
   Sparkles,
   Star,
@@ -69,7 +68,7 @@ import {
   useIsPresent,
   useSlidingIndicator,
 } from "../core/motion";
-import { ActionButton, LiveRingsIcon, RoundIconButton, TimelineCrosshairIcon } from "./Icons";
+import { ActionButton, CompatibilityPlaybackGlyph, LiveRingsIcon, RoundIconButton, TimelineCrosshairIcon } from "./Icons";
 import { clampPhotoPan, usePageScrollLock, usePhotoViewGestures } from "../core/photo-view";
 import {
   type FramePlayheadState,
@@ -993,7 +992,7 @@ export function LightboxStudio({
                     <button type="button" role="menuitem" disabled={isLocked} onClick={() => {
                       rootRef.current?.querySelector<HTMLButtonElement>("[data-player-compatibility]")?.click();
                       setMoreMenuOpen(false);
-                    }}><ShieldCheck size={16} />使用兼容模式播放</button>
+                    }}><CompatibilityPlaybackGlyph size={16} />使用兼容模式播放</button>
                     <button type="button" role="menuitem" onClick={() => {
                       setPlaybackDiagnosticsOpen(true);
                       setMoreMenuOpen(false);
