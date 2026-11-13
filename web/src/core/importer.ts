@@ -7,6 +7,7 @@ import {
   requestJson,
 } from "./client";
 import type { CatalogAsset } from "./types";
+import { UploadRateMeter } from "./upload-rate";
 
 export type UploadTaskPhase =
   | "waiting"
@@ -27,6 +28,7 @@ export interface UploadQueueEntry {
   completionState?: "done" | "duplicate";
   state: UploadTaskPhase;
   progress: number;
+  bytesPerSecond: number;
   error?: string;
   date?: string;
   assetId?: string;
@@ -263,6 +265,7 @@ export function enqueueUploadFiles(files: File[], albumId = ""): void {
         albumId,
         state: "waiting",
         progress: 0,
+        bytesPerSecond: 0,
       });
       existingKeys.add(key);
     }
@@ -370,6 +373,38 @@ async function finishUploadEntry(
   }
 }
 
+function sendUploadChunk(entry: UploadQueueEntry, hash: string, offset: number, chunkSize: number) {
+  return new Promise<{ status: number; payload: { offset?: number; error?: string; [key: string]: unknown } }>((resolve, reject) => {
+    const chunk = entry.file.slice(offset, offset + chunkSize);
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", `${APP_BASE}api/uploads/${hash}`);
+    xhr.withCredentials = true;
+    xhr.responseType = "json";
+    xhr.timeout = 660000;
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader("Upload-Offset", String(offset));
+    const meter = new UploadRateMeter((rate) => {
+      entry.bytesPerSecond = rate;
+      broadcastThrottled();
+    });
+    const finish = (settle: () => void) => {
+      meter.stop();
+      xhr.onload = xhr.onerror = xhr.ontimeout = xhr.onabort = null;
+      xhr.upload.onprogress = xhr.upload.onload = null;
+      settle();
+    };
+    xhr.upload.onprogress = (event) => meter.update(Math.min(chunk.size, event.loaded));
+    // Sending has ended; waiting for durable acknowledgment is not upload throughput.
+    xhr.upload.onload = () => meter.stop();
+    xhr.onload = () => finish(() => resolve({ status: xhr.status, payload: xhr.response || {} }));
+    xhr.onerror = () => finish(() => reject(new Error("网络连接中断，请重试")));
+    xhr.ontimeout = () => finish(() => reject(new Error("分片上传超时，请重试")));
+    xhr.onabort = () => finish(() => reject(new Error("分片上传已中止，请重试")));
+    try { xhr.send(chunk); }
+    catch (error) { finish(() => reject(error)); }
+  });
+}
+
 async function transferEntry(
   entry: UploadQueueEntry,
   preparation: Promise<{ date: Date; hash: string }>,
@@ -413,18 +448,8 @@ async function transferEntry(
       return;
     }
     try {
-      const res = await fetch(`${APP_BASE}api/uploads/${hash}`, {
-        method: "PUT",
-        credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "Upload-Offset": String(offset),
-        },
-        body: entry.file.slice(offset, offset + session.chunkSize),
-        signal: AbortSignal.timeout(660000),
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (res.status === 409 && typeof payload.offset === "number") {
+      const { status, payload } = await sendUploadChunk(entry, hash, offset, session.chunkSize);
+      if (status === 409 && typeof payload.offset === "number") {
         if (
           !Number.isInteger(payload.offset) ||
           payload.offset < 0 ||
@@ -435,15 +460,16 @@ async function transferEntry(
         offset = payload.offset;
         continue;
       }
-      if (!res.ok) {
+      if (status < 200 || status >= 300) {
         throw new HttpServiceError(
           payload.error ||
-            (res.status === 401 ? "请返回门户重新登录" : `上传失败 (${res.status})`),
-          res.status,
+            (status === 401 ? "请返回门户重新登录" : `上传失败 (${status})`),
+          status,
           payload,
         );
       }
       if (
+        typeof payload.offset !== "number" ||
         !Number.isInteger(payload.offset) ||
         payload.offset <= offset ||
         payload.offset > entry.file.size

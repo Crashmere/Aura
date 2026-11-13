@@ -79,9 +79,23 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 10px 14px;
   background: var(--bg-subtle);
   font-size: 12.5px;
+}
+
+.queue-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.upload-rate {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .queue-header div {

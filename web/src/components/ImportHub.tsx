@@ -33,6 +33,7 @@ import {
   type UploadTaskPhase,
 } from "../core/importer";
 import { useSlidingIndicator } from "../core/motion";
+import { formatUploadRate } from "../core/upload-rate";
 import type { StoredFile } from "../core/types";
 import { ActionButton, RoundIconButton } from "./Icons";
 
@@ -90,6 +91,7 @@ export function ImportHubModal({
     ["done", "duplicate", "trashed", "skipped"].includes(x.state),
   ).length;
   const errorCount = engine.items.filter((x) => x.state === "error").length;
+  const totalRate = engine.items.reduce((sum, item) => sum + item.bytesPerSecond, 0);
 
   return (
     <div className="modal-scrim" onClick={onClose}>
@@ -293,9 +295,12 @@ export function ImportHubModal({
           {activeTab !== "apple" && engine.items.length > 0 && (
             <div className="upload-queue">
               <div className="queue-header">
-                <strong>
-                  {doneCount} / {engine.items.length} 个文件
-                </strong>
+                <span className="queue-summary">
+                  <strong>{doneCount} / {engine.items.length} 个文件</strong>
+                  <small className="upload-rate" title="浏览器当前发送速率，不含服务器落盘和校验时间">
+                    总上传速率 {formatUploadRate(totalRate)}
+                  </small>
+                </span>
                 <div>
                   {isBusy ? (
                     <button type="button" onClick={pauseUploads}>
@@ -337,6 +342,9 @@ export function ImportHubModal({
                       <small>
                         {entry.error || UPLOAD_PHASE_LABELS[entry.state]} ·{" "}
                         {formatByteSize(entry.file.size)}
+                        {entry.state === "uploading" && (
+                          <span className="upload-rate"> · {formatUploadRate(entry.bytesPerSecond)}</span>
+                        )}
                       </small>
                       {entry.restoreError && (
                         <small className="queue-restore-error">
