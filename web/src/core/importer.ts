@@ -83,6 +83,7 @@ let engineState: UploadEngineSnapshot = {
 };
 
 const stateSubscribers = new Set<() => void>();
+const queueWaiters = new Set<() => void>();
 let workerLoopActive = false;
 let watchedDirHandle: WatchableDirectoryHandle | undefined;
 let watchIntervalId: number | undefined;
@@ -94,6 +95,8 @@ const broadcastState = () => {
   throttledTimer = undefined;
   engineState = { ...engineState };
   stateSubscribers.forEach((fn) => fn());
+  queueWaiters.forEach((wake) => wake());
+  queueWaiters.clear();
 };
 
 const broadcastThrottled = () => {
@@ -473,6 +476,22 @@ async function transferEntry(
   await finishUploadEntry(entry, commitResult, "done");
 }
 
+async function withUploadHash(
+  hash: string,
+  pending: Map<string, Promise<void>>,
+  transfer: () => Promise<void>,
+): Promise<void> {
+  while (pending.has(hash)) await pending.get(hash);
+  let release!: () => void;
+  pending.set(hash, new Promise<void>((resolve) => { release = resolve; }));
+  try {
+    await transfer();
+  } finally {
+    pending.delete(hash);
+    release();
+  }
+}
+
 function failUploadEntry(entry: UploadQueueEntry, err: unknown): void {
   const purged = isPurgedOriginalError(err);
   entry.state = purged ? "skipped" : "error";
@@ -519,6 +538,8 @@ async function driveUploadLoop(): Promise<void> {
   }
 
   const prefetchedMap = new Map<string, Promise<{ date: Date; hash: string }>>();
+  const assigned = new Set<string>();
+  const pendingHashes = new Map<string, Promise<void>>();
   const startPrep = (entry: UploadQueueEntry) => {
     const task = prepareUploadEntry(entry);
     task.catch(() => {});
@@ -535,32 +556,43 @@ async function driveUploadLoop(): Promise<void> {
   };
 
   try {
-    while (!engineState.paused) {
-      startAlbumAdditions();
-      const current = engineState.items.find(
-        (x) => x.state === "waiting" || prefetchedMap.has(x.id),
-      );
-      if (!current) {
-        if (!albumAdditions) break;
-        await albumAdditions;
-        continue;
-      }
-      try {
-        const currentPrep = prefetchedMap.get(current.id) || startPrep(current);
-        await currentPrep;
-        const following = engineState.items.find(
-          (candidate) => candidate !== current && candidate.state === "waiting",
+    await Promise.all(Array.from({ length: 2 }, async () => {
+      while (!engineState.paused) {
+        startAlbumAdditions();
+        const current = engineState.items.find(
+          (x) => !assigned.has(x.id) && (x.state === "waiting" || prefetchedMap.has(x.id)),
         );
-        if (following && !engineState.paused) {
-          startPrep(following);
+        if (!current) {
+          if (assigned.size) {
+            // A free lane also picks up files added while its peer is busy.
+            await new Promise<void>((resolve) => queueWaiters.add(resolve));
+            continue;
+          }
+          if (!albumAdditions) break;
+          await albumAdditions;
+          continue;
         }
-        await transferEntry(current, currentPrep);
-      } catch (err) {
-        failUploadEntry(current, err);
-      } finally {
-        prefetchedMap.delete(current.id);
+        assigned.add(current.id);
+        try {
+          const currentPrep = prefetchedMap.get(current.id) || startPrep(current);
+          const { hash } = await currentPrep;
+          const following = engineState.items.find(
+            (candidate) => !assigned.has(candidate.id) && candidate.state === "waiting",
+          );
+          if (following && !engineState.paused) {
+            startPrep(following);
+          }
+          // The next identical file prepares its session after publication, not during it.
+          await withUploadHash(hash, pendingHashes, () => transferEntry(current, currentPrep));
+        } catch (err) {
+          failUploadEntry(current, err);
+        } finally {
+          prefetchedMap.delete(current.id);
+          assigned.delete(current.id);
+          broadcastState();
+        }
       }
-    }
+    }));
   } finally {
     await albumAdditions;
     await Promise.allSettled(prefetchedMap.values());
