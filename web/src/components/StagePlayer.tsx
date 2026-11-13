@@ -388,6 +388,7 @@ export function StageVideoPlayer({
   chromeHidden = false,
   onToggleChrome,
   onActivity,
+  onControlsHoverChange,
   onPlaybackChange,
   onEnded,
   onPrevious,
@@ -404,6 +405,7 @@ export function StageVideoPlayer({
   chromeHidden?: boolean;
   onToggleChrome: () => void;
   onActivity: () => void;
+  onControlsHoverChange: (hovered: boolean) => void;
   onPlaybackChange: (playing: boolean) => void;
   onEnded?: () => void;
   onPrevious: () => void;
@@ -423,6 +425,7 @@ export function StageVideoPlayer({
   const rotationCss = useQuarterTurnBoxStyle(stageBoxRef, rotationDelta);
   const [fullscreen, setFullscreen] = useState(false);
   const [controlsHidden, setControlsHidden] = useState(false);
+  const [controlsHovered, setControlsHovered] = useState(false);
   const controlTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const [started, setStarted] = useState(live || !!framePicker);
@@ -465,15 +468,16 @@ export function StageVideoPlayer({
   }, []);
   useEffect(() => {
     clearTimeout(controlTimer.current);
-    if (!playing || buffering || errorMsg || framePicker) setControlsHidden(false);
+    if (!playing || buffering || errorMsg || framePicker || controlsHovered) setControlsHidden(false);
     else controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
     return () => clearTimeout(controlTimer.current);
-  }, [playing, buffering, errorMsg, fullscreen, !!framePicker]);
+  }, [playing, buffering, errorMsg, fullscreen, !!framePicker, controlsHovered]);
+  useEffect(() => () => onControlsHoverChange(false), [onControlsHoverChange]);
 
   function controlActivity() {
     setControlsHidden(false);
     clearTimeout(controlTimer.current);
-    if (playing && !buffering && !framePicker) controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
+    if (playing && !buffering && !errorMsg && !framePicker && !controlsHovered) controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
     onActivity();
   }
   const retainedPlaybackRef = useRef<{
@@ -1059,7 +1063,19 @@ export function StageVideoPlayer({
           controlActivity();
         }}
         onPointerMove={(e) => e.stopPropagation()}
-        onPointerEnter={controlActivity}
+        onPointerEnter={(e) => {
+          if (e.pointerType === "mouse") {
+            setControlsHovered(true);
+            onControlsHoverChange(true);
+          }
+          controlActivity();
+        }}
+        onPointerLeave={(e) => {
+          if (e.pointerType !== "mouse") return;
+          setControlsHovered(false);
+          onControlsHoverChange(false);
+          controlActivity();
+        }}
       >
         <div className="player-seek-row">
           <span className="player-time">{formatDurationClock(effectiveTime)}</span>

@@ -160,6 +160,7 @@ export function LightboxStudio({
   const [locating, setLocating] = useState(false);
   const locateMenuRef = useRef<HTMLDivElement>(null);
   const [chromeHidden, setChromeHidden] = useState(false);
+  const [playerControlsHovered, setPlayerControlsHovered] = useState(false);
   const [filmstripOpen, setFilmstripOpen] = useState(false);
   const chromeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -226,6 +227,7 @@ export function LightboxStudio({
     setPlayingVideoFile(null);
     setPlayingLive(false);
     setVideoPlaying(false);
+    setPlayerControlsHovered(false);
     setRotationDelta(0);
     setCoverPickerOpen(false);
     setMoreMenuOpen(false);
@@ -244,7 +246,7 @@ export function LightboxStudio({
     clearTimeout(chromeTimer.current);
   }, []);
 
-  const chromePinned = infoOpen || moreMenuOpen || locateMenuOpen || coverPickerOpen || rotationDelta !== 0;
+  const chromePinned = playerControlsHovered || infoOpen || moreMenuOpen || locateMenuOpen || coverPickerOpen || rotationDelta !== 0;
   useEffect(() => {
     clearTimeout(chromeTimer.current);
     if (chromePinned) {
@@ -1225,6 +1227,7 @@ export function LightboxStudio({
                 chromeHidden={chromeHidden}
                 onToggleChrome={() => { if (!chromePinned) setChromeHidden((v) => !v); }}
                 onActivity={revealChrome}
+                onControlsHoverChange={setPlayerControlsHovered}
                 onPlaybackChange={setVideoPlaying}
                 onEnded={() => {
                   if (playingLive) setPlayingLive(false);
