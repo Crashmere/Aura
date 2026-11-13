@@ -2,6 +2,7 @@ package library
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -128,6 +129,8 @@ func frameFailure(w http.ResponseWriter, err error) {
 		fail(w, 409, "预览尚未就绪，请处理完成后再选帧")
 	case errors.Is(err, errFrameTime), errors.Is(err, errFramePair):
 		fail(w, 400, err)
+	case errors.Is(err, errPlaybackBusy), errors.Is(err, errPlaybackClosed):
+		writeJSON(w, 503, map[string]string{"error": "选帧暂不可用，请稍后重试", "code": "frame_unavailable"})
 	default:
 		fail(w, 500, err)
 	}
@@ -415,9 +418,9 @@ func (l *Library) frame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	unlock := l.lockFrameTargets(targets)
-	defer unlock()
 	files, err = l.Files(id)
 	if err != nil {
+		unlock()
 		frameFailure(w, err)
 		return
 	}
@@ -425,6 +428,7 @@ func (l *Library) frame(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = checkRotationTargets(l.DB, id, targets, current)
 	}
+	unlock()
 	if err != nil {
 		frameFailure(w, err)
 		return
@@ -432,13 +436,22 @@ func (l *Library) frame(w http.ResponseWriter, r *http.Request) {
 	if !q.Has("rotation") {
 		rotation = current[0].Rotation
 	}
-	ctx, finish, err := l.beginFrameWork(r.Context(), current)
+	p, err := l.playbackManager()
 	if err != nil {
 		frameFailure(w, err)
 		return
 	}
-	defer finish()
-	probe, err := l.probeFrameVideo(ctx, motion)
+	f, stat, err := l.playbackOriginal(motion)
+	if err != nil {
+		frameFailure(w, err)
+		return
+	}
+	spec, err := p.specification(r.Context(), l, f, stat)
+	if err != nil {
+		frameFailure(w, err)
+		return
+	}
+	probe, err := spec.frameVideo()
 	if err != nil || at >= probe.Duration {
 		if err == nil {
 			err = errFrameTime
@@ -446,45 +459,29 @@ func (l *Library) frame(w http.ResponseWriter, r *http.Request) {
 		frameFailure(w, err)
 		return
 	}
-	at, err = l.containingFrame(ctx, motion, at, probe)
+	entry, err := p.frame(r.Context(), l, spec, hash, at, rotation, dimension)
 	if err != nil {
 		frameFailure(w, err)
 		return
 	}
-	work, err := os.MkdirTemp(filepath.Join(l.Root, "work"), hash+"-frame-")
-	if err != nil {
-		frameFailure(w, err)
-		return
-	}
-	defer os.RemoveAll(work)
-	output := filepath.Join(work, "frame.jpg")
-	err = l.videoFrame(ctx, l.Object(motion), output, at, dimension)
-	if err == nil && rotation != 0 {
-		orientation := map[int]string{90: "6", 180: "3", 270: "8"}[rotation]
-		_, err = l.command(ctx, "exiftool", "-n", "-EXIF:Orientation="+orientation, "-overwrite_original", output)
-	}
-	for _, target := range current {
+	defer p.release(entry)
+	files, err = l.Files(id)
+	if err == nil {
+		var latest []File
+		latest, err = frameTargets(files, hash, motion)
 		if err == nil {
-			err = originalDeletion(l.DB, target.Hash, "")
+			err = checkRotationTargets(l.DB, id, current, latest)
 		}
 	}
-	if err != nil {
-		frameFailure(w, err)
-		return
+	if err == nil {
+		err = r.Context().Err()
 	}
-	file, err := os.Open(output)
-	if err != nil {
-		frameFailure(w, err)
-		return
-	}
-	defer file.Close()
-	stat, err := file.Stat()
 	if err != nil {
 		frameFailure(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	http.ServeContent(w, r, "frame.jpg", stat.ModTime(), file)
+	http.ServeContent(w, r, "frame.jpg", time.Time{}, bytes.NewReader(entry.data))
 }
 
 func (l *Library) coverPath(file File, kind string) string {
@@ -673,6 +670,11 @@ func (l *Library) videoFrame(ctx context.Context, input, output string, at float
 	if err != nil {
 		return err
 	}
+	return l.renderVideoFrame(ctx, input, output, at, dimension, hdrFilters)
+}
+
+func (l *Library) renderVideoFrame(ctx context.Context, input, output string, at float64, dimension int, hdrFilters []string) error {
+	var err error
 	modes := []string{"CPU"}
 	if len(hdrFilters) == 0 && l.nvidiaAvailable(ctx) {
 		// Software decode applies the source display matrix before CUDA resizing;
@@ -700,16 +702,29 @@ func (l *Library) videoFrame(ctx context.Context, input, output string, at float
 		}
 		args = append(args, "-vf", filter, "-frames:v", "1", "-map_metadata", "-1", "-q:v", "2", "-threads", "2", "-y", output)
 		var release func()
+		var releaseCPU func()
 		if gpu {
+			if foregroundMedia(ctx) {
+				releaseCPU, err = l.acquireCPU(ctx)
+				if err != nil {
+					return err
+				}
+			}
 			release, err = l.acquireGPU(ctx)
 		} else {
 			release, err = l.acquireCPU(ctx)
 		}
 		if err != nil {
+			if releaseCPU != nil {
+				releaseCPU()
+			}
 			return err
 		}
 		_, err = l.command(ctx, "ffmpeg", args...)
 		release()
+		if releaseCPU != nil {
+			releaseCPU()
+		}
 		if err == nil && readyDerivative(output) {
 			return nil
 		}

@@ -69,6 +69,7 @@ func (timeline playbackTimeline) segment(duration float64, index int) (start, le
 type playbackSpec struct {
 	hash, stamp, path          string
 	duration, start, frameRate float64
+	frameStart, timeBase       float64
 	width, height              int
 	nativeRotation             float64
 	hdr                        bool
@@ -123,7 +124,12 @@ func (p *playbackCache) specification(ctx context.Context, l *Library, f File, s
 		}
 		return job.spec, nil
 	}
-	jobCtx, job, err := p.newJobLocked(key, f.Hash, 2<<20, 20*time.Second)
+	// Serialize admission with deletion cancellation, not with video decoding.
+	if err := originalDeletion(l.DB, f.Hash, ""); err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
+	jobCtx, job, err := p.newJobLocked(key, f.Hash, 2<<20, 20*time.Second, false)
 	p.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -149,7 +155,7 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 	}
 	defer release()
 	output := &limitedBuffer{max: 256 << 10}
-	err = l.commandOutput(ctx, "ffprobe", output, "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration,start_time:stream=codec_type,width,height,duration,start_time,avg_frame_rate,color_transfer,color_primaries,color_space:stream_side_data=rotation", "-of", "json", l.Object(hash))
+	err = l.commandOutput(ctx, "ffprobe", output, "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration,start_time:stream=codec_type,width,height,duration,start_time,time_base,avg_frame_rate,color_transfer,color_primaries,color_space:stream_side_data=rotation", "-of", "json", l.Object(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +166,7 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 			Height    int    `json:"height"`
 			Duration  string `json:"duration"`
 			Start     string `json:"start_time"`
+			TimeBase  string `json:"time_base"`
 			Rate      string `json:"avg_frame_rate"`
 			Transfer  string `json:"color_transfer"`
 			Primaries string `json:"color_primaries"`
@@ -177,6 +184,7 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 		return nil, err
 	}
 	spec := &playbackSpec{hash: hash, stamp: stamp, path: l.Object(hash)}
+	spec.frameStart, _ = strconv.ParseFloat(raw.Format.Start, 64)
 	video := false
 	for _, stream := range raw.Streams {
 		if stream.Type == "audio" && spec.sourceAudio == nil {
@@ -192,6 +200,12 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 		video = true
 		spec.width, spec.height = stream.Width, stream.Height
 		spec.duration = playbackNumber(stream.Duration)
+		if numerator, denominator, ok := strings.Cut(stream.TimeBase, "/"); ok {
+			n, d := playbackNumber(numerator), playbackNumber(denominator)
+			if n > 0 && d > 0 {
+				spec.timeBase = n / d
+			}
+		}
 		spec.start, _ = strconv.ParseFloat(stream.Start, 64)
 		if stream.Start == "" || stream.Start == "N/A" {
 			spec.start, _ = strconv.ParseFloat(raw.Format.Start, 64)

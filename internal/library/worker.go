@@ -32,13 +32,23 @@ func (l *Library) ConfigureProcessing(workers, gpuOperations int) error {
 	l.ProcessingLimits.CPUOperations = min(4, workers)
 	l.gpuSlots = make(chan struct{}, gpuOperations)
 	l.cpuSlots = make(chan struct{}, l.ProcessingLimits.CPUOperations)
-	// Keep foreground playback from waiting behind every background media job.
+	// Keep playback and interactive frames from waiting behind every background job.
 	l.backgroundGPU = make(chan struct{}, max(1, gpuOperations-1))
 	l.backgroundCPU = make(chan struct{}, max(1, l.ProcessingLimits.CPUOperations-1))
 	return nil
 }
 
+type foregroundMediaKey struct{}
+
+func foregroundMedia(ctx context.Context) bool {
+	value, _ := ctx.Value(foregroundMediaKey{}).(bool)
+	return value
+}
+
 func (l *Library) acquireCPU(ctx context.Context) (func(), error) {
+	if foregroundMedia(ctx) {
+		return l.acquirePlaybackCPU(ctx)
+	}
 	background, err := acquireMediaSlot(ctx, l.backgroundCPU)
 	if err != nil {
 		return nil, err
@@ -56,6 +66,9 @@ func (l *Library) acquirePlaybackCPU(ctx context.Context) (func(), error) {
 }
 
 func (l *Library) acquireGPU(ctx context.Context) (func(), error) {
+	if foregroundMedia(ctx) {
+		return l.acquirePlaybackGPU(ctx)
+	}
 	background, err := acquireMediaSlot(ctx, l.backgroundGPU)
 	if err != nil {
 		return nil, err

@@ -40,7 +40,11 @@ func (p *playbackCache) segment(ctx context.Context, l *Library, spec *playbackS
 		}
 		return job.entry, nil
 	}
-	jobCtx, job, err := p.newJobLocked(key, spec.hash, playbackReservation, playbackDeadline)
+	if err := originalDeletion(l.DB, spec.hash, ""); err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
+	jobCtx, job, err := p.newJobLocked(key, spec.hash, playbackReservation, playbackDeadline, false)
 	p.mu.Unlock()
 	if err != nil {
 		return nil, err

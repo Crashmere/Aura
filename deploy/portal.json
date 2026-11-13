@@ -263,7 +263,7 @@
     {
       "method": "GET",
       "path": "/api/assets/{id}/frame",
-      "description": "预览原始视频内指定时刻的帧，或准确配对实况视频的关键照片帧；不保存修改"
+      "description": "预览原始视频或准确配对实况视频的指定帧；临时复用来源探测与 JPEG，最多并行生成两帧，大图优先，不保存修改"
     },
     {
       "method": "PATCH",
