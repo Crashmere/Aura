@@ -408,7 +408,7 @@ export function FrameTimelineStrip({
   const fps = (asset.kind === "live" ? asset.motionFrameRate : asset.frameRate) || 30;
   const strip = stripState.strip;
   const catalogDuration = asset.kind === "live" ? asset.motionDuration : asset.duration;
-  const displayedDuration = strip?.duration || duration || catalogDuration;
+  const displayedDuration = strip?.duration || duration || catalogDuration || 0;
   const timestamps = strip?.frames.map((frame) => frame.time) || coverFrameTimes(displayedDuration, fps);
   const maxEnd = timestamps[timestamps.length - 1];
   const playheadPercent = maxEnd ? Math.min(100, (time / maxEnd) * 100) : 0;
