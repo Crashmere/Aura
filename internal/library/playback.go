@@ -228,16 +228,20 @@ func (l *Library) probePlayback(ctx context.Context, hash, stamp string) (*playb
 	}
 	if spec.duration <= 0 {
 		spec.duration = playbackNumber(raw.Format.Duration)
+	} else {
+		// Covers and browser movie clocks are relative to the container origin.
+		spec.duration += spec.start - spec.frameStart
 	}
-	if !video || spec.width <= 0 || spec.height <= 0 || spec.duration <= 0 || math.IsNaN(spec.start) || math.IsInf(spec.start, 0) {
+	if !video || spec.width <= 0 || spec.height <= 0 || spec.duration <= 0 || math.IsNaN(spec.duration) || math.IsInf(spec.duration, 0) || math.IsNaN(spec.start) || math.IsInf(spec.start, 0) || math.IsNaN(spec.frameStart) || math.IsInf(spec.frameStart, 0) {
 		return nil, errPlaybackTime
 	}
-	// Native playback exposes the original PTS, while frame APIs use time from the first frame.
-	if math.Abs(spec.start) <= 0.001 {
+	// A small video lead is normal when the movie begins with audio.
+	videoLead := spec.start - spec.frameStart
+	if math.Abs(spec.frameStart) <= 0.001 && videoLead >= -0.001 && videoLead <= 0.25 {
 		spec.sourceMime = playbackSourceMime(f.Mime)
 	}
 	if spec.sourceAudio != nil {
-		spec.sourceAudio.Start -= spec.start
+		spec.sourceAudio.Start -= spec.frameStart
 	}
 	if spec.hdr {
 		spec.hdrPeak = l.probePlaybackHDRPeak(ctx, spec.path, spec.transfer)
@@ -318,7 +322,7 @@ func (l *Library) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		playbackFailure(w, err)
 		return
 	}
-	result := playbackDescriptor{Stream: playbackSource{URL: fmt.Sprintf("/aura/media/%s/stream/index.m3u8?rotation=%d&timeline=%s", spec.hash, rotation, playbackShortSegments), Mime: "application/vnd.apple.mpegurl"}, Duration: spec.duration, FrameRate: spec.frameRate}
+	result := playbackDescriptor{Stream: playbackSource{URL: fmt.Sprintf("/aura/media/%s/stream/index.m3u8?rotation=%d&timeline=%s&recipe=%s", spec.hash, rotation, playbackShortSegments, playbackRecipe), Mime: "application/vnd.apple.mpegurl"}, Duration: spec.duration, FrameRate: spec.frameRate}
 	if rotation == 0 && spec.sourceMime != "" {
 		result.Source = &playbackSource{URL: "/aura/media/" + spec.hash + "/source?rotation=0", Mime: spec.sourceMime, Audio: spec.sourceAudio}
 	}
@@ -352,6 +356,7 @@ func (l *Library) streamPlaylist(w http.ResponseWriter, r *http.Request) {
 		if timeline != "" {
 			fmt.Fprintf(&playlist, "&timeline=%s", timeline)
 		}
+		fmt.Fprintf(&playlist, "&recipe=%s", playbackRecipe)
 		playlist.WriteByte('\n')
 	}
 	playlist.WriteString("#EXT-X-ENDLIST\n")

@@ -408,7 +408,7 @@ export function FrameTimelineStrip({
   const fps = (asset.kind === "live" ? asset.motionFrameRate : asset.frameRate) || 30;
   const strip = stripState.strip;
   const catalogDuration = asset.kind === "live" ? asset.motionDuration : asset.duration;
-  const displayedDuration = strip?.duration || catalogDuration || duration;
+  const displayedDuration = strip?.duration || duration || catalogDuration;
   const timestamps = strip?.frames.map((frame) => frame.time) || coverFrameTimes(displayedDuration, fps);
   const maxEnd = timestamps[timestamps.length - 1];
   const playheadPercent = maxEnd ? Math.min(100, (time / maxEnd) * 100) : 0;
@@ -551,7 +551,7 @@ export function StageVideoPlayer({
   const [playbackRepresentation, setPlaybackRepresentation] =
     useState<PlaybackRepresentation>(null);
   const [sourceFrameRate, setSourceFrameRate] = useState<number | undefined>(undefined);
-  const [nativePreviewSource, setNativePreviewSource] = useState<{ url: string } | undefined>(undefined);
+  const [nativePreviewSource, setNativePreviewSource] = useState<{ url: string; duration?: number } | undefined>(undefined);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [scrubTime, setScrubTime] = useState<number | null>(null);
@@ -630,7 +630,7 @@ export function StageVideoPlayer({
   function emitFrameState() {
     const el = videoRef.current;
     if (!el || !callbacksRef.current.onFrame) return;
-    const totalLen = Number.isFinite(el.duration) ? el.duration : 0;
+    const totalLen = playbackRef.current?.duration || 0;
     const fps = frameRateRef.current;
     const observed = lastObservedMediaTime.current;
     const effectiveNow =
@@ -687,7 +687,7 @@ export function StageVideoPlayer({
       onReady: setSourceReady,
       onModeChange: setPlaybackRepresentation,
       onDescriptor: (descriptor) => {
-        setNativePreviewSource(descriptor.source);
+        setNativePreviewSource(descriptor.source ? { ...descriptor.source, duration: descriptor.duration } : undefined);
         if (descriptor.duration && Number.isFinite(descriptor.duration) && descriptor.duration > 0) {
           setDuration(descriptor.duration);
         }
@@ -704,7 +704,7 @@ export function StageVideoPlayer({
         setBufferedRanges([]);
         lastObservedMediaTime.current = undefined;
         measuredFrameInterval.current = undefined;
-        callbacksRef.current.onFrame?.({ time, duration: el.duration || 0, ready: false });
+        callbacksRef.current.onFrame?.({ time, duration: source.duration, ready: false });
       },
       onError: (message, resume) => {
         setErrorMsg(message);
@@ -752,7 +752,7 @@ export function StageVideoPlayer({
 
     const onVisibility = () => {
       if (document.hidden && document.pictureInPictureElement !== el) {
-        source.suspend();
+        source.suspend(true);
       } else if (!document.hidden) {
         restorePausedFrame();
       }
@@ -1010,7 +1010,7 @@ export function StageVideoPlayer({
         }}
         onLoadedMetadata={(e) => {
           const el = e.currentTarget;
-          const len = Number.isFinite(el.duration) ? el.duration : 0;
+          const len = playbackRef.current?.duration || 0;
           setDuration(len);
           setSupportsPip(
             !!document.pictureInPictureEnabled && !el.disablePictureInPicture,

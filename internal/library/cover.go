@@ -279,7 +279,7 @@ type frameVideo struct {
 
 func (l *Library) probeFrameVideo(ctx context.Context, hash string) (frameVideo, error) {
 	var result frameVideo
-	raw, err := l.command(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration,time_base:stream_side_data=rotation:format=duration,start_time", "-of", "json", l.Object(hash))
+	raw, err := l.command(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0", "-show_entries", "stream=width,height,duration,start_time,time_base:stream_side_data=rotation:format=duration,start_time", "-of", "json", l.Object(hash))
 	if err != nil {
 		return result, err
 	}
@@ -288,6 +288,7 @@ func (l *Library) probeFrameVideo(ctx context.Context, hash string) (frameVideo,
 			Width    int    `json:"width"`
 			Height   int    `json:"height"`
 			Duration string `json:"duration"`
+			Start    string `json:"start_time"`
 			TimeBase string `json:"time_base"`
 			SideData []struct {
 				Rotation float64 `json:"rotation"`
@@ -316,6 +317,12 @@ func (l *Library) probeFrameVideo(ctx context.Context, hash string) (frameVideo,
 	}
 	if result.Duration <= 0 || math.IsNaN(result.Duration) || math.IsInf(result.Duration, 0) {
 		result.Duration, _ = strconv.ParseFloat(probe.Format.Duration, 64)
+	} else if stream.Start != "" && stream.Start != "N/A" {
+		start, err := strconv.ParseFloat(stream.Start, 64)
+		if err != nil || math.IsNaN(start) || math.IsInf(start, 0) {
+			return result, errFrameTime
+		}
+		result.Duration += start - result.Start
 	}
 	if result.Width <= 0 || result.Height <= 0 || result.Duration <= 0 || math.IsNaN(result.Duration) || math.IsInf(result.Duration, 0) || result.TimeBase <= 0 || math.IsInf(result.TimeBase, 0) || math.IsNaN(result.Start) || math.IsInf(result.Start, 0) {
 		return result, errFrameTime
