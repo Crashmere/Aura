@@ -28,7 +28,7 @@ import {
 } from "../core/client";
 import type { CatalogAsset } from "../core/types";
 import { coverFrameTimes } from "../core/cover-frames";
-import { CoverFrameRequests, type CoverStrip, type CoverStripFrame, type CoverStripState } from "../core/cover-strip";
+import { coverStripResource, CoverFrameRequests, type CoverStrip, type CoverStripFrame, type CoverStripState } from "../core/cover-strip";
 import { VideoPlayback, type PlaybackRepresentation } from "../core/video-playback";
 import {
   cacheDecodedPreview,
@@ -529,6 +529,7 @@ export function StageVideoPlayer({
   };
 }) {
   const compact = useCompactViewer();
+  const mediaPolicy = useNetworkMediaPolicy();
   const isPresent = useIsPresent();
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageBoxRef = useRef<HTMLDivElement>(null);
@@ -550,6 +551,7 @@ export function StageVideoPlayer({
   const [playbackRepresentation, setPlaybackRepresentation] =
     useState<PlaybackRepresentation>(null);
   const [sourceFrameRate, setSourceFrameRate] = useState<number | undefined>(undefined);
+  const [nativePreviewSource, setNativePreviewSource] = useState<{ url: string } | undefined>(undefined);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [scrubTime, setScrubTime] = useState<number | null>(null);
@@ -678,12 +680,14 @@ export function StageVideoPlayer({
     setSourceReady(false);
     setPlaybackRepresentation(null);
     setSourceFrameRate(undefined);
+    setNativePreviewSource(undefined);
     lastObservedMediaTime.current = undefined;
     measuredFrameInterval.current = undefined;
     const source = new VideoPlayback(el, sourceHash, sourceRotation, {
       onReady: setSourceReady,
       onModeChange: setPlaybackRepresentation,
       onDescriptor: (descriptor) => {
+        setNativePreviewSource(descriptor.source);
         if (descriptor.duration && Number.isFinite(descriptor.duration) && descriptor.duration > 0) {
           setDuration(descriptor.duration);
         }
@@ -1224,6 +1228,15 @@ export function StageVideoPlayer({
             maxTime={maxSeekTime}
             disabled={seekDisabled}
             style={{ "--played": `${playedRatio}%` } as CSSProperties}
+            media={{
+              stripResource: coverStripResource(asset),
+              playbackResource: `playback/${sourceHash}?rotation=0`,
+              source: nativePreviewSource,
+              rotation: sourceRotation + rotationDelta,
+              width: asset.width,
+              height: asset.height,
+              prefetch: mediaPolicy.prefetch,
+            }}
           >
             <div className="player-buffered" aria-hidden="true">
               {duration > 0 &&
