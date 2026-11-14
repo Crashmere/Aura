@@ -574,6 +574,8 @@ export function LightboxStudio({
       const inInput =
         target?.isContentEditable ||
         target?.closest('input, textarea, select, [role="textbox"], [role="combobox"]');
+      const playerSlider = isVideoStage && target instanceof HTMLInputElement
+        && target.type === "range" && !!stageRef.current?.contains(target);
 
       if (e.key === "Escape") {
         e.preventDefault();
@@ -599,7 +601,8 @@ export function LightboxStudio({
         return;
       }
 
-      if (inInput) return;
+      if (inInput && !playerSlider) return;
+      if (playerSlider && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
       if ((e.key === "ArrowLeft" || e.key.toLowerCase() === "a") && !coverPickerOpen) {
         e.preventDefault();
@@ -616,31 +619,21 @@ export function LightboxStudio({
       } else if (isVideoStage) {
         const root = stageRef.current;
         const video = root?.querySelector("video");
-        if (!video) return;
-        if (e.key === " ") {
+        if (!video || isLocked) return;
+        const key = e.key.toLowerCase();
+        const shortcut = key === " " ? "[data-player-toggle]" : key === "m" ? "[data-player-mute]" : key === "f" ? "[data-player-fullscreen]" : key === "," ? "[data-player-previous-frame]" : key === "." ? "[data-player-next-frame]" : undefined;
+        if (shortcut) {
           e.preventDefault();
-          root?.querySelector<HTMLButtonElement>("[data-player-toggle]")?.click();
-        } else if (e.key.toLowerCase() === "j") {
+          if (!e.repeat || key === "," || key === ".") root?.querySelector<HTMLButtonElement>(shortcut)?.click();
+        } else if (key === "j") {
           e.preventDefault();
           video.currentTime = Math.max(0, video.currentTime - PLAYER_SKIP_SECONDS);
-        } else if (e.key.toLowerCase() === "l") {
+        } else if (key === "l") {
           e.preventDefault();
           video.currentTime = Math.min(
             video.duration || 0,
             video.currentTime + PLAYER_SKIP_SECONDS,
           );
-        } else if (e.key.toLowerCase() === "m") {
-          e.preventDefault();
-          root?.querySelector<HTMLButtonElement>("[data-player-mute]")?.click();
-        } else if (e.key.toLowerCase() === "f") {
-          e.preventDefault();
-          root?.querySelector<HTMLButtonElement>("[data-player-fullscreen]")?.click();
-        } else if (e.key === ",") {
-          e.preventDefault();
-          root?.querySelector<HTMLButtonElement>("[data-player-previous-frame]")?.click();
-        } else if (e.key === ".") {
-          e.preventDefault();
-          root?.querySelector<HTMLButtonElement>("[data-player-next-frame]")?.click();
         }
       }
     };
