@@ -73,7 +73,7 @@ export function VideoComparisonModal({ left, right, evidence, onClose, onMergePa
   const [playing, setPlaying] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [time, setTime] = useState(0);
-  const [audio, setAudio] = useState<"left" | "right" | "none">("left");
+  const [audio, setAudio] = useState<"left" | "right" | "none">("none");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [preparing, setPreparing] = useState(false);
