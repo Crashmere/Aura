@@ -28,7 +28,7 @@ import {
 } from "../core/client";
 import type { CatalogAsset } from "../core/types";
 import { coverFrameTimes } from "../core/cover-frames";
-import type { CoverStrip, CoverStripFrame, CoverStripState } from "../core/cover-strip";
+import { CoverFrameRequests, type CoverStrip, type CoverStripFrame, type CoverStripState } from "../core/cover-strip";
 import { VideoPlayback, type PlaybackRepresentation } from "../core/video-playback";
 import {
   cacheDecodedPreview,
@@ -326,13 +326,16 @@ export function ExactCoverPreview({ asset, time, strip }: { asset: CatalogAsset;
   </>;
 }
 
-function StripFrameThumb({ url, viewportRef }: {
+function StripFrameThumb({ url, viewportRef, enabled, requests }: {
   url: string;
   viewportRef: RefObject<HTMLDivElement | null>;
+  enabled: boolean;
+  requests: CoverFrameRequests;
 }) {
   const thumbRef = useRef<HTMLSpanElement>(null);
   const [requested, setRequested] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [imageUrl, setImageUrl] = useState("");
 
   useEffect(() => {
     const thumb = thumbRef.current;
@@ -347,17 +350,29 @@ function StripFrameThumb({ url, viewportRef }: {
     return () => observer.disconnect();
   }, [viewportRef]);
 
+  useEffect(() => {
+    if (!enabled || !requested) return;
+    const controller = new AbortController();
+    let objectUrl: string | undefined;
+    requests.load(url, controller.signal).then((blob) => {
+      if (controller.signal.aborted) return;
+      objectUrl = URL.createObjectURL(blob);
+      setImageUrl(objectUrl);
+    }, () => { if (!controller.signal.aborted) setFailed(true); });
+    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [enabled, requested, requests, url]);
+
   return (
     <span ref={thumbRef} className="frame-strip-thumb">
-      {failed ? <ImageIcon size={17} /> : requested && (
+      {failed ? <ImageIcon size={17} /> : imageUrl ? (
         <img
-          src={url}
+          src={imageUrl}
           alt=""
           draggable={false}
           decoding="async"
           onError={() => setFailed(true)}
         />
-      )}
+      ) : <LoaderCircle size={14} className="spin" />}
     </span>
   );
 }
@@ -378,13 +393,27 @@ export function FrameTimelineStrip({
   onSeek: (targetSeconds: number) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const requestsRef = useRef<CoverFrameRequests | null>(null);
+  if (!requestsRef.current) requestsRef.current = new CoverFrameRequests();
+  const [earlyFrames, setEarlyFrames] = useState(false);
   const fps = (asset.kind === "live" ? asset.motionFrameRate : asset.frameRate) || 30;
   const strip = stripState.strip;
-  const timestamps = strip?.frames.map((frame) => frame.time) || coverFrameTimes(duration, fps);
+  const catalogDuration = asset.kind === "live" ? asset.motionDuration : asset.duration;
+  const displayedDuration = strip?.duration || catalogDuration || duration;
+  const timestamps = strip?.frames.map((frame) => frame.time) || coverFrameTimes(displayedDuration, fps);
   const maxEnd = timestamps[timestamps.length - 1];
   const motionHash = asset.kind === "live" ? asset.motion! : asset.primary;
   const playheadPercent = maxEnd ? Math.min(100, (time / maxEnd) * 100) : 0;
   const closest = timestamps.reduce((best, at, index) => Math.abs(at - time) < Math.abs(timestamps[best] - time) ? index : best, 0);
+
+  useEffect(() => {
+    requestsRef.current!.setMode(stripState.status === "error" ? "fallback" : stripState.status === "loading" ? "preview" : "stopped");
+    setEarlyFrames(false);
+    if (stripState.status !== "loading") return;
+    const timer = setTimeout(() => setEarlyFrames(true), 200);
+    return () => clearTimeout(timer);
+  }, [stripState.status]);
+  useEffect(() => () => requestsRef.current!.setMode("stopped"), []);
 
   return (
     <div ref={viewportRef} className="frame-strip-scroll">
@@ -413,11 +442,12 @@ export function FrameTimelineStrip({
               title={`${ts.toFixed(3)} 秒`}
               onClick={() => onSeek(ts)}
             >
-              {duration > 0 && (strip ? (
+              {displayedDuration > 0 && (strip ? (
                 <span className="frame-strip-thumb"><FrameStripImage strip={strip} frame={strip.frames[idx]} rotation={asset.rotation || 0} className="frame-strip-image" /></span>
-              ) : stripState.status === "error" ? (
-                <StripFrameThumb key={frameSrc} url={frameSrc} viewportRef={viewportRef} />
-              ) : <span className="frame-strip-thumb"><LoaderCircle size={14} className="spin" /></span>)}
+              ) : (
+                <StripFrameThumb key={frameSrc} url={frameSrc} viewportRef={viewportRef}
+                  enabled={earlyFrames || stripState.status === "error"} requests={requestsRef.current!} />
+              ))}
             </button>
           );
         })}

@@ -1178,6 +1178,7 @@ export function LightboxStudio({
                 </div>
               </div>
               <FrameTimelineStrip
+                key={`${effectiveAsset.primary}:${effectiveAsset.motion || ""}`}
                 asset={effectiveAsset}
                 time={frameState.time}
                 duration={frameState.duration}
