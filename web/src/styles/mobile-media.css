@@ -47,6 +47,10 @@
   .player-volume input, .player-transport > button:not(.player-toggle), .player-options > button:not(.player-speed):not([data-player-fullscreen]) { display: none; }
   .player-seek input[type="range"] { height: 44px; touch-action: none; }
   .player-time { font-size: 11px; min-width: 32px; }
+  .player-time-control { height: 44px; }
+  .player-time-button { height: 44px; }
+  .player-time-input { top: 6px; height: 32px; font-size: 16px; min-width: 0; }
+  .player-time-control.is-editing { font-size: 16px; }
   .aura-player.is-frame-picker .player-frame-step { display: inline-flex; }
   .lightbox-studio.with-filmstrip .player-controls { bottom: calc(78px + env(safe-area-inset-bottom)); }
   .viewer-image-loading, .viewer-quality-action { bottom: calc(18px + env(safe-area-inset-bottom)); max-width: calc(100% - 24px); }

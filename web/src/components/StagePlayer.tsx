@@ -39,6 +39,7 @@ import {
 import { useCompactViewer } from "../core/photo-view";
 import { MotionPresence, useIsPresent } from "../core/motion";
 import { CompatibilityPlaybackGlyph, SkipSecondsGlyph } from "./Icons";
+import { PlayerSeekPreview, PlayerTimeEditor } from "./PlayerTimeline";
 
 // ============================================================================
 // 1. Live Quarter-Turn CSS Rotation Preview Hook
@@ -535,6 +536,7 @@ export function StageVideoPlayer({
   const [fullscreen, setFullscreen] = useState(false);
   const [controlsHidden, setControlsHidden] = useState(false);
   const [controlsHovered, setControlsHovered] = useState(false);
+  const [timeEditing, setTimeEditing] = useState(false);
   const controlTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const [started, setStarted] = useState(live || !!framePicker);
@@ -577,16 +579,19 @@ export function StageVideoPlayer({
   }, []);
   useEffect(() => {
     clearTimeout(controlTimer.current);
-    if (!playing || buffering || errorMsg || framePicker || controlsHovered) setControlsHidden(false);
+    if (!playing || buffering || errorMsg || framePicker || controlsHovered || timeEditing) setControlsHidden(false);
     else controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
     return () => clearTimeout(controlTimer.current);
-  }, [playing, buffering, errorMsg, fullscreen, !!framePicker, controlsHovered]);
+  }, [playing, buffering, errorMsg, fullscreen, !!framePicker, controlsHovered, timeEditing]);
+  useEffect(() => {
+    onControlsHoverChange(controlsHovered || timeEditing);
+  }, [controlsHovered, timeEditing, onControlsHoverChange]);
   useEffect(() => () => onControlsHoverChange(false), [onControlsHoverChange]);
 
   function controlActivity() {
     setControlsHidden(false);
     clearTimeout(controlTimer.current);
-    if (playing && !buffering && !errorMsg && !framePicker && !controlsHovered) controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
+    if (playing && !buffering && !errorMsg && !framePicker && !controlsHovered && !timeEditing) controlTimer.current = setTimeout(() => setControlsHidden(true), 2600);
     onActivity();
   }
   const retainedPlaybackRef = useRef<{
@@ -831,6 +836,24 @@ export function StageVideoPlayer({
     onActivity();
   }
 
+  function seekToTime(time: number) {
+    const el = videoRef.current;
+    const source = playbackRef.current;
+    if (!el || !source || locked || !sourceReady) return;
+    const resume = !el.paused;
+    cancelAnimationFrame(seekRafId.current);
+    seekRafId.current = 0;
+    pendingPreviewTime.current = null;
+    activeScrubValue.current = null;
+    resumeOnRelease.current = false;
+    setScrubTime(null);
+    el.pause();
+    source.loadFrame(time);
+    setCurrentTime(time);
+    if (resume) void startPlayback();
+    controlActivity();
+  }
+
   function schedulePreviewSeek() {
     if (seekRafId.current || videoRef.current?.seeking) return;
     seekRafId.current = requestAnimationFrame(() => {
@@ -905,6 +928,10 @@ export function StageVideoPlayer({
   const effectiveDuration =
     duration ||
     (!live && Number.isFinite(asset.duration) ? Math.max(0, asset.duration || 0) : 0);
+  const maxSeekTime = framePicker && effectiveDuration
+    ? Math.max(0, effectiveDuration - 0.5 / nominalFps)
+    : effectiveDuration;
+  const seekDisabled = locked || !sourceReady || !effectiveDuration;
   const playedRatio = effectiveDuration
     ? Math.min(100, (effectiveTime / effectiveDuration) * 100)
     : 0;
@@ -912,7 +939,7 @@ export function StageVideoPlayer({
   return (
     <div
       ref={stageBoxRef}
-      className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""} ${framePicker ? "is-frame-picker" : ""} ${playing && !buffering && !errorMsg && !framePicker && (fullscreen ? controlsHidden : chromeHidden) ? "controls-hidden" : ""}`}
+      className={`aura-player ${playing ? "is-playing" : ""} ${started ? "is-started" : ""} ${framePicker ? "is-frame-picker" : ""} ${playing && !buffering && !errorMsg && !framePicker && !timeEditing && (fullscreen ? controlsHidden : chromeHidden) ? "controls-hidden" : ""}`}
     >
       <video
         ref={videoRef}
@@ -1175,21 +1202,27 @@ export function StageVideoPlayer({
         onPointerEnter={(e) => {
           if (e.pointerType === "mouse") {
             setControlsHovered(true);
-            onControlsHoverChange(true);
           }
           controlActivity();
         }}
         onPointerLeave={(e) => {
           if (e.pointerType !== "mouse") return;
           setControlsHovered(false);
-          onControlsHoverChange(false);
           controlActivity();
         }}
       >
         <div className="player-seek-row">
-          <span className="player-time">{formatDurationClock(effectiveTime)}</span>
-          <div
-            className="player-seek"
+          <PlayerTimeEditor
+            key={sourceHash}
+            time={effectiveTime}
+            maxTime={maxSeekTime}
+            disabled={seekDisabled}
+            onCommit={seekToTime}
+            onEditingChange={setTimeEditing}
+          />
+          <PlayerSeekPreview
+            maxTime={maxSeekTime}
+            disabled={seekDisabled}
             style={{ "--played": `${playedRatio}%` } as CSSProperties}
           >
             <div className="player-buffered" aria-hidden="true">
@@ -1209,15 +1242,13 @@ export function StageVideoPlayer({
               aria-label={framePicker ? "选帧进度" : "播放进度"}
               aria-valuetext={`${formatDurationClock(effectiveTime)} / ${formatDurationClock(effectiveDuration)}`}
               min="0"
-              max={
-                framePicker && effectiveDuration
-                  ? Math.max(0, effectiveDuration - 0.5 / nominalFps)
-                  : effectiveDuration || 1
-              }
+              max={effectiveDuration ? maxSeekTime : 1}
               step={framePicker ? ".001" : ".1"}
               value={effectiveTime}
-              disabled={locked || !sourceReady || !effectiveDuration}
+              disabled={seekDisabled}
               onPointerDown={() => {
+                // Commit the clock before starting a new scrub transaction.
+                stageBoxRef.current?.querySelector<HTMLInputElement>(".player-time-input")?.blur();
                 resumeOnRelease.current =
                   !!videoRef.current && !videoRef.current.paused;
                 activeScrubValue.current = videoRef.current?.currentTime || currentTime;
@@ -1238,7 +1269,7 @@ export function StageVideoPlayer({
               onKeyUp={finishScrub}
               onBlur={finishScrub}
             />
-          </div>
+          </PlayerSeekPreview>
           <span
             className="player-time"
             title={started ? "剩余时长" : "视频时长"}

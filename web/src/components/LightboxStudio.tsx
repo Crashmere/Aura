@@ -169,6 +169,7 @@ export function LightboxStudio({
   const [savingRotation, setSavingRotation] = useState(false);
 
   const [coverPickerOpenState, setCoverPickerOpen] = useState(false);
+  const [coverStartTime, setCoverStartTime] = useState(0);
   const [frameState, setFrameState] = useState<FramePlayheadState>({
     time: 0,
     duration: 0,
@@ -477,17 +478,33 @@ export function LightboxStudio({
   // Cover frame save / reset
   const openCoverEditor = () => {
     if (!canPickCover || isLocked) return;
+    const video = stageRef.current?.querySelector("video");
+    const timeline = stageRef.current?.querySelector<HTMLInputElement>('.player-seek input[type="range"]');
+    const playbackTime = video && video.readyState >= 1
+      ? video.currentTime
+      : timeline ? Number(timeline.value) : effectiveAsset.cover?.time ?? 0;
+    const catalogDuration = effectiveAsset.kind === "live"
+      ? effectiveAsset.motionDuration
+      : effectiveAsset.duration;
+    const playbackDuration = video && Number.isFinite(video.duration) && video.duration > 0
+      ? video.duration
+      : catalogDuration || 0;
+    const frameRate = (effectiveAsset.kind === "live"
+      ? effectiveAsset.motionFrameRate
+      : effectiveAsset.frameRate) || 30;
+    const initialSec = Math.max(0, Math.min(
+      playbackDuration ? Math.max(0, playbackDuration - 0.5 / frameRate) : Infinity,
+      Number.isFinite(playbackTime) ? playbackTime : 0,
+    ));
+    video?.pause();
     setRotationDelta(0);
     setPlayingLive(false);
     setMoreMenuOpen(false);
     setNavDir("fade");
-    const initialSec = effectiveAsset.cover?.time ?? 0;
+    setCoverStartTime(initialSec);
     setFrameState({
       time: initialSec,
-      duration:
-        (effectiveAsset.kind === "live"
-          ? effectiveAsset.motionDuration
-          : effectiveAsset.duration) || 0,
+      duration: playbackDuration,
       ready: false,
     });
     setCoverPickerOpen(true);
@@ -1246,7 +1263,7 @@ export function LightboxStudio({
                 framePicker={
                   coverPickerOpen
                     ? {
-                        initialTime: effectiveAsset.cover?.time ?? 0,
+                        initialTime: coverStartTime,
                         onChange: setFrameState,
                       }
                     : undefined
