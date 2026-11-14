@@ -135,7 +135,6 @@ export function PlayerSeekPreview({ maxTime, disabled, style, media, children }:
   children: ReactNode;
 }) {
   const seekRef = useRef<HTMLDivElement>(null);
-  const previewRef = useRef<HTMLDivElement>(null);
   const labelRef = useRef<HTMLSpanElement>(null);
   const pictureRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -163,9 +162,9 @@ export function PlayerSeekPreview({ maxTime, disabled, style, media, children }:
     const picture = pictureRef.current;
     const seek = seekRef.current;
     const frames = framesRef.current;
-    if (!picture || !seek || !frames || pointerX.current === null) return;
-    picture.setAttribute("data-ready", String(frames.ready));
-    picture.setAttribute("data-failed", String(stripStateRef.current.status === "error" && frames.failed));
+    if (!picture || !seek || pointerX.current === null) return;
+    picture.setAttribute("data-ready", String(!!frames?.ready));
+    picture.setAttribute("data-failed", String(stripStateRef.current.status === "error" && !!frames?.failed));
     positionFloat(picture, anchorRef.current, seek.getBoundingClientRect().width);
   }
 
@@ -173,11 +172,10 @@ export function PlayerSeekPreview({ maxTime, disabled, style, media, children }:
     pointerX.current = null;
     cancelAnimationFrame(raf.current);
     raf.current = 0;
-    for (const preview of [previewRef.current, pictureRef.current]) {
-      preview?.removeAttribute("data-visible");
-      preview?.style.removeProperty("transform");
-      preview?.style.removeProperty("--preview-anchor");
-    }
+    const picture = pictureRef.current;
+    picture?.removeAttribute("data-visible");
+    picture?.style.removeProperty("transform");
+    picture?.style.removeProperty("--preview-anchor");
     framesRef.current?.pause();
     if (hoveredRef.current) { hoveredRef.current = false; setHovering(false); }
   }
@@ -223,14 +221,13 @@ export function PlayerSeekPreview({ maxTime, disabled, style, media, children }:
     if (!hoveredRef.current) { hoveredRef.current = true; setHovering(true); }
     pointerX.current = event.clientX;
     if (raf.current) return;
-    // Crop cached pixels and move both floating windows in the same pointer frame.
+    // Update the frame and its timestamp together without rerendering the player.
     raf.current = requestAnimationFrame(() => {
       raf.current = 0;
       const seek = seekRef.current;
-      const preview = previewRef.current;
       const label = labelRef.current;
       const input = seek?.querySelector('input[type="range"]');
-      if (!seek || !preview || !label || !input || pointerX.current === null) return;
+      if (!seek || !label || !input || pointerX.current === null) return;
       const box = input.getBoundingClientRect();
       const seekBox = seek.getBoundingClientRect();
       const inset = (parseFloat(getComputedStyle(seek).getPropertyValue("--player-seek-thumb-size")) || 11) / 2;
@@ -238,7 +235,6 @@ export function PlayerSeekPreview({ maxTime, disabled, style, media, children }:
       anchorRef.current = box.left - seekBox.left + inset + ratio * (box.width - inset * 2);
       const time = ratio * maxTime;
       label.textContent = formatDurationClock(time);
-      positionFloat(preview, anchorRef.current, seekBox.width);
       framesRef.current?.update(time);
       refreshPicture();
     });
@@ -249,13 +245,13 @@ export function PlayerSeekPreview({ maxTime, disabled, style, media, children }:
       onPointerEnter={followPointer} onPointerMove={followPointer}
       onPointerLeave={hidePreview} onPointerCancel={hidePreview}>
       {children}
-      {media && <div ref={pictureRef} className="player-frame-preview" aria-hidden="true">
-        <canvas ref={canvasRef} />
-        <span className="player-frame-loading"><LoaderCircle size={14} className="spin" /></span>
-        <span className="player-frame-unavailable"><ImageIcon size={18} /></span>
-      </div>}
-      <div ref={previewRef} className="player-seek-preview" aria-hidden="true">
-        <span ref={labelRef}>0:00</span>
+      <div ref={pictureRef} className="player-frame-preview" aria-hidden="true">
+        {media && <div className="player-frame-image">
+          <canvas ref={canvasRef} />
+          <span className="player-frame-loading"><LoaderCircle size={14} className="spin" /></span>
+          <span className="player-frame-unavailable"><ImageIcon size={18} /></span>
+        </div>}
+        <span ref={labelRef} className="player-frame-time">0:00</span>
       </div>
     </div>
   );

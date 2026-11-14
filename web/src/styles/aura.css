@@ -432,40 +432,6 @@
 .player-buffered { position: absolute; inset: 0; display: flex; align-items: center; pointer-events: none; }
 .player-buffered i { position: absolute; height: 3px; background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
 
-.player-seek-preview {
-  position: absolute;
-  top: calc(50% + 7px);
-  left: 0;
-  z-index: 3;
-  display: grid;
-  place-items: center;
-  width: max-content;
-  min-width: 42px;
-  height: 22px;
-  padding: 0 7px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 5px;
-  background: rgba(28, 28, 26, 0.96);
-  color: #fff;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.18);
-  pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 100ms ease;
-}
-.player-seek-preview[data-visible="true"] { opacity: 1; visibility: visible; }
-.player-seek-preview::before {
-  content: "";
-  position: absolute;
-  bottom: 100%;
-  left: var(--preview-anchor, 50%);
-  width: 1px;
-  height: 7px;
-  background: rgba(255, 255, 255, 0.4);
-}
 .player-frame-preview {
   position: absolute;
   bottom: calc(50% + 14px);
@@ -484,15 +450,29 @@
   transition: opacity 100ms ease;
 }
 .player-frame-preview[data-visible="true"] { visibility: visible; opacity: 1; }
+.player-frame-image { position: relative; }
 .player-frame-preview canvas { display: block; max-width: 100%; height: auto; border-radius: 3px; opacity: 0; }
 .player-frame-preview[data-ready="true"] canvas { opacity: 1; }
+.player-frame-time {
+  display: grid;
+  place-items: center;
+  min-width: 42px;
+  height: 18px;
+  margin-top: 2px;
+  padding: 0 4px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .player-frame-loading, .player-frame-unavailable { position: absolute; inset: 0; display: grid; place-items: center; color: rgba(255, 255, 255, 0.6); }
 .player-frame-unavailable, .player-frame-preview[data-ready="true"] .player-frame-loading,
 .player-frame-preview[data-failed="true"] .player-frame-loading { display: none; }
 .player-frame-preview[data-failed="true"] .player-frame-unavailable { display: grid; }
 .player-frame-preview::after { content: ""; position: absolute; top: 100%; left: var(--preview-anchor, 50%); width: 1px; height: 14px; background: rgba(255, 255, 255, 0.4); }
 @media (prefers-reduced-motion: reduce) {
-  .player-time-button, .player-seek-preview, .player-frame-preview { transition: none; }
+  .player-time-button, .player-frame-preview { transition: none; }
 }
 
 .player-buttons {
