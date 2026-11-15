@@ -8,10 +8,12 @@ import {
 } from "./client";
 import type { CatalogAsset } from "./types";
 import { UploadRateMeter } from "./upload-rate";
+import { isLivpFile, readLivp } from "./livp";
 
 export type UploadTaskPhase =
   | "waiting"
   | "reading"
+  | "unpacking"
   | "uploading"
   | "adding"
   | "done"
@@ -25,6 +27,9 @@ export interface UploadQueueEntry {
   file: File;
   name: string;
   albumId?: string;
+  archiveKey?: string;
+  sourceKey?: string;
+  resourceType?: string;
   completionState?: "done" | "duplicate";
   state: UploadTaskPhase;
   progress: number;
@@ -70,7 +75,7 @@ type WatchableDirectoryHandle = FileSystemDirectoryHandle & {
 };
 
 const SUPPORTED_MEDIA_EXT =
-  /\.(jpe?g|heic|heif|png|webp|gif|tiff?|avif|jxl|dng|cr[23]|nef|arw|raf|rw2|orf|pef|srw|mov|mp4|m4v|avi|mkv|mts|3gp|aae|xmp)$/i;
+  /\.(jpe?g|heic|heif|png|webp|gif|tiff?|avif|jxl|dng|cr[23]|nef|arw|raf|rw2|orf|pef|srw|mov|mp4|m4v|avi|mkv|mts|3gp|aae|xmp|livp)$/i;
 
 let engineState: UploadEngineSnapshot = {
   items: [],
@@ -252,8 +257,12 @@ export function enqueueUploadFiles(files: File[], albumId = ""): void {
   const existingKeys = new Set(
     engineState.items
       .filter((x) => x.state !== "error")
-      .map((x) => `${x.name}|${x.file.size}|${x.file.lastModified}|${x.albumId || ""}`),
+      .flatMap((x) => [uploadEntryKey(x), ...(x.archiveKey ? [x.archiveKey] : [])]),
   );
+  const unsupported = files.filter((file) => !SUPPORTED_MEDIA_EXT.test(file.name));
+  engineState.error = unsupported.length
+    ? `不支持的文件：${unsupported.slice(0, 3).map((file) => file.name).join("、")}${unsupported.length > 3 ? ` 等 ${unsupported.length} 个文件` : ""}`
+    : "";
   for (const file of files) {
     const relName = file.webkitRelativePath || file.name;
     const key = `${relName}|${file.size}|${file.lastModified}|${albumId}`;
@@ -272,6 +281,38 @@ export function enqueueUploadFiles(files: File[], albumId = ""): void {
   }
   broadcastState();
   void driveUploadLoop();
+}
+
+function uploadEntryKey(entry: Pick<UploadQueueEntry, "name" | "file" | "albumId">): string {
+  return `${entry.name}|${entry.file.size}|${entry.file.lastModified}|${entry.albumId || ""}`;
+}
+
+async function expandLivpEntry(entry: UploadQueueEntry): Promise<void> {
+  entry.state = "unpacking";
+  entry.error = undefined;
+  broadcastState();
+  const resources = await readLivp(entry.file, (ratio) => {
+    entry.progress = ratio * 0.9;
+    broadcastThrottled();
+  });
+  const hash = await computeFileSha256(entry.file, (ratio) => {
+    entry.progress = 0.9 + ratio * 0.1;
+    broadcastThrottled();
+  });
+  const children: UploadQueueEntry[] = resources.map((resource) => ({
+    id: crypto.randomUUID(),
+    file: resource.file,
+    name: `${entry.name}/${resource.path}`,
+    albumId: entry.albumId,
+    archiveKey: uploadEntryKey(entry),
+    sourceKey: `livp:${hash}`,
+    resourceType: resource.resourceType,
+    state: "waiting",
+    progress: 0,
+    bytesPerSecond: 0,
+  }));
+  engineState.items.splice(engineState.items.indexOf(entry), 1, ...children);
+  broadcastState();
 }
 
 function computeFileSha256(file: File, onProgress: (ratio: number) => void): Promise<string> {
@@ -422,6 +463,8 @@ async function transferEntry(
     size: entry.file.size,
     capturedAt: date.toISOString(),
     modifiedAt: new Date(entry.file.lastModified).toISOString(),
+    sourceKey: entry.sourceKey,
+    resourceType: entry.resourceType,
     from: engineState.from,
     to: engineState.to,
   });
@@ -600,10 +643,14 @@ async function driveUploadLoop(): Promise<void> {
         }
         assigned.add(current.id);
         try {
+          if (isLivpFile(current.file)) {
+            await expandLivpEntry(current);
+            continue;
+          }
           const currentPrep = prefetchedMap.get(current.id) || startPrep(current);
           const { hash } = await currentPrep;
           const following = engineState.items.find(
-            (candidate) => !assigned.has(candidate.id) && candidate.state === "waiting",
+            (candidate) => !assigned.has(candidate.id) && candidate.state === "waiting" && !isLivpFile(candidate.file),
           );
           if (following && !engineState.paused) {
             startPrep(following);

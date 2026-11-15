@@ -40,6 +40,7 @@ import { ActionButton, RoundIconButton } from "./Icons";
 const UPLOAD_PHASE_LABELS: Record<UploadTaskPhase, string> = {
   waiting: "等待上传",
   reading: "读取原件",
+  unpacking: "解包实况照片",
   uploading: "上传中",
   adding: "等待加入相片集",
   done: "已保存",
@@ -190,10 +191,10 @@ export function ImportHubModal({
                   <FolderOpen size={15} />
                   <span>选择整个文件夹</span>
                 </button>
-                <span>HEIC · RAW · JPEG · MOV · MP4</span>
+                <span>HEIC · RAW · JPEG · MOV · MP4 · LIVP</span>
               </div>
               <p className="upload-note">
-                iPhone 实况原件请使用 Apple 客户端，或从「文件」选择照片与 MOV。系统选图器可能只提供静态照片。
+                LIVP 会自动解包为实况照片。iPhone 照片库原件可使用 Apple 客户端导入；系统选图器可能只提供静态照片。
               </p>
             </>
           )}
@@ -331,6 +332,7 @@ export function ImportHubModal({
                         <X size={16} />
                       ) : entry.state === "uploading" ||
                         entry.state === "adding" ||
+                        entry.state === "unpacking" ||
                         entry.state === "reading" ? (
                         <LoaderCircle className="spin" size={16} />
                       ) : (
@@ -338,7 +340,7 @@ export function ImportHubModal({
                       )}
                     </span>
                     <div className="queue-info">
-                      <strong>{entry.file.name}</strong>
+                      <strong>{entry.name}</strong>
                       <small>
                         {entry.error || UPLOAD_PHASE_LABELS[entry.state]} ·{" "}
                         {formatByteSize(entry.file.size)}

@@ -45,7 +45,9 @@ func originalFailure(w http.ResponseWriter, e error) {
 	if deletedFailure(w, e) {
 		return
 	}
-	if errors.Is(e, errOriginalIntegrity) {
+	if errors.Is(e, errLIVPIdentifier) {
+		fail(w, 409, e)
+	} else if errors.Is(e, errOriginalIntegrity) {
 		writeJSON(w, 409, map[string]string{"error": e.Error(), "code": "original_integrity_error"})
 	} else {
 		fail(w, 500, e)
@@ -145,6 +147,10 @@ func (l *Library) prepare(w http.ResponseWriter, r *http.Request) {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(h.Name), "."))
 	if !validHash.MatchString(h.Hash) || h.Size <= 0 || h.Size > 32<<30 || len(h.Name) > 512 || (!allowedExtensions[ext] && !(h.ResourceType == "adjustmentData" && strings.HasPrefix(h.SourceKey, "photokit:"))) || len(h.SourceKey) > 1024 {
 		fail(w, 400, "不支持的文件或文件参数无效")
+		return
+	}
+	if strings.HasPrefix(h.SourceKey, "livp:") && (!livpSource(h.SourceKey) || livpMotionRole(h.ResourceType) == "" && h.ResourceType != "sidecar") {
+		fail(w, 400, "LIVP 资源分组参数无效")
 		return
 	}
 	for _, date := range []string{h.From, h.To} {

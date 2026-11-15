@@ -8,6 +8,7 @@
     "dev": "vite --host 127.0.0.1"
   },
   "dependencies": {
+    "@zip.js/zip.js": "2.25.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "lucide-react": "^0.468.0",

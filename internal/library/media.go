@@ -411,6 +411,9 @@ func (l *Library) publish(f File) error {
 		return e
 	}
 	keys := []string{}
+	if e = validateLIVPIdentifier(tx, current.Hints, f.ContentID); e != nil {
+		return e
+	}
 	if current.Hints.SourceKey != "" {
 		keys = append(keys, "source:"+current.Hints.SourceKey)
 	}
@@ -419,17 +422,26 @@ func (l *Library) publish(f File) error {
 		return e
 	}
 	favorite := f.Hints.Favorite
+	livpHints := []Hints{}
 	for observations.Next() {
 		var s string
 		_ = observations.Scan(&s)
 		var h Hints
 		_ = json.Unmarshal([]byte(s), &h)
+		if livpSource(h.SourceKey) {
+			livpHints = append(livpHints, h)
+		}
 		if h.SourceKey != "" {
 			keys = append(keys, "source:"+h.SourceKey)
 		}
 		favorite = favorite || h.Favorite
 	}
 	observations.Close()
+	for _, h := range livpHints {
+		if e = validateLIVPIdentifier(tx, h, f.ContentID); e != nil {
+			return e
+		}
+	}
 	if f.ContentID != "" {
 		keys = append(keys, "apple:"+f.ContentID)
 	}

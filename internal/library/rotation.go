@@ -89,7 +89,7 @@ func rotationTargets(files []File, hash string) []File {
 		if !strings.HasPrefix(file.Mime, "video/") {
 			continue
 		}
-		if selected.ContentID != "" && file.ContentID == selected.ContentID || selected.ContentID == "" && selected.Hints.SourceKey != "" && role != "" && file.Hints.SourceKey == selected.Hints.SourceKey && file.Hints.ResourceType == role {
+		if selected.ContentID != "" && file.ContentID == selected.ContentID || selected.ContentID == "" && selected.Hints.SourceKey != "" && role != "" && file.Hints.SourceKey == selected.Hints.SourceKey && file.Hints.ResourceType == role || livpPaired(selected, file) {
 			paired = append(paired, file)
 		}
 	}

@@ -139,6 +139,7 @@ type File struct {
 	Error      string          `json:"error,omitempty"`
 	Hints      Hints           `json:"hints"`
 	CreatedAt  string          `json:"createdAt"`
+	livpGroups []Hints
 }
 
 type Asset struct {
@@ -302,7 +303,14 @@ func filesForAsset(q queryer, asset string) ([]File, error) {
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err = loadLIVPGroups(q, asset, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 var assetSelect = `SELECT a.id,a.primary_hash,a.motion_hash,a.captured_at,a.kind,a.favorite,a.trashed_at,
@@ -463,6 +471,9 @@ func refreshTx(tx *sql.Tx, id string) error {
 		return e
 	}
 	// A chosen still must keep its own native motion after merging Live Photos.
+	if e = loadLIVPGroups(tx, id, files); e != nil {
+		return e
+	}
 	if paired := rotationTargets(files, primary); len(paired) == 2 {
 		motion = paired[1].Hash
 	}
@@ -492,6 +503,15 @@ func rememberTx(tx *sql.Tx, h Hints) error {
 	if e := originalDeletion(tx, h.Hash, h.SourceKey); e != nil {
 		return e
 	}
+	if livpSource(h.SourceKey) {
+		var contentID string
+		if err := tx.QueryRow("SELECT COALESCE((SELECT content_id FROM files WHERE hash=?),'')", h.Hash).Scan(&contentID); err != nil {
+			return err
+		}
+		if err := validateLIVPIdentifier(tx, h, contentID); err != nil {
+			return err
+		}
+	}
 	_, e := tx.Exec("INSERT INTO observations VALUES(?,?,?,?)", ID(), h.Hash, marshal(h), now())
 	if e != nil {
 		return e
@@ -516,6 +536,9 @@ func rememberTx(tx *sql.Tx, h Hints) error {
 			}
 			if _, e = tx.Exec("INSERT INTO asset_keys VALUES(?,?) ON CONFLICT(key) DO UPDATE SET asset_id=excluded.asset_id", key, asset); e != nil {
 				return e
+			}
+			if livpSource(h.SourceKey) {
+				return refreshTx(tx, asset)
 			}
 		}
 	}
