@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { formatByteSize, requestJson } from "./core/client";
 import {
+  clearCompletedUploads,
   enqueueUploadFiles,
   getUploadActivitySummary,
   markAssetsPurgedInQueue,
@@ -1063,9 +1064,14 @@ function AuraApplication() {
     }
   };
 
+  const closeUploadHub = () => {
+    if (uploadHubTab !== null) clearCompletedUploads();
+    setUploadHubTab(null);
+  };
+
   // Locate a specific asset from ImportHub or PipelineCenter
   const locateAssetInLibrary = async (assetId: string) => {
-    setUploadHubTab(null);
+    closeUploadHub();
     try {
       const detail = await requestJson<{ asset: CatalogAsset }>(`assets/${assetId}`);
       const targetView: WorkspaceViewId = detail.asset.trashedAt ? "trash" : "all";
@@ -2098,10 +2104,10 @@ function AuraApplication() {
           <ImportHubModal
             activeTab={uploadHubTab}
             onSelectTab={setUploadHubTab}
-            onClose={() => setUploadHubTab(null)}
+            onClose={closeUploadHub}
             onLocateAsset={(id) => void locateAssetInLibrary(id)}
             onOpenJobsView={() => {
-              setUploadHubTab(null);
+              closeUploadHub();
               switchWorkspaceModule("jobs");
             }}
           />

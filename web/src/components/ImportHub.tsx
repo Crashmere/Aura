@@ -30,6 +30,7 @@ import {
   startDirectoryWatch,
   stopDirectoryWatch,
   subscribeUploadEngine,
+  type UploadQueueEntry,
   type UploadTaskPhase,
 } from "../core/importer";
 import { useSlidingIndicator } from "../core/motion";
@@ -42,6 +43,7 @@ const UPLOAD_PHASE_LABELS: Record<UploadTaskPhase, string> = {
   reading: "读取原件",
   unpacking: "解包实况照片",
   uploading: "上传中",
+  verifying: "服务器校验中",
   adding: "等待加入相片集",
   done: "已保存",
   duplicate: "原件已存在",
@@ -49,6 +51,67 @@ const UPLOAD_PHASE_LABELS: Record<UploadTaskPhase, string> = {
   skipped: "不在日期范围",
   error: "上传失败",
 };
+
+function UploadQueueItem({
+  entry,
+  onLocateAsset,
+}: {
+  entry: UploadQueueEntry;
+  onLocateAsset: (entryId: string) => void;
+}) {
+  const active = ["reading", "unpacking", "uploading", "verifying", "adding"].includes(entry.state);
+  return (
+    <div className="queue-item">
+      <span key={entry.state} className={`queue-state ${entry.state}`}>
+        {entry.state === "trashed" ? (
+          <Trash2 size={16} />
+        ) : entry.state === "done" || entry.state === "duplicate" ? (
+          <Check size={16} />
+        ) : entry.state === "error" ? (
+          <X size={16} />
+        ) : active ? (
+          <LoaderCircle className="spin" size={16} />
+        ) : (
+          <ImageIcon size={16} />
+        )}
+      </span>
+      <div className="queue-info">
+        <strong title={entry.name}>{entry.name}</strong>
+        <small>
+          {entry.error || UPLOAD_PHASE_LABELS[entry.state]} · {formatByteSize(entry.file.size)}
+          {entry.state === "uploading" && (
+            <span className="upload-rate"> · {formatUploadRate(entry.bytesPerSecond)}</span>
+          )}
+        </small>
+        {entry.restoreError && (
+          <small className="queue-restore-error">{entry.restoreError}</small>
+        )}
+        {entry.assetId && ["done", "duplicate", "trashed"].includes(entry.state) && (
+          <div className="queue-actions">
+            <button type="button" onClick={() => onLocateAsset(entry.id)}>
+              定位照片
+            </button>
+            {entry.state === "trashed" && (
+              <button
+                type="button"
+                disabled={entry.restoring}
+                onClick={() => void restoreTrashedUploadEntry(entry.id)}
+              >
+                {entry.restoring ? "正在恢复" : "恢复照片"}
+              </button>
+            )}
+          </div>
+        )}
+        {active && (
+          <div className={`progress-track${entry.state === "verifying" || entry.state === "adding" ? " is-verifying" : ""}`}>
+            <i style={{ width: `${entry.progress * 100}%` }} />
+          </div>
+        )}
+      </div>
+      <small className="queue-progress">{Math.round(entry.progress * 100)}%</small>
+    </div>
+  );
+}
 
 export function ImportHubModal({
   activeTab,
@@ -93,6 +156,25 @@ export function ImportHubModal({
   ).length;
   const errorCount = engine.items.filter((x) => x.state === "error").length;
   const totalRate = engine.items.reduce((sum, item) => sum + item.bytesPerSecond, 0);
+  const current: UploadQueueEntry[] = [];
+  const preparing: UploadQueueEntry[] = [];
+  const waiting: UploadQueueEntry[] = [];
+  const completed: UploadQueueEntry[] = [];
+  for (const entry of engine.items) {
+    if (entry.state === "uploading" || entry.state === "verifying") current.push(entry);
+    else if (["reading", "unpacking", "adding", "error"].includes(entry.state)) preparing.push(entry);
+    else if (entry.state === "waiting") waiting.push(entry);
+    else completed.push(entry);
+  }
+  const pending = [...preparing, ...waiting].slice(0, 150);
+  const recentSlots = 150 - pending.length;
+  const remaining = [...pending, ...(recentSlots ? completed.slice(-recentSlots) : [])];
+  const hiddenCount = engine.items.length - current.length - remaining.length;
+  const locateEntry = (entryId: string) => {
+    void resolveUploadedAssetId(entryId)
+      .then(onLocateAsset)
+      .catch((err) => setLocateError(err instanceof Error ? err.message : String(err)));
+  };
 
   return (
     <div className="modal-scrim" onClick={onClose}>
@@ -303,7 +385,7 @@ export function ImportHubModal({
                   </small>
                 </span>
                 <div>
-                  {isBusy ? (
+                  {isBusy && !engine.paused ? (
                     <button type="button" onClick={pauseUploads}>
                       <Pause size={14} />
                       <span>暂停</span>
@@ -314,86 +396,28 @@ export function ImportHubModal({
                       <span>继续{errorCount ? " / 重试" : ""}</span>
                     </button>
                   ) : null}
-                  <button type="button" onClick={clearCompletedUploads}>
+                  <button type="button" disabled={!doneCount} onClick={clearCompletedUploads}>
                     清除已完成
                   </button>
                 </div>
               </div>
 
               <div className="queue-items">
-                {engine.items.slice(-150).map((entry) => (
-                  <div className="queue-item" key={entry.id}>
-                    <span key={entry.state} className={`queue-state ${entry.state}`}>
-                      {entry.state === "trashed" ? (
-                        <Trash2 size={16} />
-                      ) : entry.state === "done" || entry.state === "duplicate" ? (
-                        <Check size={16} />
-                      ) : entry.state === "error" ? (
-                        <X size={16} />
-                      ) : entry.state === "uploading" ||
-                        entry.state === "adding" ||
-                        entry.state === "unpacking" ||
-                        entry.state === "reading" ? (
-                        <LoaderCircle className="spin" size={16} />
-                      ) : (
-                        <ImageIcon size={16} />
-                      )}
-                    </span>
-                    <div className="queue-info">
-                      <strong>{entry.name}</strong>
-                      <small>
-                        {entry.error || UPLOAD_PHASE_LABELS[entry.state]} ·{" "}
-                        {formatByteSize(entry.file.size)}
-                        {entry.state === "uploading" && (
-                          <span className="upload-rate"> · {formatUploadRate(entry.bytesPerSecond)}</span>
-                        )}
-                      </small>
-                      {entry.restoreError && (
-                        <small className="queue-restore-error">
-                          {entry.restoreError}
-                        </small>
-                      )}
-                      {entry.assetId &&
-                        ["done", "duplicate", "trashed"].includes(entry.state) && (
-                          <div className="queue-actions">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void resolveUploadedAssetId(entry.id)
-                                  .then(onLocateAsset)
-                                  .catch((err) =>
-                                    setLocateError(
-                                      err instanceof Error
-                                        ? err.message
-                                        : String(err),
-                                    ),
-                                  )
-                              }
-                            >
-                              定位照片
-                            </button>
-                            {entry.state === "trashed" && (
-                              <button
-                                type="button"
-                                disabled={entry.restoring}
-                                onClick={() =>
-                                  void restoreTrashedUploadEntry(entry.id)
-                                }
-                              >
-                                {entry.restoring ? "正在恢复" : "恢复照片"}
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      {["reading", "uploading"].includes(entry.state) && (
-                        <div className="progress-track">
-                          <i style={{ width: `${entry.progress * 100}%` }} />
-                        </div>
-                      )}
-                    </div>
-                    <small>{Math.round(entry.progress * 100)}%</small>
+                {current.length > 0 && (
+                  <div className="queue-current-items">
+                    {current.map((entry) => (
+                      <UploadQueueItem key={entry.id} entry={entry} onLocateAsset={locateEntry} />
+                    ))}
                   </div>
-                ))}
+                )}
+                <div className="queue-remaining-items">
+                  {remaining.map((entry) => (
+                    <UploadQueueItem key={entry.id} entry={entry} onLocateAsset={locateEntry} />
+                  ))}
+                  {hiddenCount > 0 && (
+                    <div className="queue-more">另有 {hiddenCount} 个文件未显示</div>
+                  )}
+                </div>
               </div>
             </div>
           )}

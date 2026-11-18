@@ -15,6 +15,7 @@ export type UploadTaskPhase =
   | "reading"
   | "unpacking"
   | "uploading"
+  | "verifying"
   | "adding"
   | "done"
   | "duplicate"
@@ -434,9 +435,21 @@ function sendUploadChunk(entry: UploadQueueEntry, hash: string, offset: number, 
       xhr.upload.onprogress = xhr.upload.onload = null;
       settle();
     };
-    xhr.upload.onprogress = (event) => meter.update(Math.min(chunk.size, event.loaded));
+    const updateProgress = (sent: number) => {
+      entry.progress = 0.05 + (0.9 * (offset + sent)) / entry.file.size;
+      broadcastThrottled();
+    };
+    updateProgress(0);
+    xhr.upload.onprogress = (event) => {
+      const sent = Math.min(chunk.size, event.loaded);
+      updateProgress(sent);
+      meter.update(sent);
+    };
     // Sending has ended; waiting for durable acknowledgment is not upload throughput.
-    xhr.upload.onload = () => meter.stop();
+    xhr.upload.onload = () => {
+      updateProgress(chunk.size);
+      meter.stop();
+    };
     xhr.onload = () => finish(() => resolve({ status: xhr.status, payload: xhr.response || {} }));
     xhr.onerror = () => finish(() => reject(new Error("网络连接中断，请重试")));
     xhr.ontimeout = () => finish(() => reject(new Error("分片上传超时，请重试")));
@@ -479,6 +492,7 @@ async function transferEntry(
   }
 
   entry.state = "uploading";
+  entry.progress = entry.file.size ? 0.05 + (0.9 * session.offset) / entry.file.size : 0.95;
   broadcastState();
 
   let offset = session.offset;
@@ -521,7 +535,7 @@ async function transferEntry(
       }
       offset = payload.offset;
       retryCount = 0;
-      entry.progress = 0.05 + (0.95 * offset) / entry.file.size;
+      entry.progress = 0.05 + (0.9 * offset) / entry.file.size;
       broadcastThrottled();
     } catch (err) {
       if (isPurgedOriginalError(err)) throw err;
@@ -534,6 +548,9 @@ async function transferEntry(
     }
   }
 
+  entry.state = "verifying";
+  entry.progress = 0.95;
+  broadcastState();
   const commitResult = await requestJson<{
     filtered?: boolean;
     assetId?: string;

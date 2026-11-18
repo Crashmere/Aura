@@ -69,6 +69,7 @@
 }
 
 .upload-queue {
+  flex-shrink: 0;
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -104,10 +105,37 @@
 }
 
 .queue-items {
-  max-height: 240px;
+  max-height: 320px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
+}
+
+.queue-current-items {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  box-shadow: 0 1px 0 var(--border-strong);
+}
+
+.queue-current-items .queue-item {
+  background: var(--accent-soft);
+}
+
+.queue-remaining-items {
+  flex-shrink: 0;
+}
+
+.queue-more {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .queue-item {
@@ -135,6 +163,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.queue-state,
+.queue-progress {
+  flex-shrink: 0;
+}
+
+.queue-progress {
+  width: 36px;
+  text-align: right;
+}
+
+.queue-item .progress-track i {
+  transition: width 0.12s linear;
+}
+
+.queue-item .progress-track.is-verifying i {
+  opacity: 0.65;
 }
 
 .queue-actions {
