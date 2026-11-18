@@ -1,4 +1,4 @@
-const WINDOW_MS = 2000;
+export const UPLOAD_RATE_WINDOW_MS = 2000;
 
 export class UploadRateMeter {
   private startedAt = performance.now();
@@ -24,7 +24,7 @@ export class UploadRateMeter {
   private publish(): void {
     if (!this.samples.length) return;
     const now = performance.now();
-    const cutoff = Math.max(this.startedAt, now - WINDOW_MS);
+    const cutoff = Math.max(this.startedAt, now - UPLOAD_RATE_WINDOW_MS);
     // Keep the zero-byte baseline when early events share the start timestamp.
     while (cutoff > this.startedAt && this.samples.length > 1 && this.samples[1].at <= cutoff) {
       this.samples.shift();

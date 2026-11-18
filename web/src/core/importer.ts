@@ -7,7 +7,7 @@ import {
   requestJson,
 } from "./client";
 import type { CatalogAsset } from "./types";
-import { UploadRateMeter } from "./upload-rate";
+import { UPLOAD_RATE_WINDOW_MS, UploadRateMeter } from "./upload-rate";
 import { isLivpFile, readLivp } from "./livp";
 
 export type UploadTaskPhase =
@@ -46,6 +46,7 @@ export interface UploadQueueEntry {
 
 export interface UploadEngineSnapshot {
   items: UploadQueueEntry[];
+  totalBytesPerSecond: number;
   running: boolean;
   paused: boolean;
   scanning: boolean;
@@ -80,6 +81,7 @@ const SUPPORTED_MEDIA_EXT =
 
 let engineState: UploadEngineSnapshot = {
   items: [],
+  totalBytesPerSecond: 0,
   running: false,
   paused: false,
   scanning: false,
@@ -97,6 +99,10 @@ let watchedDirHandle: WatchableDirectoryHandle | undefined;
 let watchIntervalId: number | undefined;
 let throttledTimer: ReturnType<typeof setTimeout> | undefined;
 let libraryChangeTimer: ReturnType<typeof setTimeout> | undefined;
+let totalRateMeter: UploadRateMeter | undefined;
+let totalSentBytes = 0;
+let activeUploadRequests = 0;
+let totalRateStopTimer: ReturnType<typeof setTimeout> | undefined;
 
 const broadcastState = () => {
   clearTimeout(throttledTimer);
@@ -415,6 +421,29 @@ async function finishUploadEntry(
   }
 }
 
+function beginUploadRateTracking(): void {
+  clearTimeout(totalRateStopTimer);
+  totalRateStopTimer = undefined;
+  if (!totalRateMeter) {
+    totalSentBytes = 0;
+    totalRateMeter = new UploadRateMeter((rate) => {
+      engineState.totalBytesPerSecond = rate;
+      broadcastThrottled();
+    });
+  }
+  activeUploadRequests++;
+}
+
+function endUploadRateTracking(): void {
+  if (--activeUploadRequests) return;
+  // Keep short transfers visible and share the same window with the next file.
+  totalRateStopTimer = setTimeout(() => {
+    totalRateStopTimer = undefined;
+    totalRateMeter?.stop();
+    totalRateMeter = undefined;
+  }, UPLOAD_RATE_WINDOW_MS);
+}
+
 function sendUploadChunk(entry: UploadQueueEntry, hash: string, offset: number, chunkSize: number) {
   return new Promise<{ status: number; payload: { offset?: number; error?: string; [key: string]: unknown } }>((resolve, reject) => {
     const chunk = entry.file.slice(offset, offset + chunkSize);
@@ -425,17 +454,23 @@ function sendUploadChunk(entry: UploadQueueEntry, hash: string, offset: number, 
     xhr.timeout = 660000;
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.setRequestHeader("Upload-Offset", String(offset));
+    beginUploadRateTracking();
+    let sentBytes = 0;
     const meter = new UploadRateMeter((rate) => {
       entry.bytesPerSecond = rate;
       broadcastThrottled();
     });
     const finish = (settle: () => void) => {
       meter.stop();
+      endUploadRateTracking();
       xhr.onload = xhr.onerror = xhr.ontimeout = xhr.onabort = null;
       xhr.upload.onprogress = xhr.upload.onload = null;
       settle();
     };
     const updateProgress = (sent: number) => {
+      totalSentBytes += Math.max(0, sent - sentBytes);
+      sentBytes = Math.max(sentBytes, sent);
+      totalRateMeter?.update(totalSentBytes);
       entry.progress = 0.05 + (0.9 * (offset + sent)) / entry.file.size;
       broadcastThrottled();
     };

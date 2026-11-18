@@ -155,7 +155,6 @@ export function ImportHubModal({
     ["done", "duplicate", "trashed", "skipped"].includes(x.state),
   ).length;
   const errorCount = engine.items.filter((x) => x.state === "error").length;
-  const totalRate = engine.items.reduce((sum, item) => sum + item.bytesPerSecond, 0);
   const current: UploadQueueEntry[] = [];
   const preparing: UploadQueueEntry[] = [];
   const waiting: UploadQueueEntry[] = [];
@@ -380,8 +379,8 @@ export function ImportHubModal({
               <div className="queue-header">
                 <span className="queue-summary">
                   <strong>{doneCount} / {engine.items.length} 个文件</strong>
-                  <small className="upload-rate" title="浏览器当前发送速率，不含服务器落盘和校验时间">
-                    总上传速率 {formatUploadRate(totalRate)}
+                  <small className="upload-rate" title="最近 2 秒浏览器发送字节的合计速率">
+                    总上传速率 {formatUploadRate(engine.totalBytesPerSecond)}
                   </small>
                 </span>
                 <div>
