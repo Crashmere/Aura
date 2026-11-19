@@ -237,6 +237,7 @@ export function PhotoComparisonModal({
         <span className={activeSide === "left" ? "is-current" : ""}>
           <strong>A · {left.name}</strong>
           <AssetAlbumBadges asset={left} />
+          <small>拍摄日期：{formatHumanDate(left.capturedAt, true) || "未知日期"}</small>
           <small>
             {leftDims.width} × {leftDims.height}
           </small>
@@ -244,6 +245,7 @@ export function PhotoComparisonModal({
         <span className={activeSide === "right" ? "is-current" : ""}>
           <strong>B · {right.name}</strong>
           <AssetAlbumBadges asset={right} />
+          <small>拍摄日期：{formatHumanDate(right.capturedAt, true) || "未知日期"}</small>
           <small>
             {rightDims.width} × {rightDims.height}
           </small>
