@@ -131,12 +131,29 @@ export function formatHumanDate(iso: string, includeYearAndWeekday = false): str
   );
 }
 
+const captureTimePattern = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
+
 export function formatCaptureTime(iso: string): string {
   // Keep fractional seconds and the recorded offset; Date truncates to milliseconds.
-  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})$/.exec(iso);
+  const match = captureTimePattern.exec(iso);
   if (!match) return iso;
-  const zone = match[3] === "Z" ? "UTC" : `UTC${match[3]}`;
-  return `${match[1]} ${match[2]} ${zone}`;
+  const fraction = match[3] ? `.${match[3]}` : "";
+  const zone = match[4] === "Z" ? "UTC" : `UTC${match[4]}`;
+  return `${match[1]} ${match[2]}${fraction} ${zone}`;
+}
+
+export function compareCaptureTimes(left: string, right: string): -1 | 0 | 1 | null {
+  const first = captureTimePattern.exec(left);
+  const second = captureTimePattern.exec(right);
+  if (!first || !second) return null;
+  const firstSecond = Date.parse(`${first[1]}T${first[2]}${first[4]}`);
+  const secondSecond = Date.parse(`${second[1]}T${second[2]}${second[4]}`);
+  if (!Number.isFinite(firstSecond) || !Number.isFinite(secondSecond)) return null;
+  if (firstSecond !== secondSecond) return firstSecond < secondSecond ? -1 : 1;
+  // Compare subsecond values separately so a nanosecond difference is not rounded away.
+  const firstFraction = (first[3] || "").padEnd(9, "0");
+  const secondFraction = (second[3] || "").padEnd(9, "0");
+  return firstFraction === secondFraction ? 0 : firstFraction < secondFraction ? -1 : 1;
 }
 
 export function describeOriginalRole(file: StoredFile): string {

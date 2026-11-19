@@ -932,6 +932,7 @@
 }
 
 .comparison-labels {
+  --capture-time-earlier: #edc785;
   display: flex;
   justify-content: space-between;
   padding: 8px 20px;
@@ -958,7 +959,7 @@
   white-space: nowrap;
 }
 
-.comparison-labels.is-switch > span:not(.is-current) {
+.comparison-labels.is-switch > span:not(.is-current) > :not(.is-earlier) {
   opacity: 0.45;
 }
 
@@ -979,6 +980,11 @@
 .comparison-capture-time {
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
+}
+
+.comparison-labels .comparison-capture-time.is-earlier {
+  color: var(--capture-time-earlier);
+  font-weight: 600;
 }
 
 .comparison-workspace,
