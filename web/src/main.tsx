@@ -94,7 +94,8 @@ import { MobileActionSheet } from "./components/MobileActionSheet";
 import { SimilarPhotosModal } from "./components/SimilarPhotosModal";
 import { VideoComparisonModal } from "./components/VideoComparisonModal";
 import {
-  type DayAssetGroup,
+  type TimelineAssetGroup,
+  timelineGroupKey,
   type TimelineJump,
   DEFAULT_ZOOM_STEP,
   GridDensityControls,
@@ -857,17 +858,16 @@ function AuraApplication() {
     };
   }, [route.view, route.similarMedia, similarSource, dinoScoreRange, dinoPageSize]);
 
-  // Group loaded assets by calendar capture day
-  const dayGroups = useMemo<DayAssetGroup[]>(() => {
+  const timelineGroups = useMemo<TimelineAssetGroup[]>(() => {
     const map = new Map<string, CatalogAsset[]>();
     for (const item of assets) {
-      const day = (item.capturedAt || "").slice(0, 10) || "未知日期";
-      const list = map.get(day);
+      const date = timelineGroupKey(item.capturedAt || "", gridPrefs.grouping);
+      const list = map.get(date);
       if (list) list.push(item);
-      else map.set(day, [item]);
+      else map.set(date, [item]);
     }
     return [...map.entries()].map(([date, items]) => ({ date, items }));
-  }, [assets]);
+  }, [assets, gridPrefs.grouping]);
 
   // Selection helpers
   const toggleSelectAsset = useCallback(
@@ -896,7 +896,7 @@ function AuraApplication() {
     [assets, selecting],
   );
 
-  const toggleSelectDayGroup = useCallback((groupItems: CatalogAsset[]) => {
+  const toggleSelectTimelineGroup = useCallback((groupItems: CatalogAsset[]) => {
     const eligible = groupItems.filter((a) => !a.deletionPending);
     if (!eligible.length) return;
     setSelectedIds((prev) => {
@@ -1377,6 +1377,8 @@ function AuraApplication() {
                     onZoomChange={gridPrefs.setZoom}
                     layout={gridPrefs.layout}
                     onLayoutChange={gridPrefs.setLayout}
+                    grouping={gridPrefs.grouping}
+                    onGroupingChange={gridPrefs.setGrouping}
                   />}
                   {compact && <button type="button" className="btn mobile-view-settings"
                     onClick={() => setViewSettingsOpen(true)} aria-label="照片视图设置">
@@ -1665,14 +1667,15 @@ function AuraApplication() {
               {assets.length > 0 ? (
                 <div className="catalog-results" aria-busy={loadingPage} inert={loadingPage || (!nextCursor && !!loadError)}>
                   <VirtualizedTimelineCanvas
-                    groups={dayGroups}
+                    groups={timelineGroups}
+                    grouping={gridPrefs.grouping}
                     columns={gridPrefs.columns}
                     mobileColumns={gridPrefs.mobileColumns}
                     selectedIds={selectedIds}
                     selecting={selecting}
                     busy={batchBusy}
                     compact={compact}
-                    onToggleGroup={toggleSelectDayGroup}
+                    onToggleGroup={toggleSelectTimelineGroup}
                     onToggleAsset={toggleSelectAsset}
                     onOpenSimilar={openSimilarPhotos}
                     onLocateDate={route.view === "albums" && route.album
@@ -1836,7 +1839,8 @@ function AuraApplication() {
             </div>
             <GridDensityControls zoom={gridPrefs.zoom} maxZoom={gridPrefs.maxZoom}
               desktopColumnSteps={gridPrefs.desktopColumnSteps} mobileColumnSteps={gridPrefs.mobileColumnSteps}
-              onZoomChange={gridPrefs.setZoom} layout={gridPrefs.layout} onLayoutChange={gridPrefs.setLayout} />
+              onZoomChange={gridPrefs.setZoom} layout={gridPrefs.layout} onLayoutChange={gridPrefs.setLayout}
+              grouping={gridPrefs.grouping} onGroupingChange={gridPrefs.setGrouping} />
             <span className="mobile-grid-value">{gridPrefs.layout === "square" ? "正方形" : "原始比例"} · {gridPrefs.mobileColumns} 列</span>
             <button type="button" className="btn" onClick={() => gridPrefs.setZoom(DEFAULT_ZOOM_STEP)}>恢复默认大小</button>
           </div>

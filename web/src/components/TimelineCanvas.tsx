@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -9,7 +10,9 @@ import React, {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
+  CalendarDays,
   Check,
   CircleCheck,
   Image as ImageIcon,
@@ -33,6 +36,7 @@ import {
 import { AspectRatioGlyph, LiveRingsIcon, TimelineCrosshairIcon } from "./Icons";
 import { AssetAlbumBadges } from "./AssetAlbumBadges";
 import { useCompactViewer, whenPageScrollUnlocked } from "../core/photo-view";
+import { MotionPresence } from "../core/motion";
 
 // ============================================================================
 // 1. Grid Density & Aspect Ratio Controller with FLIP Animation
@@ -48,10 +52,24 @@ const ZOOM_PREF_KEY = "aura-grid-zoom-v4";
 const DESKTOP_COLUMN_OFFSETS = [13, 7, 3, 0, -1, -2, -3] as const;
 const MOBILE_COLUMN_OFFSETS = [8, 4, 2, 0, -1, -2, -3] as const;
 const ASPECT_PREF_KEY = "aura-grid-layout-v1";
+const GROUPING_PREF_KEY = "aura-grid-grouping-v1";
 const MAX_FLIP_TILES = 300;
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
 export type GridAspectMode = "square" | "original";
+export type GridGroupingMode = "day" | "month" | "year";
+
+const GROUPING_OPTIONS = [
+  { mode: "day", label: "按日期分组", shortLabel: "日", period: "当天", locate: "这一天" },
+  { mode: "month", label: "按月分组", shortLabel: "月", period: "当月", locate: "这个月" },
+  { mode: "year", label: "按年分组", shortLabel: "年", period: "当年", locate: "这一年" },
+] as const;
+
+export function timelineGroupKey(capturedAt: string, grouping: GridGroupingMode): string {
+  // Use the recorded calendar date, matching the existing day groups rather than converting offsets.
+  if (!/^\d{4}-\d{2}-\d{2}/.test(capturedAt)) return "未知日期";
+  return capturedAt.slice(0, grouping === "year" ? 4 : grouping === "month" ? 7 : 10);
+}
 
 interface GridZoomPreference {
   baseline: number;
@@ -121,6 +139,16 @@ function loadSavedAspectMode(): GridAspectMode {
   return "square";
 }
 
+function loadSavedGroupingMode(): GridGroupingMode {
+  try {
+    const saved = localStorage.getItem(GROUPING_PREF_KEY);
+    if (saved === "month" || saved === "year") return saved;
+  } catch {
+    /* Storage optional */
+  }
+  return "day";
+}
+
 function isNearViewport(rect: DOMRect, buffer: number): boolean {
   return rect.bottom >= -buffer && rect.top <= window.innerHeight + buffer;
 }
@@ -152,6 +180,7 @@ export function useGridDisplayPreferences() {
     Math.max(1, MOBILE_COLUMN_STEPS[density.mobileBaseline] + offset),
   );
   const [layout, setLayoutRaw] = useState<GridAspectMode>(loadSavedAspectMode);
+  const [grouping, setGroupingRaw] = useState<GridGroupingMode>(loadSavedGroupingMode);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const requestedZoom = useRef(zoom);
   const committedZoom = useRef(zoom);
@@ -218,6 +247,12 @@ export function useGridDisplayPreferences() {
     [captureNextDisplay],
   );
 
+  function changeGrouping(next: GridGroupingMode) {
+    if (next === grouping) return;
+    captureNextDisplay(requestedZoom.current, requestedLayout.current, true);
+    setGroupingRaw(next);
+  }
+
   function changeMobileColumns(columns: number) {
     const baseline = MOBILE_COLUMN_STEPS.findIndex((step) => step === columns);
     if (baseline < 0 || (baseline === density.mobileBaseline && zoom === DEFAULT_ZOOM_STEP)) return;
@@ -241,6 +276,14 @@ export function useGridDisplayPreferences() {
       /* Optional */
     }
   }, [layout]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(GROUPING_PREF_KEY, grouping);
+    } catch {
+      /* Optional */
+    }
+  }, [grouping]);
 
   useLayoutEffect(() => {
     requestedZoom.current = zoom;
@@ -310,7 +353,7 @@ export function useGridDisplayPreferences() {
     });
 
     return stopRunningAnimations;
-  }, [zoom, layout, density.mobileBaseline, stopRunningAnimations]);
+  }, [zoom, layout, grouping, density.mobileBaseline, stopRunningAnimations]);
 
   useLayoutEffect(() => {
     const mq = window.matchMedia(REDUCED_MOTION_QUERY);
@@ -343,6 +386,8 @@ export function useGridDisplayPreferences() {
     setMobileColumns: changeMobileColumns,
     layout,
     setLayout: changeLayout,
+    grouping,
+    setGrouping: changeGrouping,
     columns,
     mobileColumns,
     timelineProps: {
@@ -360,6 +405,74 @@ export function useGridDisplayPreferences() {
   };
 }
 
+function GridGroupingControl({ grouping, onChange, disabled }: {
+  grouping: GridGroupingMode;
+  onChange: (next: GridGroupingMode) => void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const current = GROUPING_OPTIONS.find((option) => option.mode === grouping)!;
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const button = buttonRef.current;
+    const menu = menuRef.current;
+    if (!button || !menu) return;
+    const rect = button.getBoundingClientRect();
+    const { width, height } = menu.getBoundingClientRect();
+    setPosition({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+      top: rect.bottom + height + 6 <= window.innerHeight - 8
+        ? rect.bottom + 6 : Math.max(8, rect.top - height - 6),
+    });
+    const closeOutside = (event: PointerEvent) => {
+      if (!button.contains(event.target as Node) && !menu.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.isComposing && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    const close = () => setOpen(false);
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [open]);
+
+  return <>
+    <button ref={buttonRef} type="button" className="gallery-grouping-toggle"
+      aria-label={`照片分组：${current.label}`} title={`照片分组：${current.label}`}
+      aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
+      disabled={disabled} onClick={() => setOpen((value) => !value)}>
+      <CalendarDays size={14} aria-hidden="true" /><span>{current.shortLabel}</span>
+    </button>
+    {createPortal(<MotionPresence present={open} variant="menu">
+      {open && <div ref={menuRef} id={menuId} className="gallery-grouping-menu" role="menu"
+        aria-label="照片分组" style={position}>
+        {GROUPING_OPTIONS.map((option) => <button key={option.mode} type="button"
+          role="menuitemradio" aria-checked={grouping === option.mode} disabled={disabled}
+          onClick={() => { setOpen(false); onChange(option.mode); }}>
+          <span>{option.label}</span>
+          {grouping === option.mode && <Check size={14} aria-hidden="true" />}
+        </button>)}
+      </div>}
+    </MotionPresence>, document.body)}
+  </>;
+}
+
 export function GridDensityControls({
   zoom,
   maxZoom,
@@ -368,6 +481,8 @@ export function GridDensityControls({
   onZoomChange,
   layout,
   onLayoutChange,
+  grouping,
+  onGroupingChange,
   disabled = false,
 }: {
   zoom: number;
@@ -377,6 +492,8 @@ export function GridDensityControls({
   onZoomChange: (next: number) => void;
   layout: GridAspectMode;
   onLayoutChange: (next: GridAspectMode) => void;
+  grouping: GridGroupingMode;
+  onGroupingChange: (next: GridGroupingMode) => void;
   disabled?: boolean;
 }) {
   const step = clampZoomStep(zoom);
@@ -384,6 +501,7 @@ export function GridDensityControls({
 
   return (
     <div className="gallery-zoom" role="group" aria-label="照片网格显示">
+      <GridGroupingControl grouping={grouping} onChange={onGroupingChange} disabled={disabled} />
       <button
         type="button"
         className="gallery-layout-toggle"
@@ -765,10 +883,10 @@ export function PhotoTile({
 }
 
 // ============================================================================
-// 3. Virtualized Day-Grouped Timeline Canvas
+// 3. Virtualized Timeline Canvas
 // ============================================================================
 
-export interface DayAssetGroup {
+export interface TimelineAssetGroup {
   date: string;
   items: CatalogAsset[];
 }
@@ -783,7 +901,7 @@ export interface TimelineJump {
 }
 
 interface VirtualRowSlice {
-  group: DayAssetGroup;
+  group: TimelineAssetGroup;
   assets?: CatalogAsset[];
   top: number;
   height: number;
@@ -791,6 +909,7 @@ interface VirtualRowSlice {
 
 export function VirtualizedTimelineCanvas({
   groups,
+  grouping,
   columns,
   mobileColumns,
   selectedIds,
@@ -806,7 +925,8 @@ export function VirtualizedTimelineCanvas({
   onJumpComplete,
   compact = false,
 }: {
-  groups: DayAssetGroup[];
+  groups: TimelineAssetGroup[];
+  grouping: GridGroupingMode;
   columns: number;
   mobileColumns: number;
   selectedIds: Set<string>;
@@ -867,7 +987,7 @@ export function VirtualizedTimelineCanvas({
   useLayoutEffect(() => {
     // The estimated initial width is not a user layout change.
     if (!viewport.measured) return;
-    const sig = `${activeCols}:${viewport.width}:${compact}:${selecting}`;
+    const sig = `${activeCols}:${viewport.width}:${compact}:${selecting}:${grouping}`;
     if (
       layoutSignature.current &&
       layoutSignature.current !== sig &&
@@ -892,7 +1012,7 @@ export function VirtualizedTimelineCanvas({
         pendingLayoutAnchor.current = undefined;
       });
     }
-  }, [activeCols, viewport.width, viewport.measured, rows]);
+  }, [activeCols, viewport.width, viewport.measured, rows, compact, selecting, grouping]);
 
   useLayoutEffect(() => {
     const el = rootRef.current;
@@ -953,7 +1073,7 @@ export function VirtualizedTimelineCanvas({
     if (Math.abs(viewport.width - el.getBoundingClientRect().width) >= 0.5) return;
     const target = jump.alignAsset
       ? rows.find((row) => row.assets?.some((asset) => asset.id === jump.assetId))
-      : rows.find((row) => !row.assets && row.group.date === jump.date);
+      : rows.find((row) => !row.assets && row.group.date === timelineGroupKey(jump.date, grouping));
     if (!target) return;
 
     // Wait for departing photo dialogs to restore their source scroll before the jump.
@@ -972,7 +1092,7 @@ export function VirtualizedTimelineCanvas({
       setHighlight(jump.highlight ? { assetId: jump.assetId, jumpId: jump.id } : null);
       onJumpComplete(jump.id);
     });
-  }, [jump, viewport.measured, viewport.width, rows, onJumpComplete]);
+  }, [jump, viewport.measured, viewport.width, rows, grouping, onJumpComplete]);
 
   useEffect(() => {
     if (!highlight) return;
@@ -1019,24 +1139,31 @@ export function VirtualizedTimelineCanvas({
     (rootRef.current?.getBoundingClientRect().top || 0) +
     (rows.find((row) => !row.assets && row.group.date === date)?.top || 0);
 
-  const renderGroupHeader = (group: DayAssetGroup): ReactNode => {
+  const renderGroupHeader = (group: TimelineAssetGroup): ReactNode => {
     const selectableItems = group.items.filter((a) => !a.deletionPending);
     const allGroupSelected =
       selectableItems.length > 0 && selectableItems.every((a) => selectedIds.has(a.id));
+    const knownDate = group.date !== "未知日期";
+    const option = GROUPING_OPTIONS.find((option) => option.mode === grouping)!;
+    const selectLabel = knownDate ? `选择${option.period}` : "选择此组";
+    const locateLabel = `在照片库中定位${knownDate ? option.locate : "这组照片"}`;
+    const title = !knownDate ? group.date : grouping === "year" ? `${group.date}年`
+      : grouping === "month" ? `${Number(group.date.slice(5, 7))}月`
+      : formatHumanDate(`${group.date}T12:00:00`);
 
     return (
       <div className="day-heading" data-date={group.date}>
         <div className="day-title">
           {onLocateDate && (
             <button type="button" className="day-locate" disabled={busy}
-              aria-label="在照片库中定位这一天" title="在照片库中定位这一天"
+              aria-label={locateLabel} title={locateLabel}
               onClick={() => onLocateDate(group.items[0], dateViewportTop(group.date))}>
               <TimelineCrosshairIcon />
             </button>
           )}
           <h2>
-            {formatHumanDate(`${group.date}T12:00:00`)}
-            <span>{group.date.slice(0, 4)}</span>
+            {title}
+            {knownDate && grouping !== "year" && <span>{group.date.slice(0, 4)}</span>}
           </h2>
         </div>
         {compact && !selecting ? <span className="day-count">{group.items.length} 项</span> : <button
@@ -1045,11 +1172,11 @@ export function VirtualizedTimelineCanvas({
           disabled={busy || selectableItems.length === 0}
           aria-pressed={allGroupSelected}
           onClick={() => onToggleGroup(group.items)}
-          title="选择或取消选择当天照片"
+          title={`${selectLabel}或取消选择`}
         >
           <span>{group.items.length} 项</span>
           <span className="day-select-label">
-            {allGroupSelected ? "取消选择" : "选择当天"}
+            {allGroupSelected ? "取消选择" : selectLabel}
           </span>
           <CircleCheck size={15} />
         </button>}

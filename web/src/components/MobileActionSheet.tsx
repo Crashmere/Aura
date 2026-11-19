@@ -29,14 +29,16 @@ export function MobileActionSheet({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (present && event.key === "Escape" && !event.isComposing) {
+      if (present && event.key === "Escape" && !event.defaultPrevented && !event.isComposing &&
+        !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         event.stopImmediatePropagation();
         onClose();
       }
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    // Nested controls handle Escape before the sheet or global navigation.
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   });
 
   return createPortal(
