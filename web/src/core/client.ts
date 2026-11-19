@@ -131,6 +131,14 @@ export function formatHumanDate(iso: string, includeYearAndWeekday = false): str
   );
 }
 
+export function formatCaptureTime(iso: string): string {
+  // Keep fractional seconds and the recorded offset; Date truncates to milliseconds.
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:\d{2})$/.exec(iso);
+  if (!match) return iso;
+  const zone = match[3] === "Z" ? "UTC" : `UTC${match[3]}`;
+  return `${match[1]} ${match[2]} ${zone}`;
+}
+
 export function describeOriginalRole(file: StoredFile): string {
   const mapping: Record<string, string> = {
     originalPhoto: "原始照片",
