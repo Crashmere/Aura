@@ -199,7 +199,7 @@ func (l *Library) info(w http.ResponseWriter, r *http.Request) {
 }
 func (l *Library) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	where, args, ok := l.assetFilter(w, q)
+	where, args, ok := l.assetFilter(r.Context(), w, q)
 	if !ok {
 		return
 	}

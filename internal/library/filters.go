@@ -53,8 +53,17 @@ func (l *Library) filterOptions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, value)
 }
 
-func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []any, bool) {
-	for _, name := range strings.Fields("view album excludeAlbum excludeAlbums q from to kind format orientation status location versions grouping albumState camera cameraMatch lens lensMatch minSize maxSize minMP maxMP addedFrom addedTo") {
+func hasSimilarityFilters(q url.Values) bool {
+	for _, name := range strings.Fields("dhashState dinoState minDHashCount maxDHashCount minDINOCount maxDINOCount") {
+		if q.Get(name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Library) assetFilter(ctx context.Context, w http.ResponseWriter, q url.Values) (string, []any, bool) {
+	for _, name := range strings.Fields("view album excludeAlbum excludeAlbums q from to kind format orientation status location versions grouping albumState camera cameraMatch lens lensMatch minSize maxSize minMP maxMP addedFrom addedTo dhashState dinoState minDHashCount maxDHashCount minDINOCount maxDINOCount") {
 		if len(q[name]) > 1 {
 			fail(w, 400, name+" 只能指定一个值")
 			return "", nil, false
@@ -70,6 +79,8 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		{"versions", "single multiple"},
 		{"grouping", "automatic manual"},
 		{"albumState", "in none"},
+		{"dhashState", "with without"},
+		{"dinoState", "with without"},
 		{"cameraMatch", "exact contains missing"},
 		{"lensMatch", "exact contains missing"},
 	} {
@@ -85,7 +96,7 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		}
 	}
 	if q.Get("camera") != "" || q.Get("lens") != "" || q.Get("cameraMatch") == "missing" || q.Get("lensMatch") == "missing" || q.Get("location") != "" || q.Get("q") != "" {
-		if err := l.ensureFacets(context.Background()); err != nil {
+		if err := l.ensureFacets(ctx); err != nil {
 			fail(w, 500, err)
 			return "", nil, false
 		}
@@ -143,6 +154,54 @@ func (l *Library) assetFilter(w http.ResponseWriter, q url.Values) (string, []an
 		} else {
 			where += ">1"
 		}
+	}
+	if hasSimilarityFilters(q) {
+		conditions := []string{}
+		countArgs := []any{}
+		for _, filter := range []struct{ state, min, max, source string }{
+			{"dhashState", "minDHashCount", "maxDHashCount", "dhash"},
+			{"dinoState", "minDINOCount", "maxDINOCount", "dino"},
+		} {
+			column := "json_extract(value,'$." + filter.source + "')"
+			if state := q.Get(filter.state); state != "" {
+				comparison := ">0"
+				if state == "without" {
+					comparison = "=0"
+				}
+				conditions = append(conditions, column+comparison)
+			}
+			var lower, upper int64
+			for i, name := range []string{filter.min, filter.max} {
+				if raw := q.Get(name); raw != "" {
+					n, err := strconv.ParseInt(raw, 10, 64)
+					if err != nil || n < 0 {
+						fail(w, 400, name+" 必须是有效的非负整数")
+						return "", nil, false
+					}
+					comparison := ">="
+					if i == 0 {
+						lower = n
+					} else {
+						upper = n
+						comparison = "<="
+					}
+					conditions = append(conditions, column+comparison+"?")
+					countArgs = append(countArgs, n)
+				}
+			}
+			if q.Get(filter.min) != "" && q.Get(filter.max) != "" && lower > upper {
+				fail(w, 400, filter.min+" 不能大于 "+filter.max)
+				return "", nil, false
+			}
+		}
+		projection, err := l.assetSimilarCountProjection(ctx)
+		if err != nil {
+			fail(w, 500, err)
+			return "", nil, false
+		}
+		where += " AND a.id IN (SELECT key FROM json_each(?) WHERE " + strings.Join(conditions, " AND ") + ")"
+		args = append(args, projection)
+		args = append(args, countArgs...)
 	}
 	// Scalar bounds use the primary file already joined by both callers.
 	for _, bounds := range []struct{ min, max, column string }{
@@ -358,11 +417,21 @@ func pageCursor(w http.ResponseWriter, cursor string) (string, string, bool) {
 }
 
 func (l *Library) timeline(w http.ResponseWriter, r *http.Request) {
-	where, args, ok := l.assetFilter(w, r.URL.Query())
+	q := r.URL.Query()
+	where, args, ok := l.assetFilter(r.Context(), w, q)
 	if !ok {
 		return
 	}
-	value, err := l.cachedCatalog(r.Context(), "timeline:"+r.URL.RawQuery, "library", func() (any, error) {
+	cacheKey := "timeline:" + r.URL.RawQuery
+	if hasSimilarityFilters(q) {
+		review, err := l.revision(r.Context(), "review")
+		if err != nil {
+			fail(w, 500, err)
+			return
+		}
+		cacheKey += ":review:" + strconv.FormatInt(review, 10)
+	}
+	value, err := l.cachedCatalog(r.Context(), cacheKey, "library", func() (any, error) {
 		rows, err := l.DB.QueryContext(r.Context(), "SELECT substr(a.captured_at,1,7),count(*) FROM assets a JOIN files f ON f.hash=a.primary_hash "+where+" GROUP BY substr(a.captured_at,1,7) ORDER BY substr(a.captured_at,1,7) DESC", args...)
 		if err != nil {
 			return nil, err

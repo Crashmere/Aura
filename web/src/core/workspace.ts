@@ -125,6 +125,12 @@ export const FILTER_PARAMETER_KEYS = [
   "versions",
   "grouping",
   "albumState",
+  "dhashState",
+  "dinoState",
+  "minDHashCount",
+  "maxDHashCount",
+  "minDINOCount",
+  "maxDINOCount",
   "camera",
   "lens",
   "cameraMatch",
@@ -191,6 +197,14 @@ export const FILTER_ENUM_OPTIONS = {
     ["in", "已加入相片集"],
     ["none", "未加入相片集"],
   ],
+  dhashState: [
+    ["with", "有近似版本"],
+    ["without", "无近似版本"],
+  ],
+  dinoState: [
+    ["with", "有内容相似"],
+    ["without", "无内容相似"],
+  ],
 } as const;
 
 export function parseFiltersFromQuery(params: URLSearchParams): LibraryFilterValues {
@@ -240,6 +254,8 @@ export function buildActiveFilterChips(filters: LibraryFilterValues): ActiveFilt
   for (const [low, high, label, unit, divisor] of [
     ["minSize", "maxSize", "原件", "MB", 1048576],
     ["minMP", "maxMP", "像素", "MP", 1],
+    ["minDHashCount", "maxDHashCount", "近似版本", "项", 1],
+    ["minDINOCount", "maxDINOCount", "内容相似", "项", 1],
   ] as const) {
     if (!filters[low] && !filters[high]) continue;
     const fmt = (raw: string) => String(Number((Number(raw) / divisor).toFixed(2)));

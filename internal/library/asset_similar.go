@@ -21,6 +21,48 @@ type assetSimilarCounts struct {
 	DINO  int `json:"dino"`
 }
 
+func (l *Library) assetSimilarCountProjection(ctx context.Context) (string, error) {
+	value, err := l.cachedCatalog(ctx, "asset-similar-count-projection", "review", func() (any, error) {
+		rows, err := l.DB.QueryContext(ctx, `SELECT a.id,a.kind,a.trashed_at,EXISTS(SELECT 1 FROM deletion_pending p WHERE p.asset_id=a.id) FROM assets a`)
+		if err != nil {
+			return nil, err
+		}
+		assets := []Asset{}
+		for rows.Next() {
+			var asset Asset
+			if err = rows.Scan(&asset.ID, &asset.Kind, &asset.TrashedAt, &asset.DeletionPending); err != nil {
+				break
+			}
+			assets = append(assets, asset)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		// Reuse card counts so filters retain photo/video and dismissal semantics.
+		if err = l.addAssetSimilarCounts(ctx, assets); err != nil {
+			return nil, err
+		}
+		counts := make(map[string]assetSimilarCounts, len(assets))
+		for _, asset := range assets {
+			count := assetSimilarCounts{}
+			if asset.SimilarCounts != nil {
+				count = *asset.SimilarCounts
+			}
+			counts[asset.ID] = count
+		}
+		encoded, err := json.Marshal(counts)
+		return string(encoded), err
+	})
+	if err != nil {
+		return "", err
+	}
+	return value.(string), nil
+}
+
 func (l *Library) addAssetSimilarCounts(ctx context.Context, assets []Asset) error {
 	eligible := false
 	for _, asset := range assets {

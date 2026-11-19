@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { CalendarDays, Camera, Check, FileImage, Search, SlidersHorizontal, X } from "lucide-react";
+import { CalendarDays, Camera, Check, FileImage, Scan, Search, SlidersHorizontal, X } from "lucide-react";
 import { formatIsoDayLocal, requestJson } from "../core/client";
 import { useIsPresent } from "../core/motion";
 import { useCompactViewer, usePageScrollLock } from "../core/photo-view";
@@ -238,11 +238,12 @@ export function FilterSheet({
   );
 
   const renderNumericRange = (
-    lowKey: "minSize" | "minMP",
-    highKey: "maxSize" | "maxMP",
+    lowKey: "minSize" | "minMP" | "minDHashCount" | "minDINOCount",
+    highKey: "maxSize" | "maxMP" | "maxDHashCount" | "maxDINOCount",
     label: string,
     unit: string,
     multiplier: number,
+    step: "any" | number = "any",
   ) => (
     <fieldset className="filter-range">
       <legend>
@@ -253,7 +254,7 @@ export function FilterSheet({
           aria-label={`最小${label}`}
           type="number"
           min="0"
-          step="any"
+          step={step}
           placeholder="最小"
           value={lowKey === "minSize" ? mbInputs.minSize : draft[lowKey]}
           onChange={(e) => {
@@ -272,7 +273,7 @@ export function FilterSheet({
           aria-label={`最大${label}`}
           type="number"
           min="0"
-          step="any"
+          step={step}
           placeholder="最大"
           value={highKey === "maxSize" ? mbInputs.maxSize : draft[highKey]}
           onChange={(e) => {
@@ -317,11 +318,15 @@ export function FilterSheet({
     </fieldset>
   );
 
+  const invalidCounts = [draft.minDHashCount, draft.maxDHashCount, draft.minDINOCount, draft.maxDINOCount]
+    .some((raw) => raw !== "" && (!Number.isSafeInteger(Number(raw)) || Number(raw) < 0));
   const hasInvalidBounds =
     (draft.from && draft.to && draft.from > draft.to) ||
     (draft.addedFrom && draft.addedTo && draft.addedFrom > draft.addedTo) ||
     (draft.minSize && draft.maxSize && Number(draft.minSize) > Number(draft.maxSize)) ||
-    (draft.minMP && draft.maxMP && Number(draft.minMP) > Number(draft.maxMP));
+    (draft.minMP && draft.maxMP && Number(draft.minMP) > Number(draft.maxMP)) ||
+    (draft.minDHashCount && draft.maxDHashCount && Number(draft.minDHashCount) > Number(draft.maxDHashCount)) ||
+    (draft.minDINOCount && draft.maxDINOCount && Number(draft.minDINOCount) > Number(draft.maxDINOCount));
 
   return createPortal(
     <div
@@ -344,8 +349,12 @@ export function FilterSheet({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (!hasInvalidBounds && isPresent) {
-              onApply(draft);
+            if (!hasInvalidBounds && !invalidCounts && isPresent) {
+              const applied = { ...draft };
+              for (const key of ["minDHashCount", "maxDHashCount", "minDINOCount", "maxDINOCount"] as const) {
+                if (applied[key]) applied[key] = String(Number(applied[key]));
+              }
+              onApply(applied);
               onClose();
             }
           }}
@@ -375,6 +384,20 @@ export function FilterSheet({
                 {renderEnumSelect("grouping", "组合方式")}
                 {renderEnumSelect("albumState", "相片集归属")}
               </div>
+            </section>
+
+            <section className="filter-section">
+              <h3>
+                <Scan size={15} />
+                <span>相似度判定</span>
+              </h3>
+              <div className="filter-fields">
+                {renderEnumSelect("dhashState", "近似版本判定")}
+                {renderEnumSelect("dinoState", "内容相似判定")}
+                {renderNumericRange("minDHashCount", "maxDHashCount", "近似版本数量", "项", 1, 1)}
+                {renderNumericRange("minDINOCount", "maxDINOCount", "内容相似数量", "项", 1, 1)}
+              </div>
+              <p className="filter-field-note">数量按整个照片库的当前相似结果统计，已忽略和最近删除的项目不计入。</p>
             </section>
 
             <section className="filter-section">
@@ -451,6 +474,11 @@ export function FilterSheet({
                 范围的起点不能大于终点
               </p>
             )}
+            {invalidCounts && (
+              <p className="filter-validation" role="alert">
+                相似数量必须是非负整数
+              </p>
+            )}
           </div>
 
           <footer>
@@ -470,7 +498,7 @@ export function FilterSheet({
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={!!hasInvalidBounds || !isPresent}
+              disabled={!!hasInvalidBounds || invalidCounts || !isPresent}
             >
               <Check size={15} />
               <span>应用筛选</span>
