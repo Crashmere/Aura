@@ -167,6 +167,128 @@ func TestOptimizedCatalogContracts(t *testing.T) {
 	}
 }
 
+func TestDINOReconciliationPreservesReviewCacheOnNoOp(t *testing.T) {
+	l, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.DB.Close()
+	ctx := context.Background()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := l.DB.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready, pending, video, untracked := fmt.Sprintf("%064x", 1), fmt.Sprintf("%064x", 2), fmt.Sprintf("%064x", 3), fmt.Sprintf("%064x", 4)
+	for i, hash := range []string{ready, pending, video} {
+		id, kind, mime := fmt.Sprintf("%032x", i+1), "photo", "image/jpeg"
+		if hash == video {
+			kind, mime = "video", "video/mp4"
+		}
+		exec("INSERT INTO assets(id,primary_hash,kind,captured_at,created_at) VALUES(?,?,?,'2026-11-01','2026-11-01')", id, hash, kind)
+		exec("INSERT INTO files(hash,asset_id,name,size,mime,status,hints,created_at) VALUES(?,?,'synthetic',1,?,'ready','{}','2026-11-01')", hash, id, mime)
+	}
+	for _, hash := range []string{ready, pending} {
+		if err := os.WriteFile(l.Derived(hash, "-thumb.jpg"), []byte("thumbnail"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stat, err := os.Stat(l.Derived(ready, "-thumb.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := dinoRecord{Model: dinoModel, Hash: ready, Thumbnail: fmt.Sprintf("%d:%d", stat.Size(), stat.ModTime().UnixNano()), CreatedAt: now()}
+	if err := os.WriteFile(l.Derived(ready, dinoSuffix), []byte(marshal(record)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	refresh := func() {
+		t.Helper()
+		if _, _, err := l.refreshDINO(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revision := func() int64 {
+		t.Helper()
+		value, err := l.revision(ctx, "review")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	dirty := func(hashes ...string) {
+		for _, hash := range hashes {
+			exec("INSERT OR IGNORE INTO dino_dirty VALUES(?)", hash)
+		}
+	}
+	consumeDelta := func() {
+		l.dinoMu.Lock()
+		l.dinoDelta = map[string]dinoItem{}
+		l.dinoMu.Unlock()
+	}
+	builds := 0
+	cache := func() int {
+		t.Helper()
+		value, err := l.cachedCatalog(ctx, "dino-reconciliation-contract", "review", func() (any, error) {
+			builds++
+			return builds, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value.(int)
+	}
+	refresh()
+	if l.dinoStatus.Total != 2 || l.dinoStatus.Ready != 1 || l.dinoStatus.Pending != 1 {
+		t.Fatalf("initial index status: %+v", l.dinoStatus)
+	}
+	consumeDelta()
+	before, cached := revision(), cache()
+	dirty(ready, pending, video, untracked)
+	refresh()
+	if revision() != before || cache() != cached || builds != 1 || len(l.dinoDelta) != 0 {
+		t.Fatalf("no-op reconciliation invalidated review state: revision=%d builds=%d delta=%v", revision(), builds, l.dinoDelta)
+	}
+
+	// Changing a pending thumbnail must replace its queued signature, not skip it.
+	if err := os.WriteFile(l.Derived(pending, "-thumb.jpg"), []byte("changed thumbnail"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dirty(pending)
+	refresh()
+	var queuedThumbnail string
+	if err := l.DB.QueryRow("SELECT thumbnail FROM dino_tasks WHERE hash=?", pending).Scan(&queuedThumbnail); err != nil {
+		t.Fatal(err)
+	}
+	if revision() <= before || cache() == cached || queuedThumbnail != l.dinoItems[pending].Thumbnail || len(l.dinoDelta) != 1 || l.dinoDelta[pending].Thumbnail == "" {
+		t.Fatal("thumbnail change did not invalidate and update the pending item")
+	}
+	consumeDelta()
+	before, cached = revision(), cache()
+	if err := os.Remove(l.Derived(ready, "-thumb.jpg")); err != nil {
+		t.Fatal(err)
+	}
+	dirty(ready)
+	refresh()
+	var queued int
+	if err := l.DB.QueryRow("SELECT count(*) FROM dino_tasks WHERE hash=?", ready).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	_, tracked := l.dinoItems[ready]
+	_, retained := l.dinoRecords[ready]
+	removal, changed := l.dinoDelta[ready]
+	if revision() <= before || cache() == cached || queued != 0 || tracked || retained || !changed || removal.Thumbnail != "" || l.dinoStatus.Ready != 0 {
+		t.Fatal("tracked thumbnail removal did not invalidate and remove its feature")
+	}
+	consumeDelta()
+	before, cached = revision(), cache()
+	dirty(ready)
+	refresh()
+	if revision() != before || cache() != cached || len(l.dinoDelta) != 0 {
+		t.Fatal("repeated thumbnail removal invalidated review state")
+	}
+}
+
 func TestDHashBlocksPreserveEveryMatch(t *testing.T) {
 	rng := rand.New(rand.NewSource(44))
 	index := &dhashIndex{}

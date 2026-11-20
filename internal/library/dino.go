@@ -148,6 +148,21 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 	l.dinoMu.RUnlock()
 	items := []dinoItem{}
 	dirty := []string{}
+	reviewChanged := false
+	// Publish partial changes even if later queue work fails or is canceled.
+	defer func() {
+		l.dinoMu.Lock()
+		l.dinoStatus.Total = len(l.dinoItems)
+		l.dinoStatus.Pending = l.dinoStatus.Total - l.dinoStatus.Ready
+		l.dinoMu.Unlock()
+		if reviewChanged {
+			updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			defer cancel()
+			if _, err := l.DB.ExecContext(updateCtx, "UPDATE catalog_versions SET value=value+1 WHERE name='review'"); err != nil {
+				slog.Warn("invalidate DINO review", "error", err)
+			}
+		}
+	}()
 	if initial {
 		var err error
 		items, err = l.dinoCatalog(ctx)
@@ -221,7 +236,7 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 	for _, item := range items {
 		l.dinoMu.RLock()
 		old, exists := l.dinoRecords[item.Hash]
-		previous := l.dinoItems[item.Hash]
+		previous, tracked := l.dinoItems[item.Hash]
 		l.dinoMu.RUnlock()
 		if item.Thumbnail != "" && old.Thumbnail == item.Thumbnail && previous.Thumbnail == item.Thumbnail {
 			continue
@@ -230,10 +245,14 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 			if _, err := l.DB.ExecContext(ctx, "DELETE FROM dino_tasks WHERE hash=?", item.Hash); err != nil {
 				return nil, nil, err
 			}
+			if !tracked && !exists {
+				continue
+			}
 			l.dinoMu.Lock()
 			delete(l.dinoItems, item.Hash)
 			delete(l.dinoRecords, item.Hash)
 			l.dinoDelta[item.Hash] = item
+			reviewChanged = true
 			if exists {
 				if old.Error == "" {
 					l.dinoStatus.Ready--
@@ -249,6 +268,7 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 			_ = json.Unmarshal(data, &record)
 		}
 		valid := record.Model == dinoModel && record.Hash == item.Hash && record.Thumbnail == item.Thumbnail
+		stateChanged := !tracked || previous.Thumbnail != item.Thumbnail || exists != valid
 		if !valid || record.Error != "" {
 			retry := ""
 			if valid {
@@ -266,7 +286,10 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 		}
 		l.dinoMu.Lock()
 		l.dinoItems[item.Hash] = item
-		l.dinoDelta[item.Hash] = item
+		if stateChanged {
+			l.dinoDelta[item.Hash] = item
+			reviewChanged = true
+		}
 		if exists {
 			if old.Error == "" {
 				l.dinoStatus.Ready--
@@ -285,9 +308,6 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 			delete(l.dinoRecords, item.Hash)
 		}
 		l.dinoMu.Unlock()
-	}
-	if len(items) > 0 {
-		_, _ = l.DB.ExecContext(ctx, "UPDATE catalog_versions SET value=value+1 WHERE name='review'")
 	}
 	if initial {
 		if _, err := l.DB.ExecContext(ctx, `DELETE FROM dino_tasks WHERE hash NOT IN (SELECT f.hash FROM assets a JOIN files f ON f.hash=a.primary_hash WHERE a.trashed_at='' AND f.status='ready' AND f.mime LIKE 'image/%')`); err != nil {
@@ -318,10 +338,6 @@ func (l *Library) refreshDINO(ctx context.Context) ([]dinoItem, []dinoItem, erro
 		err = rows.Err()
 	}
 	rows.Close()
-	l.dinoMu.Lock()
-	l.dinoStatus.Total = len(l.dinoItems)
-	l.dinoStatus.Pending = l.dinoStatus.Total - l.dinoStatus.Ready
-	l.dinoMu.Unlock()
 	return nil, pending, err
 }
 
