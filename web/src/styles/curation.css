@@ -1104,8 +1104,21 @@ article.task-row:hover {
 .filter-field {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 4px;
   font-size: 12px;
+}
+
+.filter-choice-field {
+  grid-column: 1 / -1;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.filter-choice-field legend {
+  padding: 0;
+  margin-bottom: 4px;
 }
 
 #album-name-form {
@@ -1220,11 +1233,18 @@ article.task-row:hover {
 
 .filter-presets {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
 }
 
+.filter-presets.filter-choice-options {
+  margin-bottom: 0;
+}
+
 .filter-presets button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 4px 10px;
   border-radius: 999px;
   background: var(--bg-subtle);
@@ -1232,11 +1252,17 @@ article.task-row:hover {
   transition: background 0.16s ease, transform 0.16s var(--ease-spring);
 }
 
-.filter-presets button:hover {
+.filter-presets button:hover:not(:disabled) {
   background: var(--bg-active);
 }
 
-.filter-presets button:active {
+.filter-presets button[aria-pressed="true"],
+.filter-presets button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.filter-presets button:active:not(:disabled) {
   transform: scale(0.94);
 }
 

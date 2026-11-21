@@ -71,6 +71,56 @@ export function ActiveFiltersBar({
   );
 }
 
+function FilterChoiceField({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  options: readonly (readonly [string, string])[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  if (options.length <= 6) {
+    return (
+      <fieldset className={`filter-field filter-choice-field ${className}`} disabled={disabled}>
+        <legend>{label}</legend>
+        <div className="filter-presets filter-choice-options">
+          {options.map(([id, text]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={value === id}
+              onClick={() => onChange(id)}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+    );
+  }
+
+  return (
+    <label className={`filter-field ${className}`}>
+      <span>{label}</span>
+      <select
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map(([id, text]) => <option key={id} value={id}>{text}</option>)}
+      </select>
+    </label>
+  );
+}
+
 export function FilterSheet({
   value,
   anchorRef,
@@ -181,60 +231,40 @@ export function FilterSheet({
     }));
   }
 
-  const renderEnumSelect = (key: keyof typeof FILTER_ENUM_OPTIONS, label: string) => (
-    <label className="filter-field">
-      <span>{label}</span>
-      <select
-        aria-label={label}
-        value={draft[key]}
-        onChange={(e) => updateField(key, e.target.value)}
-      >
-        <option value="">全部</option>
-        {FILTER_ENUM_OPTIONS[key].map(([id, text]) => (
-          <option key={id} value={id}>
-            {text}
-          </option>
-        ))}
-      </select>
-    </label>
+  const renderEnumField = (key: keyof typeof FILTER_ENUM_OPTIONS, label: string) => (
+    <FilterChoiceField
+      label={label}
+      value={draft[key]}
+      options={[["", "全部"], ...FILTER_ENUM_OPTIONS[key]]}
+      onChange={(nextValue) => updateField(key, nextValue)}
+    />
   );
 
-  const renderEquipmentSelect = (
+  const renderEquipmentField = (
     key: "camera" | "lens",
     label: string,
     options: string[] | undefined,
   ) => (
-    <label className="filter-field">
-      <span>{label}</span>
-      <select
-        aria-label={label}
-        value={
-          draft[`${key}Match`] === "missing" ? "missing" : draft[key] ? `value:${draft[key]}` : ""
-        }
-        disabled={equipLoading && !equipment}
-        onChange={(e) => {
-          const val = e.target.value;
-          const isMissing = val === "missing";
-          const chosen = val.startsWith("value:") ? val.slice(6) : "";
-          setDraft((prev) => ({
-            ...prev,
-            [key]: chosen,
-            [`${key}Match`]: isMissing ? "missing" : chosen ? "exact" : "",
-          }));
-        }}
-      >
-        <option value="">{equipLoading && !equipment ? "正在读取照片库…" : `全部${label}`}</option>
-        <option value="missing">无{label}记录</option>
-        {draft[key] && !options?.includes(draft[key]) && (
-          <option value={`value:${draft[key]}`}>{draft[key]}</option>
-        )}
-        {options?.map((opt) => (
-          <option key={opt} value={`value:${opt}`}>
-            {opt}
-          </option>
-        ))}
-      </select>
-    </label>
+    <FilterChoiceField
+      label={label}
+      value={draft[`${key}Match`] === "missing" ? "missing" : draft[key] ? `value:${draft[key]}` : ""}
+      disabled={equipLoading && !equipment}
+      options={[
+        ["", equipLoading && !equipment ? "正在读取照片库…" : `全部${label}`],
+        ["missing", `无${label}记录`],
+        ...[...(draft[key] && !options?.includes(draft[key]) ? [draft[key]] : []), ...(options || [])]
+          .map((option) => [`value:${option}`, option] as const),
+      ]}
+      onChange={(nextValue) => {
+        const isMissing = nextValue === "missing";
+        const chosen = nextValue.startsWith("value:") ? nextValue.slice(6) : "";
+        setDraft((prev) => ({
+          ...prev,
+          [key]: chosen,
+          [`${key}Match`]: isMissing ? "missing" : chosen ? "exact" : "",
+        }));
+      }}
+    />
   );
 
   const renderNumericRange = (
@@ -376,13 +406,13 @@ export function FilterSheet({
                 <span>照片内容与归属</span>
               </h3>
               <div className="filter-fields">
-                {renderEnumSelect("kind", "媒体类型")}
-                {renderEnumSelect("format", "原件格式")}
-                {renderEnumSelect("orientation", "构图")}
-                {renderEnumSelect("location", "定位信息")}
-                {renderEnumSelect("versions", "照片版本")}
-                {renderEnumSelect("grouping", "组合方式")}
-                {renderEnumSelect("albumState", "相片集归属")}
+                {renderEnumField("kind", "媒体类型")}
+                {renderEnumField("format", "原件格式")}
+                {renderEnumField("orientation", "构图")}
+                {renderEnumField("location", "定位信息")}
+                {renderEnumField("versions", "照片版本")}
+                {renderEnumField("grouping", "组合方式")}
+                {renderEnumField("albumState", "相片集归属")}
               </div>
             </section>
 
@@ -392,8 +422,8 @@ export function FilterSheet({
                 <span>相似度判定</span>
               </h3>
               <div className="filter-fields">
-                {renderEnumSelect("dhashState", "近似版本判定")}
-                {renderEnumSelect("dinoState", "内容相似判定")}
+                {renderEnumField("dhashState", "近似版本判定")}
+                {renderEnumField("dinoState", "内容相似判定")}
                 {renderNumericRange("minDHashCount", "maxDHashCount", "近似版本数量", "项", 1, 1)}
                 {renderNumericRange("minDINOCount", "maxDINOCount", "内容相似数量", "项", 1, 1)}
               </div>
@@ -416,19 +446,22 @@ export function FilterSheet({
                   今年
                 </button>
               </div>
-              {compact && months.length > 0 && <label className="filter-field filter-months">
-                <span>拍摄月份</span>
-                <select aria-label="拍摄月份" value={months.find(({ month }) => {
+              {compact && months.length > 0 && <FilterChoiceField
+                className="filter-months"
+                label="拍摄月份"
+                value={months.find(({ month }) => {
                   const bounds = resolveMonthBounds(month);
                   return draft.from === bounds.from && draft.to === bounds.to;
-                })?.month || ""} onChange={(event) => {
-                  const bounds = event.target.value ? resolveMonthBounds(event.target.value) : { from: "", to: "" };
+                })?.month || ""}
+                options={[
+                  ["", "全部月份 / 自定义日期"],
+                  ...months.map(({ month, count }) => [month, `${month} · ${count} 项`] as const),
+                ]}
+                onChange={(nextValue) => {
+                  const bounds = nextValue ? resolveMonthBounds(nextValue) : { from: "", to: "" };
                   setDraft((previous) => ({ ...previous, ...bounds }));
-                }}>
-                  <option value="">全部月份 / 自定义日期</option>
-                  {months.map(({ month, count }) => <option key={month} value={month}>{month} · {count} 项</option>)}
-                </select>
-              </label>}
+                }}
+              />}
               {renderDateRange("from", "to", "拍摄日期")}
               {renderDateRange("addedFrom", "addedTo", "导入日期")}
             </section>
@@ -439,8 +472,8 @@ export function FilterSheet({
                 <span>拍摄设备与镜头</span>
               </h3>
               <div className="filter-fields">
-                {renderEquipmentSelect("camera", "设备", equipment?.cameras)}
-                {renderEquipmentSelect("lens", "镜头", equipment?.lenses)}
+                {renderEquipmentField("camera", "设备", equipment?.cameras)}
+                {renderEquipmentField("lens", "镜头", equipment?.lenses)}
               </div>
               {equipError && (
                 <p className="equipment-error" role="alert">
@@ -464,7 +497,7 @@ export function FilterSheet({
               <div className="filter-fields">
                 {renderNumericRange("minMP", "maxMP", "像素数", "MP", 1)}
                 {renderNumericRange("minSize", "maxSize", "原件大小", "MB", 1048576)}
-                {renderEnumSelect("status", "处理状态")}
+                {renderEnumField("status", "处理状态")}
               </div>
               <p className="filter-field-note">像素数、构图、大小和处理状态按主版本筛选。</p>
             </section>
