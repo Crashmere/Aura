@@ -238,7 +238,8 @@ function AuraApplication() {
 
   const [assets, setAssets] = useState<CatalogAsset[]>([]);
   const [nextCursor, setNextCursor] = useState("");
-  const [loadingPage, setLoadingPage] = useState(false);
+  const [pageLoadMode, setPageLoadMode] = useState<"idle" | "append" | "replace">("idle");
+  const loadingPage = pageLoadMode !== "idle";
   const [loadError, setLoadError] = useState("");
   const [openAssetObj, setOpenAssetObj] = useState<CatalogAsset | null>(null);
   const [viewerGroup, setViewerGroup] = useState<CatalogAsset[] | null>(null);
@@ -577,7 +578,7 @@ function AuraApplication() {
     async (cursor = "", append = false) => {
       if (!isGalleryView) return;
       const reqId = ++pageReqIdRef.current;
-      setLoadingPage(true);
+      setPageLoadMode(append ? "append" : "replace");
       setLoadError("");
       try {
         const q = buildCatalogQuery(true, cursor);
@@ -597,7 +598,7 @@ function AuraApplication() {
         }
       } finally {
         if (reqId === pageReqIdRef.current) {
-          setLoadingPage(false);
+          setPageLoadMode("idle");
         }
       }
     },
@@ -1009,7 +1010,7 @@ function AuraApplication() {
   ) => {
     const requestId = ++pageReqIdRef.current;
     timelineNavigationRef.current = requestId;
-    setLoadingPage(true);
+    setPageLoadMode("replace");
     setLoadError("");
     try {
       const params = new URLSearchParams({ limit: "240" });
@@ -1060,7 +1061,7 @@ function AuraApplication() {
       }
     } finally {
       if (timelineNavigationRef.current === requestId) timelineNavigationRef.current = null;
-      if (requestId === pageReqIdRef.current) setLoadingPage(false);
+      if (requestId === pageReqIdRef.current) setPageLoadMode("idle");
     }
   };
 
@@ -1665,7 +1666,8 @@ function AuraApplication() {
               )}
 
               {assets.length > 0 ? (
-                <div className="catalog-results" aria-busy={loadingPage} inert={loadingPage || (!nextCursor && !!loadError)}>
+                <div className="catalog-results" aria-busy={loadingPage} data-loading={pageLoadMode}
+                  inert={pageLoadMode === "replace" || (!nextCursor && !!loadError)}>
                   <VirtualizedTimelineCanvas
                     groups={timelineGroups}
                     grouping={gridPrefs.grouping}
@@ -1738,7 +1740,7 @@ function AuraApplication() {
               {loadingPage && assets.length > 0 && (
                 <div className="loading-inline">
                   <LoaderCircle size={18} className="spin" />
-                  <span>{nextCursor ? "正在加载更多照片…" : "正在更新照片…"}</span>
+                  <span>{pageLoadMode === "append" ? "正在加载更多照片…" : "正在更新照片…"}</span>
                 </div>
               )}
             </div>

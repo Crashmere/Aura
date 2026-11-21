@@ -177,7 +177,7 @@ Optional native album import uses a stable client-library and PhotoKit collectio
 
 ## Browsing and task state
 
-Search and filter updates within the same library section and album retain current photo nodes until the replacement page arrives. The gallery marks the pending update with reduced opacity and suspends actions on previous results; failures retain the photos beside a retry message. Section or album changes still establish a new data scope. Follow the shared [refresh diagnosis](https://github.com/Crashmere/agent-config/blob/main/skills/server-operations/references/common-issues.md#a-data-refresh-flashes-or-resets-the-page).
+Search and filter updates within the same library section and album retain current photo nodes until the replacement page arrives. While replacement results are pending, the gallery reduces opacity and suspends actions on previous results; failures retain the photos beside a retry message. Scroll pagination appends photos without fading or disabling the loaded results, including while retrying a failed page. Section or album changes still establish a new data scope. Follow the shared [refresh diagnosis](https://github.com/Crashmere/agent-config/blob/main/skills/server-operations/references/common-issues.md#a-data-refresh-flashes-or-resets-the-page).
 
 Album date headings offer a crosshair button that locates the same capture period in the unfiltered library. Only the library's photo tiles make album badges clickable; each badge locates that photo's capture period in its unfiltered album and briefly lights the photo's border. Both directions preserve the period heading's viewport height within the destination's normal scroll limits, using an instant jump.
 
