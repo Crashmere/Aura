@@ -199,7 +199,7 @@
   overflow: hidden;
   user-select: none;
   container-type: inline-size;
-  transition: background 0.24s var(--ease-out);
+  contain: layout paint;
 }
 
 .aura-gallery[data-gallery-layout="original"] .photo,
@@ -209,15 +209,13 @@
   background: #eceae3;
 }
 
-.photo.is-loading {
+.photo:has(.photo-frame img:not(.is-loaded)) {
   background: linear-gradient(
     110deg,
     #e8e6df 25%,
     #f2f0ea 37%,
     #e8e6df 63%
   );
-  background-size: 200% 100%;
-  animation: aura-shimmer 1.6s ease-in-out infinite;
 }
 
 .photo-open {
@@ -263,7 +261,7 @@
   /* The frame reaches the natural ratio; one fit mode keeps both morphs continuous. */
   object-fit: cover;
   opacity: 0;
-  transform: scale(1.03);
+  transform: none;
   transition:
     opacity 0.24s var(--ease-out),
     transform 0.28s var(--ease-spring);

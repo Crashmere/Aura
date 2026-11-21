@@ -1,4 +1,5 @@
 import React, {
+  startTransition,
   useCallback,
   useEffect,
   useId,
@@ -552,6 +553,36 @@ export function GridDensityControls({
 // 2. Photo Tile Card
 // ============================================================================
 
+function PhotoThumbnail({ src, alt, onReady, onError }: {
+  src: string;
+  alt: string;
+  onReady: (image: HTMLImageElement) => void;
+  onError: () => void;
+}) {
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  function reveal(image: HTMLImageElement) {
+    onReady(image);
+    // Finish asynchronous decoding before starting the fade, without rerendering the card.
+    void image.decode().catch(() => {}).then(() => {
+      if (imageRef.current === image && image.naturalWidth) setLoaded(true);
+    });
+  }
+
+  useLayoutEffect(() => {
+    const image = imageRef.current;
+    if (image?.complete && image.naturalWidth) {
+      onReady(image);
+      setLoaded(true);
+    }
+  }, []);
+
+  return <img ref={imageRef} src={src} alt={alt}
+    className={loaded ? "is-loaded" : ""} loading="lazy" decoding="async"
+    onLoad={(event) => reveal(event.currentTarget)} onError={onError} />;
+}
+
 export function PhotoTile({
   asset,
   onClick,
@@ -579,8 +610,6 @@ export function PhotoTile({
   directTouchOpen?: boolean;
   onLongPress?: () => void;
 }) {
-  const imgRef = useRef<HTMLImageElement>(null);
-  const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
   const press = useRef<{
     pointer: number; x: number; y: number;
@@ -635,10 +664,6 @@ export function PhotoTile({
     setBroken(false);
   }, [thumbUrl, asset.status]);
 
-  useLayoutEffect(() => {
-    setLoaded(!!imgRef.current?.complete && !!imgRef.current?.naturalWidth);
-  }, [thumbUrl]);
-
   useEffect(() => {
     if (!broken) return;
     const handleOnline = () => {
@@ -653,7 +678,7 @@ export function PhotoTile({
     <div
       data-asset-id={asset.id}
       style={customVars}
-      className={`photo ${originalAspect ? "original-aspect" : ""} ${selected ? "selected" : ""} ${selecting ? "selecting" : ""} ${loaded || broken ? "is-ready" : "is-loading"}`}
+      className={`photo ${originalAspect ? "original-aspect" : ""} ${selected ? "selected" : ""} ${selecting ? "selecting" : ""}`}
     >
       {highlighted && <span className="photo-jump-highlight" aria-hidden="true" />}
       <button
@@ -753,21 +778,15 @@ export function PhotoTile({
       >
         <div className="photo-frame">
           {!broken ? (
-            <img
-              ref={imgRef}
+            <PhotoThumbnail
               key={thumbUrl}
               src={thumbUrl}
-              onLoad={(e) => {
-                const { naturalWidth, naturalHeight } = e.currentTarget;
-                if (naturalWidth && naturalHeight) {
+              onReady={({ naturalWidth, naturalHeight }) => {
+                if (naturalWidth && naturalHeight && Math.abs(naturalWidth / naturalHeight - aspect) > 0.001) {
                   setMeasuredRatio({ src: thumbUrl, ratio: naturalWidth / naturalHeight });
                 }
-                setLoaded(true);
               }}
-              className={loaded ? "is-loaded" : ""}
               alt={asset.name}
-              loading="lazy"
-              decoding="async"
               onError={() => setBroken(true)}
             />
           ) : (
@@ -907,24 +926,21 @@ interface VirtualRowSlice {
   height: number;
 }
 
-export function VirtualizedTimelineCanvas({
-  groups,
-  grouping,
-  columns,
-  mobileColumns,
-  selectedIds,
-  selecting,
-  busy,
-  onToggleGroup,
-  onToggleAsset,
-  onOpenAsset,
-  onOpenSimilar,
-  onLocateDate,
-  onOpenAlbum,
-  jump,
-  onJumpComplete,
-  compact = false,
-}: {
+const TIMELINE_OVERSCAN = 700;
+const TIMELINE_WINDOW_SLACK = 350;
+
+function findTimelineRowIndex(rows: VirtualRowSlice[], yPos: number): number {
+  let lo = 0;
+  let hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (rows[mid].top + rows[mid].height < yPos) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+interface TimelineCanvasProps {
   groups: TimelineAssetGroup[];
   grouping: GridGroupingMode;
   columns: number;
@@ -941,7 +957,90 @@ export function VirtualizedTimelineCanvas({
   jump?: TimelineJump | null;
   onJumpComplete: (id: number) => void;
   compact?: boolean;
-}) {
+}
+
+type TimelineRowProps = Pick<TimelineCanvasProps,
+  "grouping" | "selectedIds" | "selecting" | "busy" | "compact" |
+  "onToggleGroup" | "onToggleAsset" | "onOpenAsset" | "onOpenSimilar" |
+  "onLocateDate" | "onOpenAlbum"
+> & {
+  row: VirtualRowSlice;
+  activeCols: number;
+  gridGap: number;
+  highlightedAssetId?: string;
+  dateViewportTop: (date: string) => number;
+};
+
+// Scrolling changes the mounted window, not the contents of rows already on screen.
+const TimelineRow = React.memo(function TimelineRow({
+  row, activeCols, gridGap, selectedIds, selecting, busy, compact, grouping,
+  onToggleGroup, onToggleAsset, onOpenAsset, onOpenSimilar, onLocateDate,
+  onOpenAlbum, highlightedAssetId, dateViewportTop,
+}: TimelineRowProps) {
+  const { group } = row;
+  let heading: ReactNode;
+  if (!row.assets) {
+    const selectableItems = group.items.filter((asset) => !asset.deletionPending);
+    const allGroupSelected = selectableItems.length > 0 &&
+      selectableItems.every((asset) => selectedIds.has(asset.id));
+    const knownDate = group.date !== "未知日期";
+    const option = GROUPING_OPTIONS.find((option) => option.mode === grouping)!;
+    const selectLabel = knownDate ? `选择${option.period}` : "选择此组";
+    const locateLabel = `在照片库中定位${knownDate ? option.locate : "这组照片"}`;
+    const title = !knownDate ? group.date : grouping === "year" ? `${group.date}年`
+      : grouping === "month" ? `${Number(group.date.slice(5, 7))}月`
+      : formatHumanDate(`${group.date}T12:00:00`);
+
+    heading = <div className="day-heading" data-date={group.date}>
+      <div className="day-title">
+        {onLocateDate && <button type="button" className="day-locate" disabled={busy}
+          aria-label={locateLabel} title={locateLabel}
+          onClick={() => onLocateDate(group.items[0], dateViewportTop(group.date))}>
+          <TimelineCrosshairIcon />
+        </button>}
+        <h2>{title}{knownDate && grouping !== "year" && <span>{group.date.slice(0, 4)}</span>}</h2>
+      </div>
+      {compact && !selecting ? <span className="day-count">{group.items.length} 项</span> : <button
+        type="button" className="day-select" disabled={busy || selectableItems.length === 0}
+        aria-pressed={allGroupSelected} onClick={() => onToggleGroup(group.items)}
+        title={`${selectLabel}或取消选择`}>
+        <span>{group.items.length} 项</span>
+        <span className="day-select-label">{allGroupSelected ? "取消选择" : selectLabel}</span>
+        <CircleCheck size={15} />
+      </button>}
+    </div>;
+  }
+
+  return <section className="day-group"
+    style={{ position: "absolute", top: row.top, width: "100%", height: row.height }}>
+    {row.assets ? <div className="photo-grid"
+      style={{ gridTemplateColumns: `repeat(${activeCols}, minmax(0, 1fr))`, gap: gridGap }}>
+      {row.assets.map((asset) => <PhotoTile key={asset.id} asset={asset}
+        selected={selectedIds.has(asset.id)} selecting={selecting} disabled={busy}
+        directTouchOpen={compact}
+        onLongPress={() => onToggleAsset(asset.id, false)}
+        onToggleSelect={(event) => onToggleAsset(asset.id, event.shiftKey)}
+        onOpenSimilar={compact ? undefined : (source) => onOpenSimilar(asset, source)}
+        onOpenAlbum={!compact && onOpenAlbum
+          ? (albumId) => onOpenAlbum(asset, albumId, dateViewportTop(group.date)) : undefined}
+        highlighted={highlightedAssetId === asset.id}
+        onClick={(event) => {
+          if (selecting || (!compact && (event.shiftKey || event.ctrlKey || event.metaKey))) {
+            event.preventDefault();
+            if (!asset.deletionPending) onToggleAsset(asset.id, event.shiftKey);
+          } else {
+            onOpenAsset(asset);
+          }
+        }} />)}
+    </div> : heading}
+  </section>;
+});
+
+export function VirtualizedTimelineCanvas({
+  groups, grouping, columns, mobileColumns, selectedIds, selecting, busy,
+  onToggleGroup, onToggleAsset, onOpenAsset, onOpenSimilar, onLocateDate,
+  onOpenAlbum, jump, onJumpComplete, compact = false,
+}: TimelineCanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
     width: 960,
@@ -1027,26 +1126,33 @@ export function VirtualizedTimelineCanvas({
           ? prev
           : { width: rect.width, measured: true },
       );
-      const topBound = Math.max(0, -rect.top - 700);
-      const bottomBound = Math.max(0, window.innerHeight - rect.top + 700);
+      const visibleTop = Math.max(0, -rect.top);
+      const visibleBottom = Math.max(0, window.innerHeight - rect.top);
 
       // Read unanimated row geometry so an in-flight FLIP cannot change the saved anchor.
       const minimumTop = compact
         ? document.querySelector(".header-left")?.getBoundingClientRect().bottom || 60
         : 180;
-      for (const grid of el.querySelectorAll<HTMLElement>(".photo-grid")) {
-        const top = grid.getBoundingClientRect().top;
-        const tile = grid.firstElementChild as HTMLElement | null;
-        if (top < minimumTop || !tile?.dataset.assetId) continue;
-        scrollAnchor.current = { id: tile.dataset.assetId, offsetTop: top };
+      for (let index = findTimelineRowIndex(rows, minimumTop - rect.top); index < rows.length; index++) {
+        const row = rows[index];
+        const top = rect.top + row.top;
+        if (top < minimumTop || !row.assets?.length) continue;
+        scrollAnchor.current = { id: row.assets[0].id, offsetTop: top };
         break;
       }
 
-      setVisibleWindow((prev) =>
-        Math.abs(prev.top - topBound) < 80 && Math.abs(prev.bottom - bottomBound) < 80
-          ? prev
-          : { top: topBound, bottom: bottomBound },
-      );
+      // The retained margin covers scrolling while React yields new row rendering to a frame.
+      startTransition(() => {
+        setVisibleWindow((prev) =>
+          (prev.top === 0 || visibleTop >= prev.top + TIMELINE_WINDOW_SLACK) &&
+          visibleBottom <= prev.bottom - TIMELINE_WINDOW_SLACK
+            ? prev
+            : {
+              top: Math.max(0, visibleTop - TIMELINE_OVERSCAN),
+              bottom: visibleBottom + TIMELINE_OVERSCAN,
+            },
+        );
+      });
     };
 
     const schedule = () => {
@@ -1065,7 +1171,7 @@ export function VirtualizedTimelineCanvas({
       window.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
     };
-  }, [totalHeight, compact]);
+  }, [rows, compact]);
 
   useLayoutEffect(() => {
     const el = rootRef.current;
@@ -1085,8 +1191,8 @@ export function VirtualizedTimelineCanvas({
       });
       const top = el.getBoundingClientRect().top;
       setVisibleWindow({
-        top: Math.max(0, -top - 700),
-        bottom: Math.max(0, window.innerHeight - top + 700),
+        top: Math.max(0, -top - TIMELINE_OVERSCAN),
+        bottom: Math.max(0, window.innerHeight - top + TIMELINE_OVERSCAN),
       });
       completedJump.current = jump.id;
       setHighlight(jump.highlight ? { assetId: jump.assetId, jumpId: jump.id } : null);
@@ -1121,68 +1227,12 @@ export function VirtualizedTimelineCanvas({
     return () => window.removeEventListener("aura-gallery-scroll", onScrollToAsset);
   }, [rows]);
 
-  function findRowIndex(yPos: number): number {
-    let lo = 0;
-    let hi = rows.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (rows[mid].top + rows[mid].height < yPos) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo;
-  }
+  const startIdx = findTimelineRowIndex(rows, visibleWindow.top);
+  const endIdx = Math.min(rows.length, findTimelineRowIndex(rows, visibleWindow.bottom) + 1);
 
-  const startIdx = findRowIndex(visibleWindow.top);
-  const endIdx = Math.min(rows.length, findRowIndex(visibleWindow.bottom) + 1);
-
-  const dateViewportTop = (date: string): number =>
+  const dateViewportTop = useCallback((date: string): number =>
     (rootRef.current?.getBoundingClientRect().top || 0) +
-    (rows.find((row) => !row.assets && row.group.date === date)?.top || 0);
-
-  const renderGroupHeader = (group: TimelineAssetGroup): ReactNode => {
-    const selectableItems = group.items.filter((a) => !a.deletionPending);
-    const allGroupSelected =
-      selectableItems.length > 0 && selectableItems.every((a) => selectedIds.has(a.id));
-    const knownDate = group.date !== "未知日期";
-    const option = GROUPING_OPTIONS.find((option) => option.mode === grouping)!;
-    const selectLabel = knownDate ? `选择${option.period}` : "选择此组";
-    const locateLabel = `在照片库中定位${knownDate ? option.locate : "这组照片"}`;
-    const title = !knownDate ? group.date : grouping === "year" ? `${group.date}年`
-      : grouping === "month" ? `${Number(group.date.slice(5, 7))}月`
-      : formatHumanDate(`${group.date}T12:00:00`);
-
-    return (
-      <div className="day-heading" data-date={group.date}>
-        <div className="day-title">
-          {onLocateDate && (
-            <button type="button" className="day-locate" disabled={busy}
-              aria-label={locateLabel} title={locateLabel}
-              onClick={() => onLocateDate(group.items[0], dateViewportTop(group.date))}>
-              <TimelineCrosshairIcon />
-            </button>
-          )}
-          <h2>
-            {title}
-            {knownDate && grouping !== "year" && <span>{group.date.slice(0, 4)}</span>}
-          </h2>
-        </div>
-        {compact && !selecting ? <span className="day-count">{group.items.length} 项</span> : <button
-          type="button"
-          className="day-select"
-          disabled={busy || selectableItems.length === 0}
-          aria-pressed={allGroupSelected}
-          onClick={() => onToggleGroup(group.items)}
-          title={`${selectLabel}或取消选择`}
-        >
-          <span>{group.items.length} 项</span>
-          <span className="day-select-label">
-            {allGroupSelected ? "取消选择" : selectLabel}
-          </span>
-          <CircleCheck size={15} />
-        </button>}
-      </div>
-    );
-  };
+    (rows.find((row) => !row.assets && row.group.date === date)?.top || 0), [rows]);
 
   return (
     <div
@@ -1191,54 +1241,15 @@ export function VirtualizedTimelineCanvas({
       style={{ height: totalHeight, position: "relative" }}
     >
       {rows.slice(startIdx, endIdx).map((row) => (
-        <section
-          className="day-group"
+        <TimelineRow
           key={`${row.group.date}:${row.assets?.[0]?.id || "heading"}`}
-          style={{
-            position: "absolute",
-            top: row.top,
-            width: "100%",
-            height: row.height,
-          }}
-        >
-          {row.assets ? (
-            <div
-              className="photo-grid"
-              style={{
-                gridTemplateColumns: `repeat(${activeCols}, minmax(0, 1fr))`,
-                gap: gridGap,
-              }}
-            >
-              {row.assets.map((asset) => (
-                <PhotoTile
-                  key={asset.id}
-                  asset={asset}
-                  selected={selectedIds.has(asset.id)}
-                  selecting={selecting}
-                  disabled={busy}
-                  directTouchOpen={compact}
-                  onLongPress={() => onToggleAsset(asset.id, false)}
-                  onToggleSelect={(e) => onToggleAsset(asset.id, e.shiftKey)}
-                  onOpenSimilar={compact ? undefined : (source) => onOpenSimilar(asset, source)}
-                  onOpenAlbum={!compact && onOpenAlbum
-                    ? (albumId) => onOpenAlbum(asset, albumId, dateViewportTop(row.group.date))
-                    : undefined}
-                  highlighted={highlight?.assetId === asset.id}
-                  onClick={(e) => {
-                    if (selecting || (!compact && (e.shiftKey || e.ctrlKey || e.metaKey))) {
-                      e.preventDefault();
-                      if (!asset.deletionPending) onToggleAsset(asset.id, e.shiftKey);
-                    } else {
-                      onOpenAsset(asset);
-                    }
-                  }}
-                />
-              ))}
-            </div>
-          ) : (
-            renderGroupHeader(row.group)
-          )}
-        </section>
+          row={row} activeCols={activeCols} gridGap={gridGap}
+          grouping={grouping} selectedIds={selectedIds} selecting={selecting} busy={busy}
+          compact={compact} onToggleGroup={onToggleGroup} onToggleAsset={onToggleAsset}
+          onOpenAsset={onOpenAsset} onOpenSimilar={onOpenSimilar} onLocateDate={onLocateDate}
+          onOpenAlbum={onOpenAlbum} highlightedAssetId={highlight?.assetId}
+          dateViewportTop={dateViewportTop}
+        />
       ))}
     </div>
   );
